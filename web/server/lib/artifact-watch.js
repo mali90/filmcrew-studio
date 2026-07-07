@@ -53,15 +53,19 @@ export function listArtifacts(dir) {
  * race) ARE announced, exactly once.
  */
 export function watchRun(dir, { intervalMs = 500, onEvent, seen = new Set(listArtifacts(dir)) } = {}) {
-  const timer = setInterval(() => {
+  const sweep = () => {
     for (const rel of listArtifacts(dir)) {
       if (seen.has(rel)) continue;
       seen.add(rel);
       onEvent?.({ type: 'artifact', file: rel });
     }
-  }, intervalMs);
+  };
+  sweep();                                  // t=0: announce artifacts already on disk the moment we attach
+  const timer = setInterval(sweep, intervalMs);
   timer.unref?.();
-  return { stop: () => clearInterval(timer) };
+  // Final sweep on stop: a run shorter than one poll interval (e.g. a fast fake-LLM plan in CI) would
+  // otherwise never be polled. stop() runs before the plan-ready status is emitted, so these land first.
+  return { stop: () => { clearInterval(timer); sweep(); } };
 }
 
 export default { listArtifacts, watchRun };
