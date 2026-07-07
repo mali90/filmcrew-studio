@@ -384,7 +384,7 @@ async function explainFailures(doctorOut) {
 
 // ── Step 9: optional small test render ────────────────────────────────────────
 async function maybeTestRender() {
-  process.stdout.write('  A test render makes the bundled ~13s example video — the cheapest way to confirm everything works.\n  It does cost a little. It uses the bundled example (elements/references/subject.png).\n');
+  process.stdout.write('  A test render makes the bundled ~13s example video — the cheapest way to confirm everything works.\n  It does cost a little. It uses the bundled example (examples/ocean-lighthouse).\n');
   if (!(await confirm('  Run a small test render now?', false))) { process.stdout.write('  Skipped.\n'); return; }
   const rargs = ['--spec', 'examples/ocean-lighthouse/spec.json'];
   const { code } = await runScript('src/cli/render.js', rargs);

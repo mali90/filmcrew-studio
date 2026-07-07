@@ -108,8 +108,8 @@ failing line names exactly what's missing — fix it and re-run. See [Troublesho
 
 ## Step 6 — Make your first video
 
-The bundled example ships with its reference image at `elements/references/subject.png` — nothing to
-add.
+The bundled example ships with its reference image at `elements/references/wren-01.png` (the sample
+cast member Wren, an old lighthouse keeper) — nothing to add.
 
 **Render the example:** the bundled example plans as a single ~13s job, so it renders whole — at the
 economical default resolution this doubles as the cheap way to confirm keys/credits. (`--` separates
@@ -185,9 +185,9 @@ optional `--factor <1-4>` (auto-picks to reach ~1080p when omitted), optional `-
 - `elements/last-frame/` — *(optional)* lock the closing frame.
 
 > ⚠️ **Switching to your own images? Remove the bundled sample first.** The engine feeds **every**
-> image in `elements/references/` to Kling, so delete/move `elements/references/subject.png`
-> (macOS `rm elements/references/subject.png` · Windows `Remove-Item elements/references/subject.png`,
-> or drag it to Trash) before rendering your own brief.
+> image in `elements/references/` to Kling, so delete/move the bundled sample images
+> (macOS `rm elements/references/wren-*.png` · Windows `Remove-Item elements/references/wren-*.png`,
+> or drag them to Trash) before rendering your own brief.
 
 **Profiles** — a recurring character/world is a short Markdown file in `profiles/` describing tone,
 behaviour, and world so the engine keeps it consistent. Copy `profiles/example-subject.md` to start.
@@ -209,8 +209,8 @@ picked without its key/CLI login, ffmpeg off PATH). Fix that item and re-run.
 **`.env` not filled in** — make sure you created `.env` (not just `.env.example`), values have no
 spaces around `=`, no quotes, no `<...>` brackets, no trailing spaces, and you **saved**.
 
-**The example won't render / "no reference image"** — restore any PNG to
-`elements/references/subject.png`.
+**The example won't render / "no reference image"** — restore a PNG to
+`elements/references/wren-01.png`.
 
 **Copilot won't work** — it's CLI-only: `LLM_TRANSPORT=cli`, active subscription, installed with
 Node 22+, logged in via `copilot` → `/login` (or a PAT with "Copilot Requests").

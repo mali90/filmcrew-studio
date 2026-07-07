@@ -4,14 +4,13 @@
 
 # Proprietary cast assets — never commit (incident 2026-07-05).
 # Voices are account-specific; mint locally with `npm run mint-voice`.
-# Only the bundled examples (subject.png + the "wren" sample cast) are allow-listed below;
+# Only the bundled "wren" sample cast is allow-listed below;
 # voices.json stays ignored (account-specific voice_ids, rewritten on every mint).
 voices/*.mp3
 voices/*.wav
 voices/voices.json
 profiles/*.md
 elements/references/*
-!elements/references/subject.png
 !voices/README.md
 !**/.gitkeep
 # — bundled sample cast: "Wren" (clip only; users mint their own voice_id) —

@@ -11,8 +11,6 @@ export function loadGoldenSpec() {
   return JSON.parse(raw);
 }
 
-export const SUBJECT_PNG = path.join(ROOT, 'elements/references/subject.png');
-
 /** A minimal valid 1x1 PNG (used where any image file is needed). */
 export const ONE_PX_PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',

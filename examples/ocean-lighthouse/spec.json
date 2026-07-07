@@ -63,7 +63,7 @@
     "resolution": "1080p",
     "generate_audio": true,
     "elements": [
-      { "id": "subject", "role": "subject", "image": "elements/references/subject.png" }
+      { "id": "subject", "role": "subject", "image": "elements/references/wren-01.png" }
     ],
     "jobs": [
       { "job_id": "K1", "shots": ["S1", "S2", "S3"], "elements": ["subject"] }

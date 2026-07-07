@@ -21,7 +21,7 @@ export const SPEC: ProductionSpec = {
   audio: { voice: { lines: [{ shot_id: 'S1', text: 'Forty years I kept this light.', speaker: 'keeper' }] } },
   kling: {
     aspect_ratio: '9:16', resolution: '1080p', generate_audio: true,
-    elements: [{ id: 'subject', role: 'subject', image: 'elements/references/subject.png' }],
+    elements: [{ id: 'subject', role: 'subject', image: 'elements/references/wren-01.png' }],
     jobs: [
       { job_id: 'K1', shots: ['S1', 'S2'], elements: ['subject'] },
       { job_id: 'K2', shots: ['S3'], elements: ['subject'] },
