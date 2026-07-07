@@ -4,6 +4,7 @@
 // step works in their own terminal too. If the global folder isn't writable (EACCES) we don't escalate
 // — the UI shows the manual command with a sudo note.
 import { spawn } from 'node:child_process';
+import os from 'node:os';
 import path from 'node:path';
 
 /** The npm executable. Windows names it npm.cmd; FILMCREW_NPM_BIN lets tests inject a fake npm shim. */
@@ -64,4 +65,40 @@ export function npmFailureHint(code, tail) {
   return `npm exited with code ${code}. See the log above, or run the shown command in a terminal.`;
 }
 
-export default { npmBin, npmNeedsShell, npmInstallArgs, npmGlobalBinDir, pathWithNpmGlobal, npmFailureHint };
+/** Anthropic's official native Claude Code installer — its recommended install (bundles its own
+ *  runtime, auto-updates, avoids npm global-permission/sudo issues; releases ship a GPG-signed
+ *  manifest with SHA256 per binary). Only Claude ships one; other providers install via npm. Returns
+ *  null for providers without a native installer. FILMCREW_INSTALL_SH injects a fake command in tests
+ *  so CI never runs the real curl|bash. */
+export function nativeInstallSpec(provider) {
+  if (provider !== 'claude') return null;
+  if (process.platform === 'win32') {
+    const cmd = 'irm https://claude.ai/install.ps1 | iex';
+    return { file: 'powershell', args: ['-NoProfile', '-Command', cmd], shell: false, display: cmd };
+  }
+  const display = 'curl -fsSL https://claude.ai/install.sh | bash';
+  return { file: 'sh', args: ['-c', process.env.FILMCREW_INSTALL_SH || display], shell: false, display };
+}
+
+/** Where the native installer drops `claude` (`~/.local/bin`). */
+export const localBinDir = () => path.join(os.homedir(), '.local', 'bin');
+
+/** Prepend `~/.local/bin` to a PATH so the post-install probe + CLI-login validation find a natively
+ *  installed CLI without a server restart. No-op if already present. */
+export function pathWithLocalBin(pathStr) {
+  const dir = localBinDir();
+  const base = pathStr || '';
+  if (base.split(path.delimiter).includes(dir)) return base;
+  return `${dir}${path.delimiter}${base}`;
+}
+
+/** Turn a native-installer failure (exit code + tail of output) into one actionable sentence. */
+export function nativeFailureHint(code, tail) {
+  const t = String(tail || '');
+  if (/ENOTFOUND|ETIMEDOUT|ECONNREFUSED|EAI_AGAIN|network|could not resolve|curl/i.test(t)) {
+    return 'The download failed — https://claude.ai was unreachable. Check your connection and try again.';
+  }
+  return `The installer exited with code ${code}. See the log above, or run the shown command in a terminal.`;
+}
+
+export default { npmBin, npmNeedsShell, npmInstallArgs, npmGlobalBinDir, pathWithNpmGlobal, npmFailureHint, nativeInstallSpec, localBinDir, pathWithLocalBin, nativeFailureHint };

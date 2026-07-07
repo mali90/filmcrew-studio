@@ -90,14 +90,18 @@ LLM_MODEL=claude-opus-4-8  # the model id for your provider
 ```
 
 For Claude / OpenAI / Gemini you can use **either** an API key **or** the logged-in CLI. Copilot is
-**CLI-only**. If you install a CLI, **close and reopen your terminal** before running it. Model ids
-change over time — if one is rejected, copy whatever the provider's own models page lists.
+**CLI-only**. If you install a CLI (including from the setup wizard), **open a new terminal window
+before running it** — the install adds it to your PATH via a shell startup file, so a terminal you
+already had open will say "command not found" until you reopen it. Model ids change over time — if one
+is rejected, copy whatever the provider's own models page lists.
 
 ### Claude (Anthropic)
 - **API key:** get one at https://console.anthropic.com → **API Keys**; set `LLM_PROVIDER=claude`,
   `LLM_TRANSPORT=api`, `LLM_MODEL=claude-opus-4-8`, `ANTHROPIC_API_KEY=sk-ant-...`
   (cheaper/faster: `claude-sonnet-4-6`).
-- **CLI:** `npm install -g @anthropic-ai/claude-code`, run `claude` to log in (needs a Claude
+- **CLI:** install with Anthropic's official native installer — `curl -fsSL https://claude.ai/install.sh | bash`
+  (macOS/Linux/WSL) or `irm https://claude.ai/install.ps1 | iex` (Windows PowerShell); the setup wizard's
+  one-click install runs this for you. Then run `claude` to log in (needs a Claude
   Pro/Max/Team/Enterprise or Console account — free Claude.ai does not include Claude Code); set
   `LLM_TRANSPORT=cli`, leave `ANTHROPIC_API_KEY` blank.
 

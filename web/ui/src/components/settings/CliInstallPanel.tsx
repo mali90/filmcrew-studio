@@ -51,7 +51,7 @@ export function CliInstallPanel({ provider, model, className }: { provider: stri
   const bin = status.data?.bin ?? provider;
   const npmPackage = status.data?.npmPackage ?? '';
   const meta = CLI_META[provider] ?? { name: `${bin} CLI`, loginCmd: (b: string) => b };
-  const installCmd = `npm install -g ${npmPackage}`;
+  const installCmd = status.data?.installCmd ?? `npm install -g ${npmPackage}`;
   const loginCmd = meta.loginCmd(bin);
 
   const testLogin = async () => {
@@ -171,7 +171,7 @@ export function CliInstallPanel({ provider, model, className }: { provider: stri
           {state === 'installed-idle' && (
             <div className="mt-2 flex items-center gap-2.5">
               <Button variant="secondary" size="sm" loading={login.state === 'checking'} onClick={() => void testLogin()}>Test connection</Button>
-              <span className="text-caption text-ink-muted">Sign in with <span className="select-all font-mono">{loginCmd}</span> if the test fails.</span>
+              <span className="text-caption text-ink-muted">Sign in with <span className="select-all font-mono">{loginCmd}</span> in a new terminal if the test fails.</span>
             </div>
           )}
 
@@ -184,7 +184,8 @@ export function CliInstallPanel({ provider, model, className }: { provider: stri
               <p className="text-label font-medium text-ink">Sign in to the {meta.name}</p>
               <p className="mt-1 text-caption text-status-failed">{login.state === 'invalid' ? login.reason : ''}</p>
               <p className="mt-1 text-caption text-ink-secondary">Run this once and complete sign-in, then test again. We can&rsquo;t sign in for you — it opens a browser/device login in your terminal.</p>
-              <div className="mt-2"><CommandBlock command={loginCmd} how="Run it in a terminal, complete sign-in, then Test connection." /></div>
+              <p className="mt-1 text-caption text-ink-secondary"><strong className="font-medium text-ink">Open a new terminal window first</strong> — the install put it on your PATH via a shell startup file, so a window you already had open will say &ldquo;command not found&rdquo;.</p>
+              <div className="mt-2"><CommandBlock command={loginCmd} how="In a NEW terminal window: run it, complete sign-in, then Test connection." /></div>
               <Button variant="secondary" size="sm" className="mt-2" loading={login.state === 'checking'} onClick={() => void testLogin()}>Test connection</Button>
             </div>
           )}
@@ -193,7 +194,7 @@ export function CliInstallPanel({ provider, model, className }: { provider: stri
             <div className="mt-2 rounded-r2 border border-line p-3">
               <p className="text-label font-medium text-ink">Install the {meta.name}</p>
               <p className="mt-1 text-caption text-ink-secondary">
-                CLI transport plans through the {meta.name} you&rsquo;re signed into — it isn&rsquo;t installed yet. Install it here: a one-time global npm install that takes 30&nbsp;seconds to a couple of minutes.
+                CLI transport plans through the {meta.name} you&rsquo;re signed into — it isn&rsquo;t installed yet. Install it here: a one-time install that takes 30&nbsp;seconds to a couple of minutes.
               </p>
               <div className="mt-3 flex items-center gap-2.5">
                 <Button variant="secondary" size="sm" icon={<Download size={14} aria-hidden />} onClick={() => install.mutate()}>Install {meta.name}</Button>

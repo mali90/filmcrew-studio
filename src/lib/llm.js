@@ -33,6 +33,7 @@ const PROVIDERS = {
     keyEnv: 'ANTHROPIC_API_KEY',
     cliBin: 'claude',
     npmPackage: '@anthropic-ai/claude-code',
+    installMethod: 'native', // Anthropic's official installer (curl|bash), not npm — see cli-install.js
     cliArgs: (model) => ['-p', '--model', model],
     async api({ model, system, prompt, temperature, maxTokens, apiKey }) {
       const body = {
@@ -211,5 +212,7 @@ export const PROVIDER_CLI_BIN = Object.fromEntries(Object.entries(PROVIDERS).map
 export const PROVIDER_CLI_ONLY = Object.fromEntries(Object.entries(PROVIDERS).map(([k, v]) => [k, !!v.cliOnly]));
 // provider → the npm package that installs its CLI (the web app's one-click install + docs/PROVIDERS.md).
 export const PROVIDER_NPM_PKG = Object.fromEntries(Object.entries(PROVIDERS).map(([k, v]) => [k, v.npmPackage]));
+// provider → how the web app installs its CLI: 'native' (official installer script) or 'npm' (default).
+export const PROVIDER_INSTALL_METHOD = Object.fromEntries(Object.entries(PROVIDERS).map(([k, v]) => [k, v.installMethod || 'npm']));
 
-export default { complete, completeWith, pingLlm, extractJson, renderTemplate, PROVIDER_KEY_ENV, PROVIDER_CLI_BIN, PROVIDER_CLI_ONLY, PROVIDER_NPM_PKG };
+export default { complete, completeWith, pingLlm, extractJson, renderTemplate, PROVIDER_KEY_ENV, PROVIDER_CLI_BIN, PROVIDER_CLI_ONLY, PROVIDER_NPM_PKG, PROVIDER_INSTALL_METHOD };

@@ -49,6 +49,8 @@ test('cli-status: the shimmed provider reads as installed with its version', asy
   assert.equal(s.npmPackage, '@anthropic-ai/claude-code');
   assert.equal(s.installed, true);
   assert.match(s.version, /9\.9\.9/);
+  assert.equal(s.installMethod, 'native'); // Claude installs via the official native script, not npm
+  assert.match(s.installCmd, /claude\.ai\/install\.(sh|ps1)/);
 });
 
 test('cli-status: no param lists all four providers; unknown provider → 400', async () => {
@@ -75,26 +77,51 @@ test('models: no key → curated default + options, liveError no-key', async () 
   assert.equal((await get('/api/setup/models?provider=bogus')).statusCode, 400);
 });
 
-test('install-cli: streams start → log → done over a fake npm (exit 0)', { skip: isWin ? 'POSIX shims' : false }, async () => {
+test('install-cli (npm provider): streams start → log → done over a fake npm (exit 0)', { skip: isWin ? 'POSIX shims' : false }, async () => {
   process.env.FILMCREW_NPM_BIN = fakeNpmOk;
-  const res = await post('/api/setup/install-cli', { provider: 'claude' });
+  const res = await post('/api/setup/install-cli', { provider: 'gemini' });
   assert.equal(res.statusCode, 200, res.body);
   const events = ndjson(res.body);
   assert.equal(events[0].type, 'start');
-  assert.equal(events[0].pkg, '@anthropic-ai/claude-code');
+  assert.equal(events[0].pkg, '@google/gemini-cli');
   assert.ok(events.some((e) => e.type === 'log'), 'streamed at least one log line');
   const last = events.at(-1);
   assert.equal(last.type, 'done');
   assert.equal(last.ok, true);
 });
 
-test('install-cli: a failing npm yields a terminal error with an actionable hint', { skip: isWin ? 'POSIX shims' : false }, async () => {
+test('install-cli (npm provider): a failing npm yields a terminal error with an actionable hint', { skip: isWin ? 'POSIX shims' : false }, async () => {
   process.env.FILMCREW_NPM_BIN = fakeNpmFail;
-  const res = await post('/api/setup/install-cli', { provider: 'claude' });
+  const res = await post('/api/setup/install-cli', { provider: 'gemini' });
   const last = ndjson(res.body).at(-1);
   assert.equal(last.type, 'error');
   assert.equal(last.ok, false);
   assert.match(last.hint, /permission|terminal|npm/i);
+});
+
+test('install-cli (native): Claude uses the official installer, not npm — streams start → done', { skip: isWin ? 'POSIX shims' : false }, async () => {
+  process.env.FILMCREW_INSTALL_SH = 'echo "downloading claude"; echo "installed"'; // fake the curl|bash so CI never hits the network
+  const res = await post('/api/setup/install-cli', { provider: 'claude' });
+  assert.equal(res.statusCode, 200, res.body);
+  const events = ndjson(res.body);
+  assert.equal(events[0].type, 'start');
+  assert.equal(events[0].command, 'curl -fsSL https://claude.ai/install.sh | bash');
+  assert.equal(events[0].pkg, undefined, 'the native path carries no npm package');
+  assert.ok(events.some((e) => e.type === 'log'), 'streamed installer output');
+  const last = events.at(-1);
+  assert.equal(last.type, 'done');
+  assert.equal(last.ok, true);
+  delete process.env.FILMCREW_INSTALL_SH;
+});
+
+test('install-cli (native): a failing installer yields a terminal error with a hint', { skip: isWin ? 'POSIX shims' : false }, async () => {
+  process.env.FILMCREW_INSTALL_SH = 'echo "boom" 1>&2; exit 1';
+  const res = await post('/api/setup/install-cli', { provider: 'claude' });
+  const last = ndjson(res.body).at(-1);
+  assert.equal(last.type, 'error');
+  assert.equal(last.ok, false);
+  assert.match(last.hint, /terminal|installer|connection/i);
+  delete process.env.FILMCREW_INSTALL_SH;
 });
 
 test('install-cli: unknown provider → 400 before any spawn', async () => {

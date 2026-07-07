@@ -134,10 +134,10 @@ export interface SetupStatus {
   complete: boolean;
 }
 // ── Provider CLI install + model list (Settings › Keys) ──
-export interface CliStatus { provider: string; bin: string; npmPackage: string; installed: boolean; version: string | null }
+export interface CliStatus { provider: string; bin: string; npmPackage: string; installMethod: 'npm' | 'native'; installCmd: string; installed: boolean; version: string | null }
 /** NDJSON events streamed by POST /setup/install-cli (one per line). */
 export type InstallCliEvent =
-  | { type: 'start'; provider: string; pkg: string; command: string }
+  | { type: 'start'; provider: string; pkg?: string; command: string }
   | { type: 'log'; stream: 'stdout' | 'stderr'; line: string }
   | { type: 'done'; ok: true; bin: string; installed: boolean; version: string | null }
   | { type: 'error'; ok: false; message: string; hint: string; code?: number };

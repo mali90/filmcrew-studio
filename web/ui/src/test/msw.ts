@@ -15,7 +15,7 @@ export const handlers = [
   http.get('/api/settings/env', () => HttpResponse.json({ source: '.env', rows: [] })),
   http.get('/api/setup/cli-status', ({ request }) => {
     const provider = new URL(request.url).searchParams.get('provider');
-    const one = (p: string) => ({ provider: p, bin: p, npmPackage: `@x/${p}`, installed: false, version: null });
+    const one = (p: string) => ({ provider: p, bin: p, npmPackage: `@x/${p}`, installMethod: 'npm' as const, installCmd: `npm install -g @x/${p}`, installed: false, version: null });
     return HttpResponse.json(provider ? one(provider) : { providers: ['claude', 'openai', 'gemini', 'copilot'].map(one) });
   }),
   http.get('/api/setup/models', ({ request }) => {

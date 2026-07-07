@@ -49,12 +49,18 @@ export function registerSetupRoutes(app) {
     if (!provider) throw Object.assign(new Error('provider is required'), { statusCode: 400, hint: 'claude | openai | gemini | copilot' });
     const { pingLlm } = await import(path.join(root, 'src/lib/llm.js'));
     const { modelDefault } = await import(path.join(root, 'src/lib/models.js'));
+    const { pathWithLocalBin, pathWithNpmGlobal } = await import(path.join(root, 'src/lib/cli-install.js'));
     try {
       // A blank model means "provider default" — resolve it to a real id (the engine does this via
       // config.js, but this explicit-args path would otherwise ping the CLI with --model undefined).
       // Validate with the CHILD env — the engine runs with childEnv, not the server's env, and on
       // macOS the claude CLI's keychain login depends on it ("valid" here must mean valid at run time).
-      await pingLlm({ provider, transport, model: model || modelDefault(provider), apiKey, env: transport === 'cli' ? { ...app.ctx.childEnv } : undefined });
+      // Include ~/.local/bin (native installs like claude) + the npm global bin so a just-installed CLI
+      // is found even before the user reopens their shell.
+      const cliEnv = transport === 'cli'
+        ? { ...app.ctx.childEnv, PATH: pathWithLocalBin(await pathWithNpmGlobal(app.ctx.childEnv.PATH)) }
+        : undefined;
+      await pingLlm({ provider, transport, model: model || modelDefault(provider), apiKey, env: cliEnv });
       return { ok: true };
     } catch (e) {
       return { ok: false, reason: e.message };
@@ -150,14 +156,16 @@ export function registerSetupRoutes(app) {
   // Is the selected provider's CLI installed? Fast `<bin> --version` probe (login is verified
   // separately by validate-llm). ?provider= → one; no param → all four (drives badges + guidance).
   app.get('/api/setup/cli-status', async (req) => {
-    const { PROVIDER_CLI_BIN, PROVIDER_NPM_PKG } = await import(path.join(root, 'src/lib/llm.js'));
+    const { PROVIDER_CLI_BIN, PROVIDER_NPM_PKG, PROVIDER_INSTALL_METHOD } = await import(path.join(root, 'src/lib/llm.js'));
     const { probeCli } = await import(path.join(root, 'src/lib/preflight.js'));
-    const { pathWithNpmGlobal } = await import(path.join(root, 'src/lib/cli-install.js'));
-    const env = { ...childEnv, PATH: await pathWithNpmGlobal(childEnv.PATH) };
+    const { pathWithNpmGlobal, pathWithLocalBin, nativeInstallSpec } = await import(path.join(root, 'src/lib/cli-install.js'));
+    const env = { ...childEnv, PATH: pathWithLocalBin(await pathWithNpmGlobal(childEnv.PATH)) };
     const statusFor = async (p) => {
       const bin = PROVIDER_CLI_BIN[p];
       const { installed, version } = await probeCli(bin, { env });
-      return { provider: p, bin, npmPackage: PROVIDER_NPM_PKG[p], installed, version };
+      const native = nativeInstallSpec(p);
+      const installCmd = native ? native.display : `npm install -g ${PROVIDER_NPM_PKG[p]}`;
+      return { provider: p, bin, npmPackage: PROVIDER_NPM_PKG[p], installMethod: PROVIDER_INSTALL_METHOD[p], installCmd, installed, version };
     };
     const provider = req.query?.provider ? String(req.query.provider) : null;
     if (provider) {
@@ -167,17 +175,19 @@ export function registerSetupRoutes(app) {
     return { providers: await Promise.all(Object.keys(PROVIDER_CLI_BIN).map(statusFor)) };
   });
 
-  // Install a provider's CLI: streams `npm install -g <pkg>` output as newline-delimited JSON. POST
-  // (state-changing); one install per provider at a time (409). Safety: provider is allowlisted, the
-  // package string is a constant from the trusted map, and spawn uses an arg array (no shell on POSIX).
+  // Install a provider's CLI: streams the installer output as newline-delimited JSON. POST
+  // (state-changing); one install per provider at a time (409). Claude uses Anthropic's official native
+  // script (curl|bash from claude.ai); the rest use `npm install -g <pkg>` — provider is allowlisted,
+  // the package/command is a constant from the trusted map, and spawn uses an arg array (no user input).
   app.post('/api/setup/install-cli', async (req, reply) => {
     const provider = String(req.body?.provider ?? '');
     const { PROVIDER_CLI_BIN, PROVIDER_NPM_PKG } = await import(path.join(root, 'src/lib/llm.js'));
     const pkg = PROVIDER_NPM_PKG[provider];
     const bin = PROVIDER_CLI_BIN[provider];
-    if (!pkg) throw Object.assign(new Error(`unknown provider "${provider}"`), { statusCode: 400, hint: `use one of: ${Object.keys(PROVIDER_NPM_PKG).join(', ')}` });
+    const cli = await import(path.join(root, 'src/lib/cli-install.js'));
+    const native = cli.nativeInstallSpec(provider); // Claude → Anthropic's official native installer; others → npm
+    if (!native && !pkg) throw Object.assign(new Error(`unknown provider "${provider}"`), { statusCode: 400, hint: `use one of: ${Object.keys(PROVIDER_NPM_PKG).join(', ')}` });
     if (installing.has(provider)) throw Object.assign(new Error(`already installing ${provider}`), { statusCode: 409, hint: 'wait for the current install to finish' });
-    const { npmBin, npmNeedsShell, npmInstallArgs, npmFailureHint, pathWithNpmGlobal } = await import(path.join(root, 'src/lib/cli-install.js'));
 
     installing.add(provider);
     reply.hijack(); // take over the socket — the NDJSON stream is written by hand, not by Fastify
@@ -185,9 +195,12 @@ export function registerSetupRoutes(app) {
     raw.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
     const emit = (o) => { try { raw.write(`${JSON.stringify(o)}\n`); } catch { /* client gone */ } };
 
-    const args = npmInstallArgs(pkg);
-    const env = { ...childEnv, PATH: await pathWithNpmGlobal(childEnv.PATH) };
-    emit({ type: 'start', provider, pkg, command: `npm ${args.join(' ')}` });
+    // Claude installs via Anthropic's official native script; every other provider via `npm install -g`.
+    const spec = native
+      ? { file: native.file, args: native.args, shell: native.shell, env: { ...childEnv, PATH: cli.pathWithLocalBin(childEnv.PATH) }, start: { type: 'start', provider, command: native.display }, failHint: cli.nativeFailureHint, startFail: 'The installer could not start. Check your connection, or run the shown command in a terminal.' }
+      : { file: cli.npmBin(), args: cli.npmInstallArgs(pkg), shell: cli.npmNeedsShell(), env: { ...childEnv, PATH: await cli.pathWithNpmGlobal(childEnv.PATH) }, start: { type: 'start', provider, pkg, command: `npm ${cli.npmInstallArgs(pkg).join(' ')}` }, failHint: cli.npmFailureHint, startFail: 'Install Node.js (which includes npm), then restart the studio.' };
+    const env = spec.env;
+    emit(spec.start);
 
     let child;
     let tail = '';
@@ -195,11 +208,11 @@ export function registerSetupRoutes(app) {
     let timer;
     const finish = (evt) => { if (done) return; done = true; clearTimeout(timer); installing.delete(provider); emit(evt); try { raw.end(); } catch { /* gone */ } };
     try {
-      child = spawn(npmBin(), args, { cwd: root, env, shell: npmNeedsShell(), stdio: ['ignore', 'pipe', 'pipe'] });
+      child = spawn(spec.file, spec.args, { cwd: root, env, shell: spec.shell, stdio: ['ignore', 'pipe', 'pipe'] });
     } catch (e) {
-      return finish({ type: 'error', ok: false, message: `could not start npm: ${e.message}`, hint: 'Install Node.js (which includes npm), then restart the studio.' });
+      return finish({ type: 'error', ok: false, message: `could not start the installer: ${e.message}`, hint: spec.startFail });
     }
-    timer = setTimeout(() => { try { child.kill('SIGTERM'); } catch { /* gone */ } finish({ type: 'error', ok: false, message: 'Install timed out after 3 minutes.', hint: 'Check your connection, or run the shown npm command in a terminal.' }); }, 180000);
+    timer = setTimeout(() => { try { child.kill('SIGTERM'); } catch { /* gone */ } finish({ type: 'error', ok: false, message: 'Install timed out after 3 minutes.', hint: 'Check your connection, or run the shown command in a terminal.' }); }, 180000);
 
     const pump = (stream) => {
       let buf = '';
@@ -215,7 +228,7 @@ export function registerSetupRoutes(app) {
     };
     child.stdout.on('data', pump('stdout'));
     child.stderr.on('data', pump('stderr'));
-    child.on('error', (e) => finish({ type: 'error', ok: false, message: `npm failed to start: ${e.message}`, hint: e.code === 'ENOENT' ? 'npm was not found — install Node.js (which includes npm), then restart the studio.' : 'See the server log.' }));
+    child.on('error', (e) => finish({ type: 'error', ok: false, message: `the installer failed to start: ${e.message}`, hint: e.code === 'ENOENT' ? spec.startFail : 'See the server log.' }));
     child.on('close', async (code) => {
       if (done) return;
       if (code === 0) {
@@ -223,7 +236,7 @@ export function registerSetupRoutes(app) {
         const { installed, version } = await probeCli(bin, { env });
         finish({ type: 'done', ok: true, bin, installed, version });
       } else {
-        finish({ type: 'error', ok: false, code, message: `npm install exited with code ${code}`, hint: npmFailureHint(code, tail) });
+        finish({ type: 'error', ok: false, code, message: `the install exited with code ${code}`, hint: spec.failHint(code, tail) });
       }
     });
     raw.on('close', () => { if (done) return; try { child.kill('SIGTERM'); } catch { /* gone */ } done = true; clearTimeout(timer); installing.delete(provider); });
