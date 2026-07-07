@@ -2,6 +2,7 @@
 // the ring buffer — all other state is covered by the snapshot, so a reconnecting client is never
 // wrong, only briefly stale) and one global stream (queue + run status changes).
 import { isRunId } from '../lib/paths.js';
+import { listArtifacts } from '../lib/artifact-watch.js';
 
 const sseHead = (reply) => {
   reply.raw.writeHead(200, {
@@ -32,6 +33,11 @@ export function registerEventRoutes(app) {
     if (lastId) for (const e of svc.ringFor(runId).since(lastId)) send(reply, { type: 'log', cursor: e.cursor, line: e.line }, e.cursor);
 
     const unsub = bus.subscribe(runId, (evt) => send(reply, evt, evt.type === 'log' ? evt.cursor : undefined));
+    // After subscribing (so no live event is missed), replay spec-block events for spec files already
+    // on disk. The live watcher only streams NEW files, so a client that connects mid-planning would
+    // otherwise never learn about a spec block emitted before it subscribed. Duplicates are harmless
+    // (the UI keys agents by file; the union of replay + live is complete with no gap).
+    for (const file of listArtifacts(svc.dirFor(runId))) if (file.includes('spec')) send(reply, { type: 'spec-block', file });
     const keepAlive = setInterval(() => reply.raw.write(': keep-alive\n\n'), 15000);
     keepAlive.unref?.();
     req.raw.on('close', () => { clearInterval(keepAlive); unsub(); });
