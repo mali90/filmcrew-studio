@@ -18,10 +18,33 @@ export function loadVoices() {
   }
 }
 
-/** The raw registry entry for a speaker name (any case), or null if unregistered. */
+const CLIP_EXT = /\.(mp3|wav|mp4|mov)$/i;
+const titleFromSlug = (s) => s.split('-').filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join(' ');
+
+/** Synthetic STAGED entries for bundled voice clips on disk (voices/<slug>.<ext>) that have no registry
+ *  entry yet — the shipped sample cast (e.g. Wren). Lets a fresh clone recognize a shipped voice without
+ *  an account-specific voices.json (git-ignored, since it holds minted voice_ids). */
+function sampleClipEntries() {
+  const dir = resolvePath(config.voices.dir);
+  let files = [];
+  try { files = fs.readdirSync(dir).filter((f) => CLIP_EXT.test(f)); } catch { return {}; }
+  return Object.fromEntries(files.map((f) => {
+    const key = slug(f.replace(CLIP_EXT, ''));
+    return [key, { name: titleFromSlug(key), voice_id: null, ref_clip: path.join(config.voices.dir, f), minted_at: null, staged: true }];
+  }));
+}
+
+/** The registry augmented with staged entries for any bundled clip that isn't registered yet. Real
+ *  registry entries (including minted voice_ids) always win over the shipped-clip fallback. */
+export function loadVoicesWithClips() {
+  return { ...sampleClipEntries(), ...loadVoices() };
+}
+
+/** The registry entry for a speaker name (any case) — or a staged entry for a bundled clip on disk — or
+ *  null if unregistered and no clip ships. */
 export function getVoiceEntry(name) {
   if (!name) return null;
-  const map = loadVoices();
+  const map = loadVoicesWithClips();
   return map[name] ?? map[slug(name)] ?? Object.entries(map).find(([k]) => slug(k) === slug(name))?.[1] ?? null;
 }
 
@@ -52,11 +75,11 @@ export function setVoice(name, voiceId, refClip, mintedAt) {
   return voiceId;
 }
 
-/** A human-readable listing of registered voices for injection into an agent prompt. */
-export function voicesInventoryText(map = loadVoices()) {
+/** A human-readable listing of registered (and bundled/staged) voices for an agent prompt. */
+export function voicesInventoryText(map = loadVoicesWithClips()) {
   const names = Object.values(map).map((v) => v?.name).filter(Boolean);
   if (!names.length) return '(no character voices registered — run `npm run mint-voice -- <name> <clip>` to add one)';
   return names.map((n) => `  - ${n}`).join('\n');
 }
 
-export default { VOICES_FILE, loadVoices, getVoiceEntry, getVoiceId, getVoiceRefClip, setVoice, voicesInventoryText };
+export default { VOICES_FILE, loadVoices, loadVoicesWithClips, getVoiceEntry, getVoiceId, getVoiceRefClip, setVoice, voicesInventoryText };

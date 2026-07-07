@@ -7,7 +7,9 @@ import { mkTmp } from '../helpers/tmp.js';
 neutralizeDotenv();
 const { dir, cleanup } = mkTmp('voices');
 process.env.VOICES_DIR = dir;
-const { setVoice, getVoiceId, loadVoices, voicesInventoryText } = await import('../../src/lib/voices.js');
+const { setVoice, getVoiceId, getVoiceEntry, getVoiceRefClip, loadVoices, loadVoicesWithClips, voicesInventoryText } = await import('../../src/lib/voices.js');
+const fs = await import('node:fs');
+const path = await import('node:path');
 
 test.after(() => cleanup());
 
@@ -25,4 +27,20 @@ test('setVoice persists and getVoiceId resolves case-insensitively by slug', () 
   assert.equal(getVoiceId('nobody'), null);
   assert.equal(loadVoices().host.voice_id, 'v123');
   assert.match(voicesInventoryText(), /- Host/);
+});
+
+test('a bundled clip on disk with no registry entry is auto-detected as a STAGED voice (the sample cast)', () => {
+  fs.writeFileSync(path.join(dir, 'wren.mp3'), 'fake-clip'); // ship a clip, no voices.json entry
+  const entry = getVoiceEntry('Wren');
+  assert.ok(entry, 'Wren is recognized from the shipped clip');
+  assert.equal(entry.voice_id, null, 'staged, not minted');
+  assert.match(getVoiceRefClip('wren') ?? '', /wren\.mp3$/, 'the engine resolves the shipped clip');
+  assert.equal(getVoiceId('wren'), null, 'no voice_id until minted');
+  assert.ok(loadVoicesWithClips().wren, 'appears in the augmented map');
+  assert.equal(loadVoices().wren, undefined, 'but is NOT written into the account voices.json');
+});
+
+test('a minted registry entry wins over the shipped-clip fallback', () => {
+  setVoice('Wren', 'vWREN', 'voices/wren.mp3', '2026-01-01T00:00:00Z');
+  assert.equal(getVoiceId('wren'), 'vWREN', 'the real minted entry overrides the synthetic staged one');
 });

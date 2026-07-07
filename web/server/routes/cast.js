@@ -51,6 +51,21 @@ export async function registerCastRoutes(app) {
     fs.mkdirSync(path.dirname(voicesFile), { recursive: true });
     fs.writeFileSync(voicesFile, JSON.stringify(map, null, 2) + '\n');
   };
+  // Bundled sample cast: a voice clip shipped in the voices dir (voices/<slug>.<ext>) with no registry
+  // entry is a STAGED voice — so a fresh clone recognizes it (e.g. Wren) without an account-specific
+  // voices.json (git-ignored, since it holds minted voice_ids). READ-ONLY: never written back, so a
+  // stage/mint/assign never persists a synthetic entry. Clip filenames are already slug-safe (bundled,
+  // or staged as <slug>.<ext>). Real registry entries (incl. minted ids) always win.
+  const sampleClipEntries = () => {
+    let files = [];
+    try { files = fs.readdirSync(path.dirname(voicesFile)).filter((f) => CLIP_EXT.test(f)); } catch { return {}; }
+    return Object.fromEntries(files.map((f) => {
+      const key = path.basename(f, path.extname(f)).toLowerCase();
+      const name = key.split('-').filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join(' ');
+      return [key, { name, voice_id: null, ref_clip: path.relative(root, path.join(path.dirname(voicesFile), f)), minted_at: null, staged_at: null }];
+    }));
+  };
+  const voicesWithClips = () => ({ ...sampleClipEntries(), ...readVoicesMap() });
   const voiceRows = (map) => Object.entries(map).map(([key, v]) => ({
     key,
     name: v?.name ?? key,
@@ -158,7 +173,7 @@ export async function registerCastRoutes(app) {
 
   // ——— voices ———
 
-  app.get('/api/cast/voices', async () => ({ mintUsd: VOICE_MINT_USD, voices: voiceRows(readVoicesMap()) }));
+  app.get('/api/cast/voices', async () => ({ mintUsd: VOICE_MINT_USD, voices: voiceRows(voicesWithClips()) }));
 
   // Stage a voice clip WITHOUT minting (free): the clip is saved next to voices.json and the
   // registry gets an entry with voice_id null. Seedance lip-sync only needs the clip, so a staged
@@ -206,7 +221,7 @@ export async function registerCastRoutes(app) {
     } else {
       // JSON {name}: mint from the character's STAGED clip (uploaded earlier via /voices/stage)
       name = String(req.body?.name ?? '').trim();
-      const entry = readVoicesMap()[slug(name)];
+      const entry = voicesWithClips()[slug(name)];
       if (entry?.ref_clip) {
         const abs = path.resolve(root, entry.ref_clip);
         if (fs.existsSync(abs)) clipPath = abs;
@@ -253,7 +268,7 @@ export async function registerCastRoutes(app) {
   app.get('/api/cast/characters', async () => {
     const { slug } = await host('util.js');
     const refs = await scanRefs();
-    const voices = voiceRows(readVoicesMap());
+    const voices = voiceRows(voicesWithClips());
     const claimedRefs = new Set();
     const claimedVoices = new Set();
     const characters = listProfiles().map((f) => {

@@ -228,6 +228,21 @@ test('voice staging: a selected clip is SAVED with the character before any mint
   assert.match(none.json().hint, /saved before minting/);
 });
 
+test('a bundled voice clip in the voices dir (no voices.json entry) shows as a STAGED voice — the sample cast', async () => {
+  await post('/api/cast/profiles', { name: 'Wren' });
+  fs.mkdirSync(dirs.voices, { recursive: true });
+  fs.writeFileSync(path.join(dirs.voices, 'wren.mp3'), 'FAKE-MP3'); // the shipped sample clip, NOT in voices.json
+  const wren = (await get('/api/cast/characters')).json().characters.find((c) => c.slug === 'wren');
+  assert.ok(wren, 'the Wren character is listed');
+  assert.equal(wren.voice.voiceId, null, 'staged, not minted');
+  assert.equal(wren.voice.refClipAvailable, true, "the shipped clip is recognized as Wren's voice");
+  const vf = path.join(dirs.voices, 'voices.json');
+  const map = fs.existsSync(vf) ? JSON.parse(fs.readFileSync(vf, 'utf8')) : {};
+  assert.equal(map.wren, undefined, 'the synthetic entry is read-only — never written into the account voices.json');
+  fs.rmSync(path.join(dirs.voices, 'wren.mp3'));
+  await del('/api/cast/profiles/wren');
+});
+
 test('a character holds at most 7 reference images (Kling per-job cap) — upload and assign both refuse the 8th', async () => {
   await post('/api/cast/profiles', { name: 'Crowd' });
   for (let i = 0; i < 7; i++) {
