@@ -77,6 +77,19 @@ test('revise: feedback goes through the engine, promotes the revised spec, recor
   assert.ok(fs.existsSync(path.join(runsDir, runId, 'revisions/r1/feedback.json')));
 });
 
+test('revise-content-policy: enqueues a revise with the canned benign + Seedance-guidance feedback', async () => {
+  const { runId } = (await post('/api/runs', { idea: 'a cat reviews cheese', backend: 'kling', aspect: '9:16', durationS: null })).json();
+  await waitForStatus(runId, 'plan-ready');
+  const res = await post(`/api/runs/${runId}/revise-content-policy`, {});
+  assert.ok(res.statusCode < 300, res.body);
+  assert.equal(res.json().revisionId, 'r1');
+  const run = await waitForStatus(runId, 'plan-ready');
+  assert.equal(run.manifest.revisions.length, 1);
+  const fb = run.manifest.revisions[0].feedback;
+  assert.match(fb, /content moderation/i, 'the note explains the moderation flag');
+  assert.match(fb, /camera move|shot description/i, 'the Seedance guidance is included');
+});
+
 test('rerender-job: new take + seam from the latest cut + AUTO re-stitch → review has a fresh master', { skip: FF ? false : 'ffmpeg not installed' }, async () => {
   const { runId, run: before } = await makeReviewedRun('rerender me');
   const firstMaster = before.latestRender.master;

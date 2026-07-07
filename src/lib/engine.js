@@ -14,6 +14,7 @@ import { complete, extractJson } from './llm.js';
 import { validateSpec, RENDER_BACKENDS, ASPECTS } from './spec-schema.js';
 import { buildInventory, inventoryText } from './elements.js';
 import { voicesInventoryText } from './voices.js';
+import { SEEDANCE_TTV_GUIDANCE } from './seedance.js';
 
 const DIR = resolvePath('engine');
 const TEMPLATE = path.join(DIR, 'templates', 'spec.template.json');
@@ -49,8 +50,16 @@ async function loadSkills(idx) {
   return out.join('\n\n---\n\n');
 }
 
+/** A Seedance render with NO cast AND NO reference image available is guaranteed text-to-video (the
+ *  Casting agent has nothing to attach) — the only case where injecting the text-to-video prompt style
+ *  + identity override is safe. A no-cast render whose folder holds a relevant image becomes
+ *  image-to-video (Casting attaches by relevance), whose planning must stay unchanged. */
+export function isTextToVideoPlan({ backend, cast, refCount }) {
+  return backend === 'seedance' && !(cast?.length) && refCount === 0;
+}
+
 /** The shared project context every agent sees (brief, config defaults + caps, elements, profiles). */
-function contextBlock(ctx) {
+export function contextBlock(ctx) {
   const k = config.kling;
   return [
     '## Project context',
@@ -61,6 +70,16 @@ function contextBlock(ctx) {
     `- Hard caps: ≤${k.maxStoryboards} shots/job, ≤${k.maxJobSeconds}s/job, ≤512 chars/segment, ≤${k.maxRefImages} reference images/job`,
     ...(ctx.backend === 'seedance'
       ? [`- Seedance packing rule: every job must total ${config.seedance.minJobSeconds}–${config.seedance.maxJobSeconds}s (a job under ${config.seedance.minJobSeconds}s fails validation — merge short shots); other caps are identical.`]
+      : []),
+    // Guaranteed text-to-video (Seedance, no cast, AND no reference image the Casting agent could
+    // attach): steer the shot prose with the Seedance 2.0 guidelines from the start. Absent for
+    // image-to-video (a cast selected, or any reference image on disk) and for Kling, so those plans
+    // are byte-for-byte unchanged — see isTextToVideoPlan / buildCtx.
+    ...(ctx.textToVideo
+      ? ['',
+         '## Seedance text-to-video — prompt style (this render has NO reference image; the video is built from the shot prompts alone)',
+         SEEDANCE_TTV_GUIDANCE,
+         '- IDENTITY: overriding the scene-director\'s usual "never describe the subject\'s appearance" rule — since no reference image pins identity here, DO describe each subject\'s look concretely (build, clothing, colours, distinctive features) and keep it consistent across every shot.']
       : []),
     '- Valid enums: shot_size ∈ {extreme_close_up, close_up, medium_close_up, medium, medium_wide, wide, extreme_wide}; ' +
       'aspect_ratio ∈ {16:9, 9:16, 1:1}; kling.model_name ∈ {kling-v3-omni, kling-video-o1}; ' +
@@ -205,12 +224,15 @@ async function buildCtx({ brief, backend, aspectRatio, durationTargetS, cast }) 
   if (aspectRatio !== undefined && !ASPECTS.includes(aspectRatio)) {
     throw new Error(`Unknown aspect ratio "${aspectRatio}" — use one of: ${ASPECTS.join(', ')}.`);
   }
+  const inv = buildInventory();
   return {
     brief,
     backend: be,
     aspectRatio, // undefined = config default (contextBlock falls back to config.kling.aspectRatio)
     durationTargetS: durationTargetS ?? config.kling.defaultShotSeconds * 3,
-    inventoryText: inventoryText(buildInventory()),
+    // Guaranteed text-to-video? (no cast AND no reference image to attach — see isTextToVideoPlan)
+    textToVideo: isTextToVideoPlan({ backend: be, cast, refCount: inv.filter((e) => e.type === 'reference').length }),
+    inventoryText: inventoryText(inv),
     voicesText: voicesInventoryText(),
     profilesText: await loadProfiles(cast),
     castNames: cast?.length ? [...cast] : null,

@@ -101,6 +101,7 @@ export const api = {
   cancel: (id: string) => post<{ cancelled: 'queued' | 'active' | 'stale' | false }>(`/runs/${id}/cancel`),
   dismissError: (id: string) => post<{ dismissed: boolean }>(`/runs/${id}/dismiss-error`),
   replan: (id: string) => post<{ queued: unknown }>(`/runs/${id}/plan`),
+  reviseForContentPolicy: (id: string) => post<{ revisionId: string }>(`/runs/${id}/revise-content-policy`),
   reveal: (id: string) => post<{ revealed: boolean; path?: string }>(`/runs/${id}/reveal`),
 
   references: () => get<ReferencesList>('/cast/references'),

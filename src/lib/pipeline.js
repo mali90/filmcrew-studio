@@ -167,7 +167,12 @@ export async function renderJob(spec, jobId, { runDir, backend, take = 0, feedba
 export async function finishRender(spec, results, { runDir, upscale = false, backend, outName } = {}) {
   const jobs = spec.kling.jobs;
   let clipPaths = jobs.map((j) => results.find((r) => r.jobId === j.job_id)?.clip).filter(Boolean);
-  if (!clipPaths.length) throw new Error('No rendered clips found — nothing to assemble');
+  if (!clipPaths.length) {
+    // Name WHY each job failed (e.g. a content-policy flag) instead of a bare "nothing to assemble".
+    const failed = results.filter((r) => r.error);
+    const why = failed.length ? failed.map((r) => `${r.jobId}: ${r.error}`).join('; ') : 'no job produced a clip';
+    throw new Error(`No rendered clips to assemble — every job failed (${why})`);
+  }
   if (clipPaths.length < jobs.length) {
     log.warn(`Only ${clipPaths.length}/${jobs.length} job clip(s) present — assembling a partial video (the rest weren't rendered; a --probe run makes just the first job).`);
   }

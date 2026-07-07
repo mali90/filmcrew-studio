@@ -39,6 +39,11 @@ export async function startFalServer({ videoBytes = Buffer.from('FAKE-MP4'), opt
     }
     if (u.pathname === '/rs/voice') return json(200, { voice_id: 'voice_abc' });
     if (u.pathname === '/rs/video') {
+      // The model's moderation flags the GENERATED video as sensitive (content_policy_violation) —
+      // deterministic here; exercises the fail-fast + clear-message path (never auto-retried).
+      if (opts.contentPolicy) {
+        return json(422, { detail: [{ loc: ['body', 'generated_video'], msg: 'Output video has sensitive content.', type: 'content_policy_violation', ctx: { extra_info: { reason: 'partner_validation_failed' } } }] });
+      }
       // Transient fal-side fetch race on the FIRST poll (422 "timeout while fetching resource"),
       // then success — exercises runFal's retry of a transient (non-validation) 4xx.
       if (opts.fetchTimeoutOnce && videoHits++ === 0) {
