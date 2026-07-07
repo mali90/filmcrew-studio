@@ -1,0 +1,85 @@
+{
+  "name": "filmcrew-studio",
+  "version": "1.1.0",
+  "description": "8 LLM agents turn a one-line idea into a multi-shot AI short film — plan, cast, render on fal.ai (Kling 3.0 Omni or Seedance 2.0), and stitch locally with ffmpeg. Model-agnostic planner (Claude, OpenAI, Gemini, Copilot), persistent per-character voices, optional Topaz upscale.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Muhammad Ali Mustafa",
+  "files": [
+    "src",
+    "engine",
+    "config.js",
+    ".env.example",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "docs",
+    "examples",
+    "profiles/wren.md",
+    "voices/wren.mp3",
+    "voices/README.md",
+    "elements/references/subject.png",
+    "elements/references/wren-*.png"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "bin": {
+    "filmcrew-studio": "src/cli/engine.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mali90/filmcrew-studio.git"
+  },
+  "homepage": "https://github.com/mali90/filmcrew-studio#readme",
+  "bugs": {
+    "url": "https://github.com/mali90/filmcrew-studio/issues"
+  },
+  "scripts": {
+    "init": "node src/cli/init.js",
+    "engine": "node src/cli/engine.js",
+    "render": "node src/cli/render.js",
+    "render-job": "node src/cli/render-job.js",
+    "revise": "node src/cli/revise.js",
+    "assemble": "node src/cli/assemble.js",
+    "upscale": "node src/cli/upscale.js",
+    "mint-voice": "node src/cli/mint-voice.js",
+    "doctor": "node src/cli/doctor.js",
+    "web:install": "npm --prefix web/server install && npm --prefix web/ui install",
+    "web": "node web/server/server.js",
+    "web:test": "npm --prefix web/server test && npm --prefix web/ui test",
+    "test": "node test/run.js",
+    "test:unit": "node test/run.js unit",
+    "test:integration": "node test/run.js integration",
+    "test:e2e": "node test/run.js e2e",
+    "test:coverage": "node test/run.js --experimental-test-coverage",
+    "test:live": "RUN_LIVE=1 node test/run.js live",
+    "postinstall": "node -e \"process.env.CI||console.error('\\n▶ Next: run  npm run init  to set everything up.\\n')\""
+  },
+  "keywords": [
+    "filmcrew-studio",
+    "ai-video",
+    "ai-video-generation",
+    "text-to-video",
+    "prompt-to-video",
+    "ai-filmmaking",
+    "video-generation",
+    "ai-agents",
+    "agentic-ai",
+    "multi-agent",
+    "llm",
+    "character-consistency",
+    "local-first",
+    "claude",
+    "openai",
+    "gemini",
+    "fal-ai",
+    "kling",
+    "seedance",
+    "ffmpeg",
+    "video-pipeline"
+  ],
+  "dependencies": {
+    "dotenv": "^16.4.5"
+  }
+}

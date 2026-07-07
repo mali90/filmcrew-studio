@@ -1,0 +1,80 @@
+{
+  "spec_version": "1.0",
+  "project": {
+    "title": "Ocean Lighthouse",
+    "logline": "On his last night, an old keeper tends the lamp one final time before automation takes over at dawn.",
+    "format": "micro_story",
+    "duration_target_s": 13,
+    "aspect_ratio": "9:16",
+    "hook": "A lone lighthouse beam sweeps across a black, storm-flecked sea.",
+    "payoff": "At first light the old lamp goes dark for the last time; the keeper quietly closes the door.",
+    "cast": ["the lighthouse keeper"],
+    "cover_frame_s": 2
+  },
+  "shots": [
+    {
+      "shot_id": "S1",
+      "beat": "hook",
+      "duration_s": 5,
+      "description": "The lighthouse beam sweeps over a dark, choppy sea at night.",
+      "kling": {
+        "content_prompt": "A lighthouse beam sweeps across a black, storm-flecked sea at night, spray catching the light, the tower's lamp room glowing warm against cold blue darkness, lonely and cinematic.",
+        "shot_size": "extreme_wide",
+        "perspective": "distant eye level from the water",
+        "camera_move": "slow push in toward the tower"
+      }
+    },
+    {
+      "shot_id": "S2",
+      "beat": "turn",
+      "duration_s": 4,
+      "description": "Inside the lamp room, the keeper polishes the great lens by hand.",
+      "kling": {
+        "content_prompt": "Inside the warm lamp room, the keeper polishes the huge brass-and-glass lens by hand, reflections drifting across the curved glass, dust in the lamplight, a quiet reverent mood.",
+        "shot_size": "medium_close_up",
+        "perspective": "slight low angle",
+        "camera_move": "static lock-off"
+      }
+    },
+    {
+      "shot_id": "S3",
+      "beat": "payoff",
+      "duration_s": 4,
+      "description": "Dawn breaks; the lamp goes dark and the keeper closes the door.",
+      "kling": {
+        "content_prompt": "Pale dawn light fills the room as the great lamp dims and goes dark for the last time; the keeper steps out and quietly pulls the heavy door closed, the sea calm and silver behind.",
+        "shot_size": "wide",
+        "perspective": "eye level from the doorway",
+        "camera_move": "gentle pull back"
+      }
+    }
+  ],
+  "audio": {
+    "generate_audio": true,
+    "voice": {
+      "lines": [
+        { "shot_id": "S1", "text": "Forty years I kept this light." }
+      ]
+    }
+  },
+  "kling": {
+    "model_name": "kling-v3-omni",
+    "aspect_ratio": "9:16",
+    "resolution": "1080p",
+    "generate_audio": true,
+    "elements": [
+      { "id": "subject", "role": "subject", "image": "elements/references/subject.png" }
+    ],
+    "jobs": [
+      { "job_id": "K1", "shots": ["S1", "S2", "S3"], "elements": ["subject"] }
+    ]
+  },
+  "qc": {
+    "status": "pass",
+    "checks": [
+      { "check": "one clear idea, hook + payoff present", "passed": true, "evidence": "beam hook -> lamp goes dark payoff" },
+      { "check": "all content_prompts describe scene/action only (no appearance words)", "passed": true, "evidence": "subject referenced as 'the keeper'" },
+      { "check": "job K1 within caps (3 shots, 13s, 1 element)", "passed": true, "evidence": "<=6 shots, <=15s, <=7 refs" }
+    ]
+  }
+}

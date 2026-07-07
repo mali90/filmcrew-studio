@@ -1,0 +1,3 @@
+# Optional opening-frame seeds. A job's first_frame can point at an image here to lock the
+# starting frame of that generation (uses the first/last Kling workflow). Aspect is derived
+# from this frame, so use your target ratio.

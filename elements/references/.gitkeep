@@ -1,0 +1,4 @@
+# Reference images (Kling "Elements") go here — the subject/object/style refs that pin identity.
+# Up to 7 per generation. Supported: .png .jpg .jpeg .webp
+# A bare filename in a spec's kling.elements[].image resolves to this folder.
+# Optional: add a "<name>.txt" sidecar with a one-line description shown to the Casting agent.

@@ -1,0 +1,138 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Kling Production Spec",
+  "description": "Human-readable reference for the spec the engine produces and the renderer consumes. The validator of record is src/lib/spec-schema.js (dependency-free, incremental).",
+  "type": "object",
+  "required": ["spec_version", "project", "shots", "kling", "qc"],
+  "properties": {
+    "spec_version": { "const": "1.0" },
+    "render_backend": {
+      "enum": ["kling", "seedance"],
+      "description": "Optional: which backend renders kling.jobs[] (default: RENDER_BACKEND / kling). The spec is backend-neutral; Seedance adds a 4s/job minimum."
+    },
+    "project": {
+      "type": "object",
+      "required": ["title", "logline", "format", "duration_target_s", "hook", "payoff"],
+      "properties": {
+        "title": { "type": "string" },
+        "logline": { "type": "string" },
+        "format": { "type": "string", "description": "e.g. skit, explainer, product_demo, micro_story, trend, ad, pov" },
+        "duration_target_s": { "type": "number", "minimum": 3, "maximum": 120 },
+        "aspect_ratio": { "enum": ["16:9", "9:16", "1:1"] },
+        "hook": { "type": "string" },
+        "payoff": { "type": "string" },
+        "cast": { "type": "array", "items": { "type": "string" } },
+        "cover_frame_s": { "type": "number" }
+      }
+    },
+    "shots": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["shot_id", "beat", "duration_s", "kling"],
+        "properties": {
+          "shot_id": { "type": "string" },
+          "beat": { "type": "string", "description": "e.g. hook, setup, escalation, turn, payoff, button" },
+          "duration_s": { "type": "number", "minimum": 1, "maximum": 15 },
+          "description": { "type": "string", "description": "optional storyboard note (handed to the Scene Director)" },
+          "kling": {
+            "type": "object",
+            "required": ["content_prompt", "shot_size", "perspective", "camera_move"],
+            "properties": {
+              "content_prompt": { "type": "string", "maxLength": 512, "description": "scene + action ONLY; no subject appearance words (identity is pinned by reference Elements)" },
+              "shot_size": { "enum": ["extreme_close_up", "close_up", "medium_close_up", "medium", "medium_wide", "wide", "extreme_wide"] },
+              "perspective": { "type": "string" },
+              "camera_move": { "type": "string" },
+              "duration": { "type": "number", "description": "optional override of duration_s for this segment" }
+            }
+          }
+        }
+      }
+    },
+    "audio": {
+      "type": "object",
+      "description": "optional",
+      "properties": {
+        "generate_audio": { "type": "boolean", "description": "Kling native synchronized audio" },
+        "voice": {
+          "type": "object",
+          "properties": {
+            "lines": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["text"],
+                "properties": {
+                  "text": { "type": "string" },
+                  "shot_id": { "type": "string" },
+                  "at_s": { "type": "number" },
+                  "speaker": { "type": "string", "description": "character saying the line; on the fal transport, matched to a registered voice to lock that character's persistent voice_id" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "kling": {
+      "type": "object",
+      "required": ["model_name", "elements", "jobs"],
+      "properties": {
+        "model_name": { "enum": ["kling-v3-omni", "kling-video-o1"] },
+        "aspect_ratio": { "enum": ["16:9", "9:16", "1:1"] },
+        "resolution": { "enum": ["4k", "1080p", "720p"] },
+        "generate_audio": { "type": "boolean" },
+        "elements": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["id", "role", "image"],
+            "properties": {
+              "id": { "type": "string" },
+              "role": { "type": "string", "description": "e.g. subject, object, style, scene" },
+              "image": { "type": "string", "description": "path from the element inventory (repo-relative)" },
+              "character": { "type": "string", "description": "optional: groups this image with others of the same character; on the fal transport, matched to a registered voice (and to a VO line's speaker) to bind that character's persistent voice_id" }
+            }
+          }
+        },
+        "jobs": {
+          "type": "array",
+          "minItems": 1,
+          "description": "one Kling generation each (stitched in array order). ≤6 shots / ≤15s / ≤7 elements per job.",
+          "items": {
+            "type": "object",
+            "required": ["job_id", "shots"],
+            "properties": {
+              "job_id": { "type": "string" },
+              "shots": { "type": "array", "items": { "type": "string" }, "maxItems": 6 },
+              "elements": { "type": "array", "items": { "type": "string" }, "maxItems": 7 },
+              "first_frame": { "type": "string", "description": "optional opening-frame image path" },
+              "last_frame": { "type": "string", "description": "optional closing-frame path (requires first_frame)" }
+            }
+          }
+        }
+      }
+    },
+    "qc": {
+      "type": "object",
+      "required": ["status", "checks"],
+      "properties": {
+        "status": { "enum": ["pending", "pass", "fail"] },
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "check": { "type": "string", "description": "prefix a failing check with its owner tag, e.g. [shots], [content], [jobs]" },
+              "passed": { "type": "boolean" },
+              "evidence": { "type": "string" }
+            }
+          }
+        },
+        "notes": { "type": "string" }
+      }
+    }
+  }
+}

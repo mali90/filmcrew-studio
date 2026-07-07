@@ -1,0 +1,9 @@
+Vendored fonts (no CDN — the app works fully offline apart from fal/LLM API calls):
+
+- InterVariable.woff2 — Inter, © The Inter Project Authors (https://github.com/rsms/inter)
+  Licensed under the SIL Open Font License 1.1 (https://openfontlicense.org)
+- JetBrainsMono.woff2 — JetBrains Mono, © 2020 JetBrains (https://github.com/JetBrains/JetBrainsMono)
+  Licensed under the SIL Open Font License 1.1 (https://openfontlicense.org)
+
+The SIL OFL permits bundling, redistribution and use with attribution; the fonts are not sold
+separately. Full license texts are available at the linked repositories.

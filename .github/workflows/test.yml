@@ -1,0 +1,104 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Install ffmpeg (for assembly tests)
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Install dependencies
+        run: npm ci   # package-lock.json (v3) is committed
+
+      - name: Syntax-check all sources
+        run: find config.js src web/server -name '*.js' -not -path '*/node_modules/*' -print0 | xargs -0 -n1 node --check
+
+      - name: Run tests
+        env:
+          CI: "true"
+          # Defense in depth: the suite points transports at localhost mocks and injects a fake LLM,
+          # so no real API is contacted and no money is spent. RUN_LIVE is intentionally unset here.
+        run: npm test
+
+  web-server:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Install ffmpeg (integration tests stitch real clips)
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Install dependencies (root + server)
+        run: |
+          npm ci
+          npm --prefix web/server ci
+      - name: Server tests (node:test — unit + integration over the real CLIs)
+        env:
+          CI: "true"
+        run: npm --prefix web/server test
+
+  web-ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm --prefix web/ui ci
+      - name: Typecheck
+        run: npm --prefix web/ui run typecheck
+      - name: Component tests (vitest)
+        env:
+          CI: "true"
+        run: npm --prefix web/ui test
+      - name: Production build
+        run: npm --prefix web/ui exec vite build
+
+  web-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Install ffmpeg (the demo server stitches real clips)
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm --prefix web/server ci
+          npm --prefix web/ui ci
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('web/ui/package-lock.json') }}
+      - name: Install chromium
+        run: npm --prefix web/ui exec playwright install --with-deps chromium
+      - name: Build the UI (the demo server serves dist/)
+        run: npm --prefix web/ui exec vite build
+      - name: e2e (Playwright vs the zero-spend demo server)
+        env:
+          CI: "true"
+        run: npm --prefix web/ui run e2e

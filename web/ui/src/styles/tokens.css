@@ -1,0 +1,72 @@
+/* Design tokens — "a quiet studio, not a control room": warm neutrals, one cool cobalt-indigo
+ * accent (the bias light behind a reference monitor), five status colors and nothing else.
+ * Both themes are first-class; [data-theme] on <html> flips everything. */
+
+:root {
+  /* radius / shadow / motion */
+  --r-1: 4px; --r-2: 6px; --r-3: 10px; --r-4: 14px; --r-pill: 999px;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow-2: 0 4px 16px rgba(0, 0, 0, 0.10), 0 1px 3px rgba(0, 0, 0, 0.08);
+  --shadow-3: 0 16px 48px rgba(0, 0, 0, 0.22);
+  --dur-1: 120ms; --dur-2: 200ms; --dur-3: 320ms; --dur-progress: 600ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-enter: cubic-bezier(0, 0, 0.2, 1);
+}
+
+:root, [data-theme='dark'] {
+  color-scheme: dark;
+  --surface-0: #121110;
+  --surface-1: #1a1918;
+  --surface-2: #232120;
+  --surface-3: #2c2a28;
+  --stage: #0c0b0a;
+  --ink: #edeae6;
+  --ink-secondary: #a8a29b;
+  --ink-muted: #8a847b;
+  --ink-faint: #5c564f;
+  --line: #2a2826;
+  --line-strong: #3d3936;
+  --accent: #849dff;
+  --accent-hover: #97acff;
+  --accent-strong: #5b72e8;
+  --accent-soft: rgba(132, 157, 255, 0.12);
+  --on-accent: #12131a;
+  --status-pending: #8a847b;
+  --status-active: #849dff;
+  --status-done: #55c284;
+  --status-failed: #f0716a;
+  --status-warn: #e0a64b;
+  --status-done-soft: rgba(85, 194, 132, 0.12);
+  --status-failed-soft: rgba(240, 113, 106, 0.12);
+  --status-warn-soft: rgba(224, 166, 75, 0.12);
+  --shadow-3: 0 16px 48px rgba(0, 0, 0, 0.5);
+}
+
+[data-theme='light'] {
+  color-scheme: light;
+  --surface-0: #faf9f7;
+  --surface-1: #ffffff;
+  --surface-2: #f3f1ee;
+  --surface-3: #ffffff;
+  --stage: #eceae6;
+  --ink: #1c1a18;
+  --ink-secondary: #57534c;
+  --ink-muted: #79736a;
+  --ink-faint: #a9a299;
+  --line: #e8e5e0;
+  --line-strong: #d6d2cb;
+  --accent: #3d63dd;
+  --accent-hover: #3356c4;
+  --accent-strong: #3d63dd;
+  --accent-soft: rgba(61, 99, 221, 0.10);
+  --on-accent: #ffffff;
+  --status-pending: #79736a;
+  --status-active: #3d63dd;
+  --status-done: #17794e;
+  --status-failed: #c23934;
+  --status-warn: #8f6400;
+  --status-done-soft: rgba(23, 121, 78, 0.10);
+  --status-failed-soft: rgba(194, 57, 52, 0.10);
+  --status-warn-soft: rgba(143, 100, 0, 0.12);
+  --shadow-3: 0 16px 48px rgba(0, 0, 0, 0.22);
+}

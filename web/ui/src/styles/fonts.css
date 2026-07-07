@@ -1,0 +1,17 @@
+/* Local fonts only — no CDN (the app must work fully offline apart from fal/LLM calls).
+ * Drop the variable woff2 files into public/fonts/ (see public/fonts/README.md); until then the
+ * system stack below is a graceful fallback and nothing breaks. */
+@font-face {
+  font-family: 'InterVariable';
+  src: url('/fonts/InterVariable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/JetBrainsMono.woff2') format('woff2');
+  font-weight: 100 800;
+  font-style: normal;
+  font-display: swap;
+}

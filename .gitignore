@@ -1,0 +1,47 @@
+# secrets
+.env
+.env.local
+
+# Proprietary cast assets — never commit (incident 2026-07-05).
+# Voices are account-specific; mint locally with `npm run mint-voice`.
+# Only the bundled examples (subject.png + the "wren" sample cast) are allow-listed below;
+# voices.json stays ignored (account-specific voice_ids, rewritten on every mint).
+voices/*.mp3
+voices/*.wav
+voices/voices.json
+profiles/*.md
+elements/references/*
+!elements/references/subject.png
+!voices/README.md
+!**/.gitkeep
+# — bundled sample cast: "Wren" (clip only; users mint their own voice_id) —
+!profiles/wren.md
+!elements/references/wren-*
+!voices/wren.mp3
+
+# dependencies
+node_modules/
+
+# generated artifacts
+out/
+work/
+runs/
+.cache/
+runs-demo/
+out-demo/
+
+# web app
+web/ui/dist/
+web/ui/playwright-report/
+web/ui/test-results/
+
+# launch strategy — private working notes, not for the public repo
+LAUNCH.md
+
+# portable fal.ai implementation brain-dumps — kept local, not for the public repo
+FAL_KLING_WORKFLOW_CONTEXT.md
+FAL_SEEDANCE_WORKFLOW_CONTEXT.md
+
+# OS / editor
+.DS_Store
+*.log

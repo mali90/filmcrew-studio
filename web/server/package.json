@@ -1,0 +1,21 @@
+{
+  "name": "filmcrew-studio-web-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Localhost web app server for Filmcrew Studio — wraps the CLI pipeline behind a JSON API + SSE.",
+  "type": "module",
+  "engines": { "node": ">=20.0.0" },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "demo": "node dev/demo.js",
+    "test": "node test/run.js",
+    "test:unit": "node test/run.js unit",
+    "test:integration": "node test/run.js integration"
+  },
+  "dependencies": {
+    "@fastify/multipart": "^10.0.0",
+    "@fastify/static": "^9.1.0",
+    "fastify": "^5.0.0"
+  }
+}

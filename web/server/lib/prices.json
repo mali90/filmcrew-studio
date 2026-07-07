@@ -1,0 +1,25 @@
+{
+  "_note": "Ballpark per-second USD rates used for the UI's cost ESTIMATES only \u2014 nothing here is billed. Verified against fal.ai's model pages (July 2026); edit freely when fal's prices move. Every figure the UI shows from these is labeled 'estimate'.",
+  "kling": {
+    "perSecondUsd": 0.112,
+    "audioOffPerSecondUsd": 0.084,
+    "probePerSecondUsd": 0.112,
+    "_source": "fal.ai kling-video o3 STANDARD reference-to-video (July 2026): $0.112/s with audio, $0.084/s audio off \u2014 flat across durations, ~720p output (pro: 1080p at $0.14/s). Approve's Topaz upscale lifts the master to 1080p. Probe rides the same endpoint."
+  },
+  "seedance": {
+    "perSecondUsd": {
+      "480p": 0.135,
+      "720p": 0.3024,
+      "1080p": 0.6804,
+      "4k": 1.5552
+    },
+    "defaultResolution": "480p",
+    "probeResolution": "480p",
+    "_source": "fal.ai bytedance/seedance-2.0/reference-to-video standard tier (July 2026): $0.014 per 1000 tokens for 480p/720p/1080p ($0.008/1k for 4k); tokens = height*width*seconds*24/1024 \u2014 so 720p=$0.3024/s, 1080p=$0.6804/s (fal quotes $0.682). Probe = SAME standard endpoint at probeResolution; the mini/fast tiers are deliberately not used (character fidelity drift)."
+  },
+  "topaz": {
+    "perSecondUsd": 0.12,
+    "_source": "fal.ai topaz/upscale/video ballpark per output second"
+  },
+  "voiceMintUsd": 0.007
+}

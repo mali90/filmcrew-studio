@@ -1,0 +1,59 @@
+@import './tokens.css';
+@import './fonts.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html { background: var(--surface-0); }
+  body { @apply font-sans text-body text-ink bg-surface-0 antialiased; }
+
+  /* tabular numerals on every timer, cost and duration */
+  .tnum { font-variant-numeric: tabular-nums; }
+
+  /* focus is always visible, never removed */
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+
+  /* thin scrollbars only inside log/JSON wells */
+  .well::-webkit-scrollbar { width: 8px; height: 8px; }
+  .well::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 4px; }
+}
+
+@layer utilities {
+  /* the active agent's "what I'm deciding" shimmer — the entire animation budget for "AI working" */
+  .shimmer {
+    background: linear-gradient(90deg, var(--ink-secondary) 40%, var(--ink) 50%, var(--ink-secondary) 60%);
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: shimmer 2s linear infinite;
+  }
+  @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+
+  /* pulsing ring on the one active status dot */
+  .pulse-dot { position: relative; }
+  .pulse-dot::after {
+    content: ''; position: absolute; inset: -3px; border-radius: 999px;
+    border: 2px solid var(--status-active);
+    animation: pulse 1.6s ease-out infinite;
+  }
+  @keyframes pulse { from { transform: scale(1); opacity: 0.5; } to { transform: scale(1.6); opacity: 0; } }
+
+  /* indeterminate sweep for rendering jobs — never a fake percentage */
+  .sweep { position: relative; overflow: hidden; background: var(--surface-2); border-radius: 2px; }
+  .sweep::after {
+    content: ''; position: absolute; top: 0; bottom: 0; width: 30%;
+    background: var(--accent-strong); border-radius: 2px;
+    animation: sweep 1.8s linear infinite;
+  }
+  @keyframes sweep { from { left: -30%; } to { left: 100%; } }
+
+  @media (prefers-reduced-motion: reduce) {
+    .shimmer { animation: none; color: var(--ink-secondary); background: none; }
+    .pulse-dot::after { animation: none; opacity: 0.4; }
+    .sweep::after { animation: none; width: 100%; opacity: 0.3; }
+    * { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+  }
+}

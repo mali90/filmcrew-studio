@@ -1,0 +1,2 @@
+# Optional closing-frame (end_frame) seeds. A job's last_frame can point at an image here to lock
+# the final frame of that generation. Requires a first_frame on the same job.
