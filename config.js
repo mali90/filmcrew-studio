@@ -64,6 +64,10 @@ const config = {
     // STANDARD tier: same inputs as pro, ~720p output at $0.112/s with audio ($0.084 off) vs
     // pro's 1080p at $0.14/s — approve's optional Topaz upscale delivers 1080p for less overall.
     klingEndpoint: process.env.FAL_KLING_ENDPOINT || 'fal-ai/kling-video/o3/standard/reference-to-video',
+    // TEXT-TO-VIDEO tier (no elements/voice) — used when a spec has zero reference images (Casting
+    // attached none because nothing in the folder fit the idea). Same o3 family, `text-to-video`
+    // suffix; VERIFY against the model's fal API tab and override via FAL_KLING_TEXT_ENDPOINT if it differs.
+    klingTextEndpoint: process.env.FAL_KLING_TEXT_ENDPOINT || 'fal-ai/kling-video/o3/standard/text-to-video',
     // Seedance 2.0 (ByteDance) reference-to-video — a TEXT prompt + flat image_urls (@Image1..N) +
     // optional audio_urls (@Audio1..N lip-sync refs). NOTE: these endpoint ids have NO `fal-ai/`
     // prefix (verified on fal.ai). Standard tier ONLY — mini/fast drift character fidelity (wrong
@@ -71,12 +75,17 @@ const config = {
     // just the first job at SEEDANCE_PROBE_RESOLUTION instead of dropping to a cheaper tier.
     seedanceEndpoint: process.env.FAL_SEEDANCE_ENDPOINT || 'bytedance/seedance-2.0/reference-to-video',
     seedanceProbeEndpoint: process.env.FAL_SEEDANCE_PROBE_ENDPOINT || 'bytedance/seedance-2.0/reference-to-video',
+    // TEXT-TO-VIDEO tier — used when a job has zero image refs (image-less idea). Rides at both full
+    // and probe resolution (probe just lowers resolution, like the reference-to-video tiers above).
+    // VERIFY against the model's fal API tab; override via FAL_SEEDANCE_TEXT_ENDPOINT if it differs.
+    seedanceTextEndpoint: process.env.FAL_SEEDANCE_TEXT_ENDPOINT || 'bytedance/seedance-2.0/text-to-video',
     createVoiceEndpoint: process.env.FAL_CREATE_VOICE_ENDPOINT || 'fal-ai/kling-video/create-voice',
     // The CDN upload handshake (initiate + PUT) lives on a different host than the queue — env
     // override exists mostly so tests can point it at the mock server.
     storageInitiateUrl: process.env.FAL_STORAGE_INITIATE_URL || 'https://rest.alpha.fal.ai/storage/upload/initiate?storage_type=fal-cdn-v3',
     uploadMode: process.env.FAL_UPLOAD_MODE || 'data-uri', // 'data-uri' (inline; verified accepted) | 'storage' (fal CDN upload)
     maxRetries: numEnv('FAL_MAX_RETRIES', 3), // resubmit on transient fal-side infra errors
+    retryBackoffMs: numEnv('FAL_RETRY_BACKOFF_MS', 8000), // base backoff between resubmits (× attempt)
     // Topaz video upscale (fal) — lifts a rendered master toward 1080p while preserving the take.
     // Output is { video:{url} } (same shape as Kling). Input: video_url + upscale_factor (1–4) + model.
     topazEndpoint: process.env.FAL_TOPAZ_ENDPOINT || 'fal-ai/topaz/upscale/video',

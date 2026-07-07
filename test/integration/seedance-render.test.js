@@ -22,7 +22,7 @@ const voices = mkTmp('seedance-voices');
 Object.assign(process.env, {
   FAL_BASE_URL: fal.baseUrl, FAL_KEY: 'fake', FAL_UPLOAD_MODE: 'data-uri', FAL_MAX_RETRIES: '1',
   FAL_KLING_ENDPOINT: 'submit',
-  FAL_SEEDANCE_ENDPOINT: 'seedance-submit', FAL_SEEDANCE_PROBE_ENDPOINT: 'seedance-probe',
+  FAL_SEEDANCE_ENDPOINT: 'seedance-submit', FAL_SEEDANCE_PROBE_ENDPOINT: 'seedance-probe', FAL_SEEDANCE_TEXT_ENDPOINT: 'seedance-text',
   FAL_TOPAZ_ENDPOINT: 'topaz-submit',
   FAL_STORAGE_INITIATE_URL: `${fal.baseUrl}/storage/upload/initiate`,
   SEEDANCE_UPLOAD_MODE: 'data-uri', RENDER_BACKEND: 'seedance',
@@ -64,6 +64,30 @@ test('probe: mini endpoint, probe resolution, flat args, no seed/negative_prompt
     assert.equal(sidecar.backend, 'seedance');
     assert.equal(sidecar.endpoint, 'seedance-probe');
     assert.equal(sidecar.seed_unused, 70000); // pipeline's per-job seed is recorded, never sent
+  } finally { cleanup(); }
+});
+
+test('text-to-video: no elements → text endpoint, NO image_urls / audio_urls', async () => {
+  const { dir, cleanup } = mkTmp('sd-ttv');
+  try {
+    fs.writeFileSync(path.join(voices.dir, 'voices.json'), '{}');
+    const spec = loadGoldenSpec();
+    // Casting attached no reference (image-less idea): empty roster and unscoped jobs.
+    spec.kling.elements = [];
+    spec.kling.jobs.forEach((j) => { j.elements = []; });
+    const before = fal.requests.length;
+    const r = await renderSpec(spec, { runDir: dir, probe: true });
+    assert.ok(r.clip && fs.existsSync(r.clip), 'a text-to-video job still renders a clip');
+
+    const submit = lastSubmit(before);
+    assert.equal(submit.path, '/seedance-text', 'zero image refs route to FAL_SEEDANCE_TEXT_ENDPOINT');
+    const body = JSON.parse(submit.body);
+    assert.ok(!('image_urls' in body), 'no image_urls sent for text-to-video');
+    assert.ok(!('audio_urls' in body), 'no audio refs without an image ref to ride');
+    assert.ok(body.prompt.includes('lighthouse'), 'shot prose still drives the prompt');
+    assert.ok(!body.prompt.includes('@Image'), 'no dangling @Image references in the prompt');
+    const sidecar = JSON.parse(fs.readFileSync(path.join(dir, 'K1', 'prompts.json'), 'utf8'));
+    assert.equal(sidecar.endpoint, 'seedance-text');
   } finally { cleanup(); }
 });
 

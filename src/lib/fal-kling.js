@@ -83,28 +83,37 @@ export async function renderKlingJobFal({ job, spec, runDir, seed, lowRes = fals
   fs.mkdirSync(dir, { recursive: true });
   const klingCfg = klingConfigFor(spec);
 
-  // 1. Character elements (look + bound voice), and a speaker → @ElementN resolver.
+  // 1. Character elements (look + bound voice), and a speaker → @ElementN resolver. When Casting
+  //    attached no references (an image-less idea), there are no elements → TEXT-TO-VIDEO: the video
+  //    is driven by the prompts alone, with no @Element refs, no bound voices, and no start/end frame.
   const groups = characterGroups(job, spec);
+  const textToVideo = groups.every((g) => g.els.length === 0);
+  const startFrameSrc = job.first_frame || startFrame || null;
+
   const idxByName = new Map(groups.map((g, i) => [slug(g.name), i + 1]));
-  for (const sp of jobSpeakers(job, spec)) {
-    if (groups.length > 1 && !idxByName.has(slug(sp))) {
-      throw new Error(`fal job ${job.job_id}: speaker "${sp}" matches no element character — set a "character" field on that character's elements (one of: ${groups.map((g) => g.name).join(', ')}).`);
+  if (!textToVideo) {
+    for (const sp of jobSpeakers(job, spec)) {
+      if (groups.length > 1 && !idxByName.has(slug(sp))) {
+        throw new Error(`fal job ${job.job_id}: speaker "${sp}" matches no element character — set a "character" field on that character's elements (one of: ${groups.map((g) => g.name).join(', ')}).`);
+      }
     }
   }
-  const voiceTokenFor = (sp) => {
+  const voiceTokenFor = textToVideo ? () => '' : (sp) => {
     const i = idxByName.get(slug(sp ?? '')) ?? (groups.length === 1 ? 1 : null);
     return i ? `@Element${i}` : '';
   };
 
   const elements = [];
-  for (const g of groups) {
-    const urls = [];
-    for (const e of g.els) urls.push(await falRefFor(resolveImage(e.image)));
-    const refs = urls.slice(1, 1 + MAX_REFS_PER_ELEMENT);
-    const el = { frontal_image_url: urls[0], reference_image_urls: refs.length ? refs : [urls[0]] };
-    const voiceId = getVoiceId(g.name);
-    if (voiceId) el.voice_id = voiceId;
-    elements.push(el);
+  if (!textToVideo) {
+    for (const g of groups) {
+      const urls = [];
+      for (const e of g.els) urls.push(await falRefFor(resolveImage(e.image)));
+      const refs = urls.slice(1, 1 + MAX_REFS_PER_ELEMENT);
+      const el = { frontal_image_url: urls[0], reference_image_urls: refs.length ? refs : [urls[0]] };
+      const voiceId = getVoiceId(g.name);
+      if (voiceId) el.voice_id = voiceId;
+      elements.push(el);
+    }
   }
   const voiced = elements.filter((e) => e.voice_id).length;
   if (voiced > MAX_VOICES_PER_JOB) {
@@ -112,39 +121,45 @@ export async function renderKlingJobFal({ job, spec, runDir, seed, lowRes = fals
   }
 
   // 2. Storyboard prompts: @Element1 leads every shot (look), the speaker's @ElementN voices the line.
+  //    In text-to-video there is no ref to lead with (leadRef null) and no @ElementN voice token.
   const { segments, totalDuration } = buildKlingStoryboard(job, spec, {
-    lowercaseSpeech: true, leadRef: '@Element1', voiceTokenFor,
+    lowercaseSpeech: true, leadRef: textToVideo ? null : '@Element1', voiceTokenFor,
   });
 
-  // 3. Payload (reference-to-video). One call per job; multi_prompt carries the storyboard natively.
-  const payload = { elements, aspect_ratio: klingCfg.aspectRatio, generate_audio: klingCfg.generateAudio };
+  // 3. Payload. reference-to-video carries `elements`; text-to-video carries none (and no frames).
+  const endpoint = textToVideo ? config.fal.klingTextEndpoint : config.fal.klingEndpoint;
+  const payload = { aspect_ratio: klingCfg.aspectRatio, generate_audio: klingCfg.generateAudio };
+  if (!textToVideo) payload.elements = elements;
   if (segments.length > 1) {
     payload.multi_prompt = segments.map((s) => ({ prompt: s.prompt, duration: String(Math.min(15, Math.max(1, s.duration))) }));
   } else {
     payload.prompt = segments[0].prompt;
     payload.duration = String(Math.min(15, Math.max(3, totalDuration)));
   }
-  // Opening frame: an authored job.first_frame (intentional seed) wins; else the chained SEAM frame
-  // (previous job clip's last frame, from pipeline.renderSpec) pins this job's start so the cross-job
-  // cut is continuous. Either way it is start_image_url for reference-to-video.
-  const startFrameSrc = job.first_frame || startFrame || null;
-  if (startFrameSrc) payload.start_image_url = await falRefFor(resolveImage(startFrameSrc));
-  if (job.last_frame) payload.end_image_url = await falRefFor(resolveImage(job.last_frame));
+  // Opening frame (reference-to-video only): an authored job.first_frame (intentional seed) wins; else
+  // the chained SEAM frame (previous job clip's last frame, from pipeline.renderSpec) pins this job's
+  // start so the cross-job cut is continuous. text-to-video has no element to seed a frame from.
+  if (!textToVideo) {
+    if (startFrameSrc) payload.start_image_url = await falRefFor(resolveImage(startFrameSrc));
+    if (job.last_frame) payload.end_image_url = await falRefFor(resolveImage(job.last_frame));
+  } else if (startFrameSrc) {
+    log.warn(`[${job.job_id}] Kling text-to-video ignores the first_frame seed (no reference element) — add a reference to elements/references/ to pin the opening frame.`);
+  }
 
-  log.step(`[${job.job_id}] fal Kling reference-to-video — ${segments.length} shot(s), ${totalDuration}s, ${elements.length} element(s)${voiced ? `, ${voiced} voice(s)` : ''}${lowRes ? ' (probe)' : ''}`);
+  log.step(`[${job.job_id}] fal Kling ${textToVideo ? 'text-to-video' : 'reference-to-video'} — ${segments.length} shot(s), ${totalDuration}s, ${elements.length} element(s)${voiced ? `, ${voiced} voice(s)` : ''}${lowRes ? ' (probe)' : ''}`);
 
   // Effective prompts/elements → sidecar for review (mirrors the cloud renderer).
   try {
     fs.writeFileSync(path.join(dir, 'prompts.json'), JSON.stringify({
-      job_id: job.job_id, transport: 'fal', endpoint: config.fal.klingEndpoint,
+      job_id: job.job_id, transport: 'fal', endpoint,
       aspect_ratio: klingCfg.aspectRatio, generate_audio: !!klingCfg.generateAudio, total_duration_s: totalDuration,
-      start_frame: job.first_frame ?? (startFrame ? `seam:${path.basename(startFrame)}` : null),
-      elements: groups.map((g, i) => ({ ref: `@Element${i + 1}`, character: g.name, images: g.els.map((e) => e.id), voice_id: getVoiceId(g.name) ?? null })),
+      start_frame: textToVideo ? null : (job.first_frame ?? (startFrame ? `seam:${path.basename(startFrame)}` : null)),
+      elements: textToVideo ? [] : groups.map((g, i) => ({ ref: `@Element${i + 1}`, character: g.name, images: g.els.map((e) => e.id), voice_id: getVoiceId(g.name) ?? null })),
       segments,
     }, null, 2));
   } catch { /* sidecar best-effort */ }
 
-  const outs = await generateKling(payload, { destDir: dir, timeoutMs: 1200000 });
+  const outs = await generateKling(payload, { endpoint, destDir: dir, timeoutMs: 1200000 });
   const clip = oneMp4(outs);
   log.info(`[${job.job_id}] fal Kling clip -> ${clip}`);
   return { jobId: job.job_id, clip, totalDuration, segments: segments.length };

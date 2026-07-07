@@ -64,6 +64,19 @@ test('job cross-refs: unknown shot id and unknown element id', () => {
   assert.match(errStr(validateSpec(s, { upTo: 7 })), /not in kling\.elements/);
 });
 
+test('text-to-video: empty kling.elements (and unscoped jobs) passes; ghost element still fails', () => {
+  // Casting attached no reference (image-less idea) → empty roster, jobs carry no element ids.
+  const ttv = loadGoldenSpec();
+  ttv.kling.elements = [];
+  ttv.kling.jobs.forEach((j) => { j.elements = []; });
+  for (let u = 0; u <= 7; u++) {
+    assert.equal(validateSpec(ttv, { upTo: u }).ok, true, `empty-elements spec should pass upTo ${u}: ${errStr(validateSpec(ttv, { upTo: u }))}`);
+  }
+  // A job may not reference an element id that doesn't exist, even when the roster is empty.
+  const bad = loadGoldenSpec(); bad.kling.elements = []; bad.kling.jobs[0].elements = ['subject'];
+  assert.match(errStr(validateSpec(bad, { upTo: 7 })), /not in kling\.elements/);
+});
+
 test('last_frame requires first_frame', () => {
   const s = loadGoldenSpec(); s.kling.jobs[0].last_frame = 'elements/last-frame/x.png';
   assert.match(errStr(validateSpec(s, { upTo: 7 })), /last_frame requires first_frame/);

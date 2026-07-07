@@ -77,7 +77,7 @@
     },
     "kling": {
       "type": "object",
-      "required": ["model_name", "elements", "jobs"],
+      "required": ["model_name", "jobs"],
       "properties": {
         "model_name": { "enum": ["kling-v3-omni", "kling-video-o1"] },
         "aspect_ratio": { "enum": ["16:9", "9:16", "1:1"] },
@@ -85,7 +85,7 @@
         "generate_audio": { "type": "boolean" },
         "elements": {
           "type": "array",
-          "minItems": 1,
+          "minItems": 0,
           "items": {
             "type": "object",
             "required": ["id", "role", "image"],

@@ -77,9 +77,18 @@ export async function falRef(absPath, mode = FAL.uploadMode) {
 
 // A deterministic fal rejection (bad args / validation) — surface immediately, never retry.
 const VALIDATION = /validation|unprocessable|invalid|must be|required|not (a )?valid|bad request|exceeds|unsupported/i;
-function isValidationError(err) {
+export function isValidationError(err) {
   const m = String(err?.message ?? '');
   return /HTTP 4(00|22)\b/.test(m) || VALIDATION.test(m);
+}
+
+// fal ALSO returns a 4xx (seen as HTTP 422 "…is not valid: timeout while fetching resource") when its
+// worker transiently fails to fetch a reference URL we just uploaded — a CDN/propagation race, NOT a
+// bad argument. Those must stay retryable despite matching VALIDATION above; a resubmit after backoff
+// normally clears it. Keep this narrow to fetch/download timeouts so real bad-arg 422s still fail fast.
+const TRANSIENT_FETCH = /timeout while fetching|fetching (the )?resource|failed to (fetch|download)|could not (fetch|download|retrieve)|unable to (fetch|download|access)|timed out fetching/i;
+export function isTransientFalError(err) {
+  return TRANSIENT_FETCH.test(String(err?.message ?? ''));
 }
 
 /** Submit one queued job and resolve its result object (polls status_url → response_url). */
@@ -115,8 +124,10 @@ async function runFal(endpoint, args, { timeoutMs } = {}) {
       return await submitAndWait(endpoint, args, { timeoutMs });
     } catch (e) {
       lastErr = e;
-      if (isValidationError(e) || attempt >= maxTries) throw e;
-      const backoffMs = 8000 * attempt;
+      // Give up on genuine validation errors (but NOT a transient fetch race, which is retryable
+      // despite its 422) and once we're out of tries; otherwise resubmit after a growing backoff.
+      if ((isValidationError(e) && !isTransientFalError(e)) || attempt >= maxTries) throw e;
+      const backoffMs = (FAL.retryBackoffMs ?? 8000) * attempt;
       log.warn(`fal ${endpoint} attempt ${attempt}/${maxTries} failed (${e.message.slice(0, 160)}) — retrying in ${Math.round(backoffMs / 1000)}s…`);
       await sleep(backoffMs);
     }
@@ -176,8 +187,8 @@ function resultFileUrls(result) {
  * aspect_ratio, generate_audio, duration, …) — built by fal-kling.js and verified against the
  * endpoint's fal "API" tab. fal result URLs EXPIRE, so we download immediately. Returns local paths.
  */
-export async function generateKling(args, { destDir, timeoutMs } = {}) {
-  const result = await runFal(FAL.klingEndpoint, args, { timeoutMs: timeoutMs ?? 1200000 });
+export async function generateKling(args, { endpoint = FAL.klingEndpoint, destDir, timeoutMs } = {}) {
+  const result = await runFal(endpoint, args, { timeoutMs: timeoutMs ?? 1200000 });
   return downloadResultFiles(result, destDir, 'fal Kling');
 }
 
@@ -234,4 +245,4 @@ export async function topazUpscale(videoPath, { destDir, upscaleFactor = 2, mode
   return writeBuffer(path.join(destDir, base.replace(/[/\\]/g, '_')), Buffer.from(await res.arrayBuffer()));
 }
 
-export default { fileToDataUri, uploadToStorage, toFalInput, toFalInputAs, falRef, mintVoice, generateKling, generateSeedance, topazUpscale, topazArgs, validateFal };
+export default { fileToDataUri, uploadToStorage, toFalInput, toFalInputAs, falRef, mintVoice, generateKling, generateSeedance, topazUpscale, topazArgs, validateFal, isValidationError, isTransientFalError };

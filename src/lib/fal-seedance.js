@@ -37,12 +37,12 @@ export function buildSeedanceArgs({ prompt, imageUrls, audioUrls = [], aspectRat
   const s = config.seedance;
   const args = {
     prompt,
-    image_urls: imageUrls,
     aspect_ratio: aspectRatio,
     resolution,
     duration: String(Math.min(s.maxJobSeconds, Math.max(s.minJobSeconds, Math.round(Number(totalDuration) || 0)))),
     generate_audio: !!generateAudio,
   };
+  if (imageUrls?.length) args.image_urls = imageUrls; // omitted for a text-to-video job (no reference image)
   if (audioUrls.length) args.audio_urls = audioUrls;
   return args;
 }
@@ -128,7 +128,9 @@ export async function renderSeedanceJobFal({ job, spec, runDir, seed, lowRes = f
 
   // 2. Voice refs (@AudioN), only when audio is on AND voiceMode keeps the clip. In 'native' mode we
   //    attach NO clip and let the model voice the written line natively (see config.seedance.voiceMode).
-  const voiceRefs = (sdCfg.generateAudio && config.seedance.voiceMode !== 'native') ? await audioRefsFor(job, spec, dir) : [];
+  //    A text-to-video job (no image refs) also voices natively: the endpoint requires audio refs to
+  //    ride ≥1 image/video ref, so with no images we attach no clip.
+  const voiceRefs = (imageUrls.length && sdCfg.generateAudio && config.seedance.voiceMode !== 'native') ? await audioRefsFor(job, spec, dir) : [];
   const audioUrls = [];
   const audioIdx = new Map();
   for (const r of voiceRefs) {
@@ -162,9 +164,13 @@ export async function renderSeedanceJobFal({ job, spec, runDir, seed, lowRes = f
     generateAudio: sdCfg.generateAudio,
     totalDuration,
   });
-  const endpoint = lowRes ? config.fal.seedanceProbeEndpoint : config.fal.seedanceEndpoint;
+  // No image refs → text-to-video (Casting attached nothing relevant); rides at probe resolution too.
+  const textToVideo = imageUrls.length === 0;
+  const endpoint = textToVideo
+    ? config.fal.seedanceTextEndpoint
+    : (lowRes ? config.fal.seedanceProbeEndpoint : config.fal.seedanceEndpoint);
 
-  log.step(`[${job.job_id}] fal Seedance 2.0 reference-to-video${lowRes ? ' [probe]' : ''} — ${shotPrompts.length} shot(s), ${args.duration}s, ${imageUrls.length} image ref(s)${audioUrls.length ? `, ${audioUrls.length} voice ref(s)` : ''}, ${args.resolution} ${args.aspect_ratio}`);
+  log.step(`[${job.job_id}] fal Seedance 2.0 ${textToVideo ? 'text-to-video' : 'reference-to-video'}${lowRes ? ' [probe]' : ''} — ${shotPrompts.length} shot(s), ${args.duration}s, ${imageUrls.length} image ref(s)${audioUrls.length ? `, ${audioUrls.length} voice ref(s)` : ''}, ${args.resolution} ${args.aspect_ratio}`);
 
   try {
     fs.writeFileSync(path.join(dir, 'prompts.json'), JSON.stringify({

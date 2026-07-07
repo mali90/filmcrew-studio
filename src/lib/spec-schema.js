@@ -62,7 +62,11 @@ function validateCamera(s, i, P) {
 
 function validateElements(spec, P, elementIds) {
   const els = spec.kling?.elements;
-  if (!isArr(els) || els.length < 1) { P.push('kling.elements must be a non-empty array'); return; }
+  // An absent/empty elements array is a TEXT-TO-VIDEO render (no reference image — the video is
+  // driven by the prompt alone). Only its SHAPE is validated here; when present, each element must
+  // be well-formed. Casting (agent 4) returns [] when no available reference fits the idea.
+  if (els === undefined || els === null) return;
+  if (!isArr(els)) { P.push('kling.elements must be an array'); return; }
   els.forEach((e, i) => {
     if (!nonEmpty(e?.id)) P.push(`kling.elements[${i}].id missing`); else elementIds.add(e.id);
     if (!nonEmpty(e?.role)) P.push(`kling.elements[${i}].role missing`);

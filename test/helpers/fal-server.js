@@ -8,6 +8,7 @@ const readBody = (req) => new Promise((r) => { let b = ''; req.on('data', (c) =>
 
 export async function startFalServer({ videoBytes = Buffer.from('FAKE-MP4'), opts = {} } = {}) {
   let statusHits = 0;
+  let videoHits = 0;
   const requests = [];
   const server = http.createServer(async (req, res) => {
     const u = new URL(req.url, 'http://x');
@@ -37,7 +38,14 @@ export async function startFalServer({ videoBytes = Buffer.from('FAKE-MP4'), opt
       return json(200, { status: 'COMPLETED' });
     }
     if (u.pathname === '/rs/voice') return json(200, { voice_id: 'voice_abc' });
-    if (u.pathname === '/rs/video') return json(200, { video: { url: `${base}/dl/out.mp4` } });
+    if (u.pathname === '/rs/video') {
+      // Transient fal-side fetch race on the FIRST poll (422 "timeout while fetching resource"),
+      // then success — exercises runFal's retry of a transient (non-validation) 4xx.
+      if (opts.fetchTimeoutOnce && videoHits++ === 0) {
+        return json(422, { detail: [{ loc: ['body'], msg: 'The parameter `content[1].image_url` specified in the request is not valid: timeout while fetching resource. Request id: test', type: 'invalid_request' }] });
+      }
+      return json(200, { video: { url: `${base}/dl/out.mp4` } });
+    }
     if (u.pathname.startsWith('/dl/')) { res.writeHead(200, { 'content-type': 'video/mp4' }); return res.end(videoBytes); }
     res.writeHead(404); res.end();
   });

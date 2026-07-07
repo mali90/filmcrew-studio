@@ -70,7 +70,11 @@ export async function renderSpec(spec, { runDir, probe = false, upscale = false,
   // instead of the next job starting fresh from the reference Elements. Never on --probe (one job) or
   // when disabled; a spec-authored job.first_frame always wins over the chained seam (in the
   // renderers). The audio seam fade (assemble.js) smooths the join under this continuous visual.
-  const chain = config.kling.chainFrames && !probe && toRender.length > 1;
+  // Skip for a text-to-video (no-element) render on Kling: it has no reference-to-video path to accept
+  // a seam start frame, so each job renders independently (Seedance seeds the seam as its lone image).
+  const textToVideoKling = be === 'kling' && !(spec.kling.elements?.length);
+  const chain = config.kling.chainFrames && !probe && toRender.length > 1 && !textToVideoKling;
+  if (textToVideoKling && !probe && toRender.length > 1) log.info('Kling text-to-video render — seam-chaining disabled (no reference frame); jobs render independently.');
   const results = [];
   let startFrame; // previous job clip's last frame; undefined for the first job (unchanged behavior)
   for (const job of toRender) {

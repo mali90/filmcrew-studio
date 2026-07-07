@@ -14,6 +14,13 @@ test('buildSeedanceArgs: shape matches the fal endpoint schema, no 422 landmines
   assert.ok(!('seed' in args) && !('negative_prompt' in args));
 });
 
+test('buildSeedanceArgs: image_urls is OMITTED for a text-to-video job (no reference image)', () => {
+  const ttv = buildSeedanceArgs({ ...BASE, imageUrls: [] });
+  assert.ok(!('image_urls' in ttv), 'text-to-video sends no image_urls key');
+  assert.equal(ttv.prompt, 'p'); // still a full, valid text-driven request
+  assert.ok('image_urls' in buildSeedanceArgs(BASE), 'reference-to-video still carries image_urls');
+});
+
 test('buildSeedanceArgs: duration is a STRING clamped into the 4–15s model range', () => {
   assert.equal(buildSeedanceArgs({ ...BASE, totalDuration: 3 }).duration, '4');
   assert.equal(buildSeedanceArgs({ ...BASE, totalDuration: 20 }).duration, '15');
