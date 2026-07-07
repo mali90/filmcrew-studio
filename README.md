@@ -22,14 +22,38 @@ Type a single idea — *"a lighthouse keeper's last night before automation"* �
 
 ## Get started
 
-You need four things (**the app checks all of them for you** and walks you through any that are missing):
+**Node.js is the only thing you install yourself — the app handles the rest in your browser.** No fal key, no ffmpeg, no config files to wrangle up front: the first-run wizard collects, validates, and saves all of that for you.
 
-- **Node.js 20+** — the LTS build from <https://nodejs.org> (22+ for the Copilot planner).
-- **ffmpeg** — stitches the clips. The setup wizard shows the one-line install for your OS.
-- **A fal.ai key** — renders the video (pay-as-you-go). <https://fal.ai/dashboard/keys>
-- **One AI planner** — Claude, OpenAI, Gemini, or Copilot, via an API key or a logged-in CLI.
+**1. Get Node.js** *(already have it? skip this)*
 
-Then:
+Run `node -v`. If it prints **v20 or higher**, you're set — jump to step 2. (The GitHub Copilot planner needs **v22+**; the LTS installer below covers that too.)
+
+<details>
+<summary><b>Don't have Node? Install it — macOS / Windows</b></summary>
+
+<br>
+
+**macOS** — with [Homebrew](https://brew.sh):
+
+```bash
+brew install node
+```
+
+…or download the **LTS** installer from <https://nodejs.org>.
+
+**Windows** — with winget:
+
+```powershell
+winget install OpenJS.NodeJS.LTS
+```
+
+…or download the **LTS** installer from <https://nodejs.org>.
+
+Reopen your terminal and confirm with `node -v` (want v20+; v22+ recommended, required for Copilot).
+
+</details>
+
+**2. Run it**
 
 ```bash
 npm install && npm run web:install
@@ -37,7 +61,7 @@ npm --prefix web/ui run build
 npm run web
 ```
 
-The browser opens **http://127.0.0.1:5177** and, on first run, a setup wizard takes over: it connects your planner and fal key (validating them live), picks your defaults, writes `.env` for you, and runs a health check where **every failed check carries its own fix** — nothing ends in an error you have to google.
+Your browser opens to **http://127.0.0.1:5177**, where a first-run wizard takes over. It walks you through your **AI planner** — Claude, OpenAI, Gemini, or Copilot, via an API key or a logged-in CLI (it can even one-click install the planner's CLI for you; you still log in yourself) — and your **fal.ai key**, **live-validating** each, sets your defaults, and **writes `.env` for you**. It closes on a health check: if **ffmpeg** is missing, it shows you the **exact one-line command** to install it for your OS (you run that command — the app never modifies your system). **Every failed check carries its own fix**, so nothing ends in an error you have to google.
 
 From there: type an idea → the agents plan it (uses your LLM, no render spend) → you see the **price on every render button** before anything spends → review the cut clip by clip → request changes (they go back through the agents) → approve, with an optional Topaz upscale to 1080p. Your finished `.mp4` lands in **`out/`**.
 
