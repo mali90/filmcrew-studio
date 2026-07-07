@@ -1,6 +1,6 @@
 # Filmcrew Studio
 
-**One line in, a multi-shot short film out — planned by a crew of 8 AI agents, rendered on fal.ai, stitched on your machine.**
+**One line in, a multi-shot short cinematic film out — planned by a crew of 8 AI agents, rendered on fal.ai, stitched on your machine.**
 
 Type a single idea — *"a lighthouse keeper's last night before automation"* — and an 8-agent LLM pipeline (Showrunner → Storyboard → Scene Director → Cinematographer → Casting → Sound → Job Planner → QC) writes a full production spec. fal.ai renders the planned shots on **Kling 3.0** or **Seedance 2.0**, your recurring characters keep a consistent look and speak their lines in a voice minted once, and ffmpeg stitches the finished `.mp4` locally into `out/`. A QC agent re-runs only the sub-agents whose work failed, so the plan is sound before any paid frame renders. Local-first and source-available (FSL-1.1, converts to MIT after two years): rendering is **paid pay-as-you-go on fal.ai**, you bring your own LLM planner (Claude, OpenAI, Gemini, or Copilot), and nothing is ever posted anywhere — it just writes a local file.
 
@@ -16,7 +16,7 @@ Type a single idea — *"a lighthouse keeper's last night before automation"* �
 
 **See it in action** — real short films made with the tool, on the **Jolly Dots** channels:
 
-[![YouTube — Jolly Dots](https://img.shields.io/badge/YouTube-Jolly%20Dots-FF0000?logo=youtube&logoColor=white)](https://www.youtube.com/@JollyDots)
+[![YouTube — Jolly Dots](https://img.shields.io/badge/YouTube-Jolly%20Dots-FF0000?logo=youtube&logoColor=white)](https://www.youtube.com/@JollyDots/shorts)
 [![Instagram — Jolly Dots](https://img.shields.io/badge/Instagram-Jolly%20Dots-E4405F?logo=instagram&logoColor=white)](https://www.instagram.com/_jolly_dots/)
 [![TikTok — Jolly Dots](https://img.shields.io/badge/TikTok-Jolly%20Dots-000000?logo=tiktok&logoColor=white)](https://www.tiktok.com/@jolly_dots)
 
