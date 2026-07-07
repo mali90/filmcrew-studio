@@ -12,11 +12,14 @@ import { createRingLog } from './ring-log.js';
 import { watchRun } from './artifact-watch.js';
 import { estimateRender, readSeedanceResolution } from './estimator.js';
 import { safeChild } from './paths.js';
-import { SEEDANCE_TTV_GUIDANCE } from '../../../src/lib/seedance.js';
+// config-FREE import: run-service is loaded eagerly by app.js, and the demo/e2e server sets FAL_BASE_URL
+// only AFTER its static import chain — importing anything that pulls config.js here would snapshot the
+// wrong (real) fal endpoint and make the validators/renders miss the mock.
+import { SEEDANCE_TTV_GUIDANCE } from '../../../src/lib/seedance-guidance.js';
 
 // Feedback for the content-policy "Revise to pass content check" button: rephrase to read as
 // unambiguously benign AND follow the Seedance prompting guidance (single source of truth in
-// src/lib/seedance.js). Used only by reviseForContentPolicy — the normal revise takes the user's own note.
+// src/lib/seedance-guidance.js). Used only by reviseForContentPolicy — the normal revise takes the user's own note.
 const CONTENT_POLICY_REVISE_FEEDBACK = [
   'The previous render was rejected by the video model\'s content moderation as sensitive content — almost always a false positive on a benign idea. Keep the same story, characters, and structure, but rewrite the shot prompts to read as unambiguously benign: remove anything that could be read as violent, sexual, graphic, gory, or otherwise sensitive, and avoid ambiguous phrasing. Also apply this Seedance prompting guidance:',
   SEEDANCE_TTV_GUIDANCE,

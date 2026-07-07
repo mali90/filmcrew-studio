@@ -28,19 +28,9 @@ export const TRANSITION_WORDS = { hard_cut: 'Cut to:', match_cut: 'Match cut to:
 // Strict default; a spec that NEEDS diegetic text overrides it via config.seedance.textRule.
 const DEFAULT_TEXT_RULE = 'No on-screen text, letters, captions, or signs anywhere in frame.';
 
-// Seedance 2.0 prompt-writing guidance (from https://fal.ai/learn/tools/how-to-use-seedance-2-0),
-// condensed for the LLM planner. Applied ONLY on the text-to-video path (no reference image — the
-// video is built from the shot prompts alone): the engine injects it during planning for a no-cast
-// Seedance render, and the content-policy "Revise" flow feeds it back after a moderation false
-// positive. Kept generic so it steers scene prose without contradicting the image (reference) path.
-export const SEEDANCE_TTV_GUIDANCE = [
-  'Write each shot as a director\'s shot description, NOT a keyword/tag list:',
-  '- Lead with the subject and ONE clear action — say what moves and how it moves.',
-  '- Then ONE camera move using a recognized term (dolly, rack focus, tracking shot, handheld, POV, aerial).',
-  '- Then a CONCRETE sound cue (e.g. "the crack of thunder", "rain hitting a tin roof") so the audio has something to render.',
-  '- One primary action and one camera move per shot — do not overload a shot.',
-  '- Keep it to 2–4 plain sentences. NO comma-separated keyword/tag lists and no "cinematic, 4K, beautiful lighting" filler (it gives the model nothing to animate).',
-].join('\n');
+// Seedance 2.0 text-to-video prompt guidance lives in its own config-free module (see the note there);
+// re-exported here so existing importers (engine.js) keep a single, stable path.
+export { SEEDANCE_TTV_GUIDANCE } from './seedance-guidance.js';
 
 /** Clamp to ≤ maxBytes UTF-8 bytes (reserving room for the ellipsis) without splitting a multibyte char. */
 export function clampBytes(s, maxBytes) {
