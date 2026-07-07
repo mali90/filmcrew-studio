@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
-import { nativeInstallSpec, pathWithLocalBin, localBinDir } from '../../src/lib/cli-install.js';
+import { nativeInstallSpec, pathWithLocalBin, localBinDir, pathWithSystemBins } from '../../src/lib/cli-install.js';
 
 test('nativeInstallSpec: Claude → the official native installer; other providers → null', () => {
   const claude = nativeInstallSpec('claude');
@@ -38,4 +38,11 @@ test('pathWithLocalBin prepends ~/.local/bin exactly once (idempotent)', () => {
   const out = pathWithLocalBin('/usr/bin');
   assert.equal(out, `${dir}${path.delimiter}/usr/bin`);
   assert.equal(pathWithLocalBin(out), out, 'already present → no duplicate');
+});
+
+test('pathWithSystemBins prepends existing tool dirs, skips missing + already-present (idempotent)', () => {
+  const real = os.tmpdir(); // guaranteed to exist — stands in for /opt/homebrew/bin
+  const out = pathWithSystemBins('/usr/bin', [real, '/no/such/dir-xyz-123', '/usr/bin']);
+  assert.equal(out, `${real}${path.delimiter}/usr/bin`); // existing prepended; missing + already-present skipped
+  assert.equal(pathWithSystemBins(out, [real]), out, 'already present → no duplicate (idempotent)');
 });

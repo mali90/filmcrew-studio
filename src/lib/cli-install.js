@@ -4,6 +4,7 @@
 // step works in their own terminal too. If the global folder isn't writable (EACCES) we don't escalate
 // — the UI shows the manual command with a sudo note.
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -101,4 +102,17 @@ export function nativeFailureHint(code, tail) {
   return `The installer exited with code ${code}. See the log above, or run the shown command in a terminal.`;
 }
 
-export default { npmBin, npmNeedsShell, npmInstallArgs, npmGlobalBinDir, pathWithNpmGlobal, npmFailureHint, nativeInstallSpec, localBinDir, pathWithLocalBin, nativeFailureHint };
+// Standard dirs where user-installed tools (ffmpeg via Homebrew, etc.) live but which a GUI/launchd-
+// spawned server's PATH often omits — Apple Silicon Homebrew's /opt/homebrew/bin especially. Prepend the
+// ones that EXIST and aren't already present, so the health check AND the render pipeline find brew-
+// installed ffmpeg even when the server booted without brew's shellenv. `dirs` is injectable for tests.
+export const SYSTEM_BIN_DIRS = process.platform === 'win32'
+  ? []
+  : ['/opt/homebrew/bin', '/opt/homebrew/sbin', '/usr/local/bin', '/usr/local/sbin', path.join(os.homedir(), '.local', 'bin')];
+export function pathWithSystemBins(pathStr, dirs = SYSTEM_BIN_DIRS) {
+  const base = (pathStr || '').split(path.delimiter).filter(Boolean);
+  const add = dirs.filter((d) => !base.includes(d) && existsSync(d));
+  return [...add, ...base].join(path.delimiter);
+}
+
+export default { npmBin, npmNeedsShell, npmInstallArgs, npmGlobalBinDir, pathWithNpmGlobal, npmFailureHint, nativeInstallSpec, localBinDir, pathWithLocalBin, nativeFailureHint, SYSTEM_BIN_DIRS, pathWithSystemBins };

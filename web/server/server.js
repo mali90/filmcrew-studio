@@ -7,7 +7,7 @@
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { pathWithNpmGlobal } from '../../src/lib/cli-install.js';
+import { pathWithNpmGlobal, pathWithSystemBins } from '../../src/lib/cli-install.js';
 
 // a fresh clone hasn't installed the server workspace yet — fail with the fix, not a stack trace
 let buildApp;
@@ -26,10 +26,11 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '../..');
 const PORT = Number(process.env.WEB_PORT) || 5177;
 
-// Put npm's global bin dir on the children's PATH so a provider CLI installed from the UI
-// (npm install -g) is found by the next spawned child — doctor, engine — with no restart. Resolved
-// once here; best-effort (a no-op if npm isn't found).
-const childPath = await pathWithNpmGlobal(process.env.PATH);
+// Put npm's global bin dir AND the standard system tool dirs (Homebrew's /opt/homebrew/bin, /usr/local/bin,
+// ~/.local/bin) on the children's PATH, so a provider CLI installed from the UI (npm install -g) and a
+// Homebrew-installed ffmpeg are found by the next spawned child — doctor, engine, render/stitch — even when
+// the server booted from a GUI/launchd context without brew's shellenv. Resolved once here.
+const childPath = pathWithSystemBins(await pathWithNpmGlobal(process.env.PATH));
 
 const app = await buildApp({
   root: ROOT,
