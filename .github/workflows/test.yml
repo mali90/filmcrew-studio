@@ -73,7 +73,7 @@ jobs:
           CI: "true"
         run: npm --prefix web/ui test
       - name: Production build
-        run: npm --prefix web/ui exec vite build
+        run: npm --prefix web/ui run build
 
   web-e2e:
     runs-on: ubuntu-latest
@@ -97,7 +97,7 @@ jobs:
       - name: Install chromium
         run: npm --prefix web/ui exec playwright install --with-deps chromium
       - name: Build the UI (the demo server serves dist/)
-        run: npm --prefix web/ui exec vite build
+        run: npm --prefix web/ui run build
       - name: e2e (Playwright vs the zero-spend demo server)
         env:
           CI: "true"

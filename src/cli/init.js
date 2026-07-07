@@ -106,9 +106,11 @@ async function nonInteractive() {
   else if (source === 'none') log.warn('No .env or .env.example found.');
   else log.info('.env already present.');
   process.stdout.write('\nThis wizard is interactive. Run it in a terminal:\n  npm run init\n\nRunning a read-only health check now:\n\n');
-  const { code } = await runScript('src/cli/doctor.js', [], { capture: true });
+  await runScript('src/cli/doctor.js', [], { capture: true });
   process.stdout.write('\nWhen the checks pass, make a video:  npm run engine -- --brief "your idea" --render\n');
-  process.exit(code);
+  // Setup itself succeeded (seeded/confirmed .env); the health check above is advisory — its failing
+  // checks (missing keys/CLIs, expected on a fresh box or in CI) must not make `init` exit non-zero.
+  process.exit(0);
 }
 
 // ── AI touchpoints (each gated on aiAvailable + !NO_AI, each with a fallback) ──

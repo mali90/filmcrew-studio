@@ -47,10 +47,12 @@ export function listArtifacts(dir) {
 
 /**
  * Watch `dir` until stop() — emits {type:'artifact', file} once per new artifact (relative path).
- * The first sweep seeds the baseline WITHOUT emitting (existing files aren't news).
+ * By default the first sweep seeds the baseline WITHOUT emitting (existing files aren't news). Pass a
+ * shared `seen` set to persist "already announced" across watcher restarts — then artifacts present at
+ * startup that aren't yet in `seen` (e.g. a spec-00.json written before the watcher attached, a startup
+ * race) ARE announced, exactly once.
  */
-export function watchRun(dir, { intervalMs = 500, onEvent } = {}) {
-  const seen = new Set(listArtifacts(dir));
+export function watchRun(dir, { intervalMs = 500, onEvent, seen = new Set(listArtifacts(dir)) } = {}) {
   const timer = setInterval(() => {
     for (const rel of listArtifacts(dir)) {
       if (seen.has(rel)) continue;

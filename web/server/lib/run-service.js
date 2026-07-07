@@ -21,6 +21,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
   const estOpts = () => ({ resolution: readSeedanceResolution(envRoot ?? root) }); // seedance price scales with resolution
   const ringLogs = new Map();   // runId → ring log
   const watchers = new Map();   // runId → watcher
+  const announced = new Map();  // runId → Set<artifact rel> already sent to clients — persists across watcher restarts so a spec block is never lost to a startup race nor re-announced
   const pendingCascade = new Map(); // runId → {takeDir, takeId, jobs:[...remaining], feedback}
   const running = new Map();    // runId → Map<queueId, {kind, pid, startedAt}> — lanes can overlap per run
 
@@ -96,7 +97,8 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
       running.get(runId).set(evt.jobIdRef, { kind: evt.kind, pid: evt.pid, startedAt: now().toISOString() });
       try { updateManifest(dir, (m) => { m.activeJob = { ...topRunningJob(runId), queueId: evt.jobIdRef }; return m; }); } catch { /* cli run */ }
       if (!watchers.has(runId)) {
-        watchers.set(runId, watchRun(dir, { onEvent: (e) => bus.emit(runId, e.file.includes('spec') ? { type: 'spec-block', file: e.file } : { type: 'artifact', file: e.file }) }));
+        if (!announced.has(runId)) announced.set(runId, new Set());
+        watchers.set(runId, watchRun(dir, { seen: announced.get(runId), onEvent: (e) => bus.emit(runId, e.file.includes('spec') ? { type: 'spec-block', file: e.file } : { type: 'artifact', file: e.file }) }));
       }
       bus.emit(runId, { type: 'action-start', kind: evt.kind });
       emitStatus(runId);
