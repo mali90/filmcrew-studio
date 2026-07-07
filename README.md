@@ -2,14 +2,14 @@
 
 **One line in, a multi-shot short film out — planned by a crew of 8 AI agents, rendered on fal.ai, stitched on your machine.**
 
-Type a single idea — *"a lighthouse keeper's last night before automation"* — and an 8-agent LLM pipeline (Showrunner → Storyboard → Scene Director → Cinematographer → Casting → Sound → Job Planner → QC) writes a full production spec you can read and edit before spending a cent. fal.ai renders the planned shots on **Kling 3.0 Omni** or **Seedance 2.0**, your recurring characters keep a consistent look and speak their lines in a voice minted once, and ffmpeg stitches the finished `.mp4` locally into `out/`. A QC agent re-runs only the sub-agents whose work failed, so the plan is sound before any paid frame renders. Local-first and MIT-licensed: rendering is **paid pay-as-you-go on fal.ai**, you bring your own LLM planner (Claude, OpenAI, Gemini, or Copilot), and nothing is ever posted anywhere — it just writes a local file.
+Type a single idea — *"a lighthouse keeper's last night before automation"* — and an 8-agent LLM pipeline (Showrunner → Storyboard → Scene Director → Cinematographer → Casting → Sound → Job Planner → QC) writes a full production spec. fal.ai renders the planned shots on **Kling 3.0** or **Seedance 2.0**, your recurring characters keep a consistent look and speak their lines in a voice minted once, and ffmpeg stitches the finished `.mp4` locally into `out/`. A QC agent re-runs only the sub-agents whose work failed, so the plan is sound before any paid frame renders. Local-first and MIT-licensed: rendering is **paid pay-as-you-go on fal.ai**, you bring your own LLM planner (Claude, OpenAI, Gemini, or Copilot), and nothing is ever posted anywhere — it just writes a local file.
 
 [![CI](https://github.com/mali90/filmcrew-studio/actions/workflows/test.yml/badge.svg)](https://github.com/mali90/filmcrew-studio/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Node >= 20](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org)
 
 > [!NOTE]
-> Everything runs on your machine and writes a local video file only — nothing is ever posted anywhere.
+> A local video file is created on your machine — nothing is ever posted anywhere.
 > Unofficial community project; not affiliated with Kuaishou / Kling AI or ByteDance / Seedance.
 
 ![The studio: a finished 8-agent plan with a priced render button and the production spec](docs/assets/studio-plan-ready.png)
@@ -70,7 +70,7 @@ npm run engine -- --brief "your idea here" --render --probe   # long multi-job v
 | `npm run assemble -- --from runs/<id>/renders/<take>` | Finish or re-stitch a prior render — free, no API calls. |
 | `npm run mint-voice -- <name> <clip.mp3>` | Give a character a persistent voice (once per character). |
 
-Two video models: **Kling 3.0 Omni** (default) and **Seedance 2.0** — pick per run with `--backend`, or set the default in Settings. How they differ: [docs/PROVIDERS.md](docs/PROVIDERS.md). Slow, hand-held setup (including editing `.env` yourself): [docs/SETUP.md](docs/SETUP.md).
+Two video models: **Kling 3.0** (default) and **Seedance 2.0** — pick per run with `--backend`, or set the default in Settings. How they differ: [docs/PROVIDERS.md](docs/PROVIDERS.md). Slow, hand-held setup (including editing `.env` yourself): [docs/SETUP.md](docs/SETUP.md).
 
 ## What you get
 
