@@ -1,6 +1,6 @@
 # Contributing to Filmcrew Studio
 
-Thanks for your interest! This is a community project — issues and pull requests are welcome.
+Thanks for your interest! This is a **source-available** project — the full source is public, and issues and pull requests are welcome under the terms below.
 
 ## Getting set up
 
@@ -33,6 +33,10 @@ CI runs all of these on Node 20 and 22. Please make sure the suites pass before 
 - Branch off `main` and open your PR against `main`.
 - Keep changes focused; match the style and comment density of the surrounding code.
 - Add or update tests for behavior changes.
+
+## Contributions and license
+
+Filmcrew Studio is source-available under the [Functional Source License 1.1 (FSL-1.1-MIT)](LICENSE) — not an OSI "open source" license, but the full source is public. By submitting a contribution you agree it is provided under that same license (inbound = outbound), and you grant the project's licensor the right to license your contribution under the project's current and future licenses (including the MIT future license the FSL grants two years after each release).
 
 ## Please never commit
 

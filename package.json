@@ -3,7 +3,7 @@
   "version": "1.1.0",
   "description": "8 LLM agents turn a one-line idea into a multi-shot AI short film — plan, cast, render on fal.ai (Kling 3.0 Omni or Seedance 2.0), and stitch locally with ffmpeg. Model-agnostic planner (Claude, OpenAI, Gemini, Copilot), persistent per-character voices, optional Topaz upscale.",
   "type": "module",
-  "license": "MIT",
+  "license": "SEE LICENSE IN LICENSE",
   "author": "Muhammad Ali Mustafa",
   "files": [
     "src",

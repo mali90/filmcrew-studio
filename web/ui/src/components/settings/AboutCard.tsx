@@ -23,7 +23,7 @@ export function AboutCard() {
         share it, not the tool&rsquo;s author.
       </p>
       <p className="mt-1.5 text-caption text-ink-muted">
-        MIT licensed · no telemetry — everything runs on your machine except fal.ai and your LLM provider.
+        Source-available (FSL-1.1) · no telemetry — everything runs on your machine except fal.ai and your LLM provider.
       </p>
     </section>
   );

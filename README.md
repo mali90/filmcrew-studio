@@ -2,14 +2,14 @@
 
 **One line in, a multi-shot short film out — planned by a crew of 8 AI agents, rendered on fal.ai, stitched on your machine.**
 
-Type a single idea — *"a lighthouse keeper's last night before automation"* — and an 8-agent LLM pipeline (Showrunner → Storyboard → Scene Director → Cinematographer → Casting → Sound → Job Planner → QC) writes a full production spec. fal.ai renders the planned shots on **Kling 3.0** or **Seedance 2.0**, your recurring characters keep a consistent look and speak their lines in a voice minted once, and ffmpeg stitches the finished `.mp4` locally into `out/`. A QC agent re-runs only the sub-agents whose work failed, so the plan is sound before any paid frame renders. Local-first and MIT-licensed: rendering is **paid pay-as-you-go on fal.ai**, you bring your own LLM planner (Claude, OpenAI, Gemini, or Copilot), and nothing is ever posted anywhere — it just writes a local file.
+Type a single idea — *"a lighthouse keeper's last night before automation"* — and an 8-agent LLM pipeline (Showrunner → Storyboard → Scene Director → Cinematographer → Casting → Sound → Job Planner → QC) writes a full production spec. fal.ai renders the planned shots on **Kling 3.0** or **Seedance 2.0**, your recurring characters keep a consistent look and speak their lines in a voice minted once, and ffmpeg stitches the finished `.mp4` locally into `out/`. A QC agent re-runs only the sub-agents whose work failed, so the plan is sound before any paid frame renders. Local-first and source-available (FSL-1.1, converts to MIT after two years): rendering is **paid pay-as-you-go on fal.ai**, you bring your own LLM planner (Claude, OpenAI, Gemini, or Copilot), and nothing is ever posted anywhere — it just writes a local file.
 
 [![CI](https://github.com/mali90/filmcrew-studio/actions/workflows/test.yml/badge.svg)](https://github.com/mali90/filmcrew-studio/actions/workflows/test.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: FSL-1.1-MIT](https://img.shields.io/badge/license-FSL--1.1--MIT-blue.svg)](LICENSE)
 [![Node >= 20](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org)
 
 > [!NOTE]
-> A local video file is created on your machine — nothing is ever posted anywhere.
+> A video file is downloaded on your machine — nothing is ever posted anywhere.
 > Unofficial community project; not affiliated with Kuaishou / Kling AI or ByteDance / Seedance.
 
 ![The studio: a finished 8-agent plan with a priced render button and the production spec](docs/assets/studio-plan-ready.png)
@@ -168,4 +168,4 @@ Questions and bugs → [GitHub issues](https://github.com/mali90/filmcrew-studio
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+**Source-available** under the [Functional Source License 1.1 (FSL-1.1-MIT)](LICENSE) — read, run, modify, and contribute freely for any non-competing purpose. You may not use it to build a competing commercial product or hosted service. Each release automatically becomes MIT-licensed two years after it ships. See [fsl.software](https://fsl.software) for the rationale.
