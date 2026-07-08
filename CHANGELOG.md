@@ -1,5 +1,55 @@
 # Changelog
 
+## 1.3.0 — 2026-07-08
+
+### Added
+- **Graceful Seedance content-policy handling.** When a benign render trips ByteDance's output
+  moderation (`content_policy_violation` / "Output video has sensitive content" — a common false
+  positive), the run no longer dies with an opaque "No rendered clips found". The flag surfaces a
+  clear, actionable message, `finishRender` names the failed job and its reason, and — per the
+  no-extra-cost rule — it is **never auto-retried** (a resubmit is a fresh paid generation).
+- **"Revise to pass content check"** — a content-policy render failure now offers a one-click revise
+  in the web app's Attention banner that re-plans with benign rewording + Seedance prompt guidance
+  (uses your LLM, **no render spend**), so the next render dodges the false positive. New endpoint
+  `POST /runs/:id/revise-content-policy`.
+- **Seedance 2.0 prompt guidance during planning** — for a *guaranteed* text-to-video render
+  (Seedance, no cast, no reference images on disk), the planner writes director-style shot prose
+  from the start (subject + one action → one camera move → a concrete sound cue; no keyword/tag
+  lists), per [fal.ai's Seedance guide](https://fal.ai/learn/tools/how-to-use-seedance-2-0).
+  Image-to-video (cast/reference) and Kling planning are unchanged.
+
+### Fixed
+- `runFal` now classifies a transient fal fetch race (retryable) separately from a content-policy
+  flag (fail-fast) and a genuine bad-argument 422 — a momentary "timeout while fetching resource"
+  no longer kills a render.
+
+## 1.2.0 — 2026-07-07
+
+### Added
+- **Text-to-video mode** — an idea that calls for no reference image now renders from the prompt
+  alone. `kling.elements` may be empty; the Casting agent attaches only references relevant to the
+  idea (and none when nothing fits), and the Seedance/Kling renderers submit to the text-to-video
+  endpoint with no image refs. Previously every spec was forced to carry ≥1 reference, so an
+  unrelated idea pulled in whatever images happened to sit in `elements/references/`.
+- **A bundled voice clip auto-registers as a staged voice** — drop `voices/<name>.mp3` and the
+  character is recognized as a staged (un-minted) voice in both the engine and the Cast page, ready
+  to mint. The sample cast member **Wren** now ships with a voice.
+
+### Changed
+- **Relicensed MIT → FSL-1.1-MIT** (Functional Source License — source-available; converts to MIT
+  two years after each release).
+- **The Claude CLI installs via Anthropic's official native script**, not npm, in the setup wizard.
+- The bundled example (ocean-lighthouse) and test fixtures now star **Wren**
+  (`elements/references/wren-01.png`); the old 6 MB `subject.png` was removed.
+- **Get started needs only Node.js** — the browser wizard installs and validates everything else.
+
+### Fixed
+- **Homebrew-installed ffmpeg is now detected** — the web server's child PATH gains the standard
+  system tool dirs (`/opt/homebrew/bin`, `~/.local/bin`, …), so a GUI/launchd-started server finds
+  brew's ffmpeg for both the health check and the render stitch.
+- The live planning view no longer misses a spec block on a very short plan or when a client
+  connects mid-planning (spec blocks replay on SSE connect).
+
 ## 1.1.0 — 2026-07-07
 
 ### Changed
