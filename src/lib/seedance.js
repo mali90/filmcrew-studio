@@ -28,6 +28,10 @@ export const TRANSITION_WORDS = { hard_cut: 'Cut to:', match_cut: 'Match cut to:
 // Strict default; a spec that NEEDS diegetic text overrides it via config.seedance.textRule.
 const DEFAULT_TEXT_RULE = 'No on-screen text, letters, captions, or signs anywhere in frame.';
 
+// Seedance 2.0 text-to-video prompt guidance lives in its own config-free module (see the note there);
+// re-exported here so existing importers (engine.js) keep a single, stable path.
+export { SEEDANCE_TTV_GUIDANCE } from './seedance-guidance.js';
+
 /** Clamp to ≤ maxBytes UTF-8 bytes (reserving room for the ellipsis) without splitting a multibyte char. */
 export function clampBytes(s, maxBytes) {
   const buf = Buffer.from(s, 'utf8');

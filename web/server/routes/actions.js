@@ -67,6 +67,13 @@ export function registerActionRoutes(app) {
     return svc.plan(req.params.id);
   });
 
+  // Recover from a content-policy flag: revise the plan with canned benign-rewording + Seedance
+  // guidance so the next render dodges the moderation false positive (LLM cost, no render).
+  app.post('/api/runs/:id/revise-content-policy', async (req) => {
+    guard(req);
+    return svc.reviseForContentPolicy(req.params.id);
+  });
+
   // Reveal the final (or the run dir) in the OS file manager — darwin only; harmless elsewhere.
   app.post('/api/runs/:id/reveal', async (req) => {
     const run = guard(req);

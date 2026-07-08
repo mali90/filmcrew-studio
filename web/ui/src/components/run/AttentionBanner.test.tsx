@@ -102,6 +102,26 @@ describe('AttentionBanner', () => {
     await vi.waitFor(() => expect(posted).toBe('web-20260704100000-ab12'));
   });
 
+  it('a content-policy flag offers "Revise to pass content check" (POSTs /revise-content-policy), not the paid-retry note', async () => {
+    let posted: string | undefined;
+    server.use(http.post('/api/runs/:id/revise-content-policy', ({ params }) => {
+      posted = String(params.id);
+      return HttpResponse.json({ revisionId: 'r1' });
+    }));
+    const run = makeRun('attention', {
+      latestRender: renderView([
+        { jobId: 'K1', clip: null, clipExists: false, clipUrl: null, error: 'fal seedance-text: the generated video was flagged by content moderation as sensitive (content_policy_violation) — usually a false positive' },
+      ]),
+    });
+    renderWithProviders(<AttentionBanner run={run} />);
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent(/content filter flagged the generated video/i);
+    // the plain paid-retry note is suppressed for a content flag (revise is the cheaper, better path)
+    expect(alert).not.toHaveTextContent(/its Retry button lives on the job card/);
+    await userEvent.click(within(alert).getByRole('button', { name: 'Revise to pass content check' }));
+    await vi.waitFor(() => expect(posted).toBe('web-20260704100000-ab12'));
+  });
+
   it('a failed revision on an unrendered plan offers Dismiss — back to the plan', async () => {
     server.use(http.post('/api/runs/:id/dismiss-error', () => HttpResponse.json({ dismissed: true })));
     const run = makeRun('plan-ready', {

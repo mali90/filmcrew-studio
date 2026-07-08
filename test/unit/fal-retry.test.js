@@ -5,7 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { neutralizeDotenv } from '../helpers/env.js';
 neutralizeDotenv();
-const { isValidationError, isTransientFalError } = await import('../../src/lib/fal.js');
+const { isValidationError, isTransientFalError, isContentPolicyError } = await import('../../src/lib/fal.js');
 
 const err = (m) => new Error(m);
 
@@ -45,4 +45,22 @@ test('a 5xx / network error is neither a validation nor a fetch-timeout error (r
   const e = err('HTTP 503 Service Unavailable on ...: upstream');
   assert.equal(isValidationError(e), false);
   assert.equal(isTransientFalError(e), false);
+});
+
+// The output-moderation flag ("Output video has sensitive content" / content_policy_violation /
+// partner_validation_failed). It must be recognized so runFal swaps in a clear message — and it must
+// NOT be transient (a resubmit is a fresh paid generation; the user's constraint is "don't add cost").
+const CONTENT_FLAG = err('HTTP 422 Unprocessable Entity on https://queue.fal.run/bytedance/seedance-2.0/requests/019f: {"detail":[{"loc":["body","generated_video"],"msg":"Output video has sensitive content.","type":"content_policy_violation","ctx":{"extra_info":{"reason":"partner_validation_failed"}}}]}');
+
+test('a content-policy flag is recognized, and is NOT transient (never auto-retried)', () => {
+  assert.equal(isContentPolicyError(CONTENT_FLAG), true);
+  assert.equal(isTransientFalError(CONTENT_FLAG), false); // fail-fast, no extra generation billed
+  for (const m of ['partner_validation_failed', 'content_policy_violation', 'Output video has sensitive content', 'content policy']) {
+    assert.equal(isContentPolicyError(err(`HTTP 422 ...: ${m}`)), true, m);
+  }
+});
+
+test('a fetch-timeout or bad-arg is NOT a content-policy error', () => {
+  assert.equal(isContentPolicyError(OBSERVED), false);            // the transient fetch-timeout from above
+  assert.equal(isContentPolicyError(err('HTTP 422 ...: seed is not a valid parameter')), false);
 });

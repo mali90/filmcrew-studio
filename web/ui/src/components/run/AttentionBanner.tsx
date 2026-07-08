@@ -11,6 +11,11 @@ import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
 import { useToast } from '../ui/Toast';
 
+// Matches the backend's content-policy tokens (fal.js contentPolicyError always embeds
+// `content_policy_violation`). Deliberately NOT a bare "sensitive" — that would false-match log lines
+// like "case-sensitive" or the project title, wrongly hiding the priced job-card Retry.
+const CONTENT_FLAG_RE = /content_policy_violation|sensitive content|partner_validation_failed|content policy/i;
+
 export function AttentionBanner({ run }: { run: RunDetail }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
@@ -18,6 +23,7 @@ export function AttentionBanner({ run }: { run: RunDetail }) {
   const [assembling, setAssembling] = useState(false);
   const [resuming, setResuming] = useState(false);
   const [replanning, setReplanning] = useState(false);
+  const [revisingContent, setRevisingContent] = useState(false);
   const [dismissing, setDismissing] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [discarding, setDiscarding] = useState(false);
@@ -26,6 +32,11 @@ export function AttentionBanner({ run }: { run: RunDetail }) {
   const jobs = run.latestRender?.jobs ?? [];
   const clipsExist = jobs.some((j) => j.clipExists);
   const hasFailedJob = jobs.some((j) => j.error);
+  // A moderation false positive on the GENERATED video: recover by revising the plan (LLM only), not
+  // a paid re-roll of the same prompt. Match the backend's own tokens (NOT a bare "sensitive", which
+  // would false-match "case-sensitive"/"sensitive data" in the log tail — e.g. the project title).
+  const contentFlagged = jobs.some((j) => CONTENT_FLAG_RE.test(j.error ?? ''))
+    || CONTENT_FLAG_RE.test(error?.logTail?.join('\n') ?? '');
   const masterExists = !!run.latestRender?.masterExists;
   const canAssemble = clipsExist && !masterExists;
   // Every attention state must offer a way forward. Which one depends on what's actually on disk:
@@ -74,6 +85,18 @@ export function AttentionBanner({ run }: { run: RunDetail }) {
       toast({ kind: 'error', text: e instanceof Error ? e.message : 'Planning could not restart.' });
     } finally {
       setReplanning(false);
+    }
+  };
+
+  const reviseForContent = async () => {
+    setRevisingContent(true);
+    try {
+      await api.reviseForContentPolicy(run.id);
+      await qc.invalidateQueries({ queryKey: ['run', run.id] });
+    } catch (e) {
+      toast({ kind: 'error', text: e instanceof Error ? e.message : 'The revise could not start.' });
+    } finally {
+      setRevisingContent(false);
     }
   };
 
@@ -126,7 +149,17 @@ export function AttentionBanner({ run }: { run: RunDetail }) {
                 Finish free (assemble)
               </Button>
             )}
-            {hasFailedJob && (
+            {contentFlagged && (
+              <>
+                <p className="w-full text-dense text-ink-secondary">
+                  The model's content filter flagged the generated video as sensitive — usually a false positive on a benign idea. Revising rewrites the shots with cleaner wording (uses your LLM, no render spend) and usually clears it.
+                </p>
+                <Button variant="secondary" loading={revisingContent} onClick={() => void reviseForContent()}>
+                  Revise to pass content check
+                </Button>
+              </>
+            )}
+            {hasFailedJob && !contentFlagged && (
               <p className="text-dense text-ink-secondary">
                 A job failed — its Retry button lives on the job card below, priced before you click.
               </p>

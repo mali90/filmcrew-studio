@@ -12,6 +12,18 @@ import { createRingLog } from './ring-log.js';
 import { watchRun } from './artifact-watch.js';
 import { estimateRender, readSeedanceResolution } from './estimator.js';
 import { safeChild } from './paths.js';
+// config-FREE import: run-service is loaded eagerly by app.js, and the demo/e2e server sets FAL_BASE_URL
+// only AFTER its static import chain — importing anything that pulls config.js here would snapshot the
+// wrong (real) fal endpoint and make the validators/renders miss the mock.
+import { SEEDANCE_TTV_GUIDANCE } from '../../../src/lib/seedance-guidance.js';
+
+// Feedback for the content-policy "Revise to pass content check" button: rephrase to read as
+// unambiguously benign AND follow the Seedance prompting guidance (single source of truth in
+// src/lib/seedance-guidance.js). Used only by reviseForContentPolicy — the normal revise takes the user's own note.
+const CONTENT_POLICY_REVISE_FEEDBACK = [
+  'The previous render was rejected by the video model\'s content moderation as sensitive content — almost always a false positive on a benign idea. Keep the same story, characters, and structure, but rewrite the shot prompts to read as unambiguously benign: remove anything that could be read as violent, sexual, graphic, gory, or otherwise sensitive, and avoid ambiguous phrasing. Also apply this Seedance prompting guidance:',
+  SEEDANCE_TTV_GUIDANCE,
+].join('\n');
 
 const CLI = (root, name) => path.join(root, 'src/cli', name);
 const slugify = (s) => String(s ?? 'video').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'video';
@@ -386,6 +398,12 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     return { revisionId: path.basename(revDir), queued };
   }
 
+  // Recovery for a content-policy flag: revise the existing plan with the canned benign-rewording +
+  // Seedance-guidance feedback (the "Revise to pass content check" button). LLM only, no render spend.
+  function reviseForContentPolicy(runId) {
+    return revise(runId, { feedback: CONTENT_POLICY_REVISE_FEEDBACK });
+  }
+
   function rerenderJob(runId, { jobId, cascade = false, feedback, take }) {
     const dir = dirFor(runId);
     const spec = readJson(path.join(dir, 'spec.json'));
@@ -542,7 +560,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
   }
 
   return {
-    onEvent, createRun, plan, render, revise, rerenderJob, assemble, approve, cancel, dismissError, detail,
+    onEvent, createRun, plan, render, revise, reviseForContentPolicy, rerenderJob, assemble, approve, cancel, dismissError, detail,
     list: () => listRuns(runsDir, { isAlive }).map(withLiveStatus),
     ringFor, dirFor,
     /** Boot-time reconciliation: interrupted runs become visible without any event. */

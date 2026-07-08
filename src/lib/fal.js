@@ -91,6 +91,20 @@ export function isTransientFalError(err) {
   return TRANSIENT_FETCH.test(String(err?.message ?? ''));
 }
 
+// A content-policy rejection: the model's moderation flagged the GENERATED video (or, rarely, an
+// input) as sensitive — a false positive on a benign prompt is common. It is NOT retried: a resubmit
+// is a fresh PAID generation, and the user's constraint is "don't add cost" on this 422. We only
+// swap the raw fal blob for a clear, actionable message. Detected across both surfaces fal uses: an
+// HTTP-4xx response body (fetchJson at line ~115) and a FAILED status blob (line ~113).
+const CONTENT_POLICY = /content_policy_violation|sensitive content|partner_validation_failed|content policy/i;
+export function isContentPolicyError(err) {
+  return CONTENT_POLICY.test(String(err?.message ?? ''));
+}
+// Keep the `content_policy_violation` token in the message so the web banner can key off it.
+function contentPolicyError(err, endpoint) {
+  return new Error(`fal ${endpoint}: the generated video was flagged by content moderation as sensitive (content_policy_violation) — usually a false positive on a benign prompt. Revise the plan to rephrase it (LLM only, no render spend), or retry to re-roll. [${String(err?.message ?? '').slice(0, 160)}]`);
+}
+
 /** Submit one queued job and resolve its result object (polls status_url → response_url). */
 async function submitAndWait(endpoint, args, { timeoutMs } = {}) {
   const submit = await fetchJson(
@@ -124,6 +138,9 @@ async function runFal(endpoint, args, { timeoutMs } = {}) {
       return await submitAndWait(endpoint, args, { timeoutMs });
     } catch (e) {
       lastErr = e;
+      // A content-policy flag never auto-retries (a resubmit is a fresh paid generation) — surface a
+      // clear, actionable message and stop.
+      if (isContentPolicyError(e)) throw contentPolicyError(e, endpoint);
       // Give up on genuine validation errors (but NOT a transient fetch race, which is retryable
       // despite its 422) and once we're out of tries; otherwise resubmit after a growing backoff.
       if ((isValidationError(e) && !isTransientFalError(e)) || attempt >= maxTries) throw e;
@@ -245,4 +262,4 @@ export async function topazUpscale(videoPath, { destDir, upscaleFactor = 2, mode
   return writeBuffer(path.join(destDir, base.replace(/[/\\]/g, '_')), Buffer.from(await res.arrayBuffer()));
 }
 
-export default { fileToDataUri, uploadToStorage, toFalInput, toFalInputAs, falRef, mintVoice, generateKling, generateSeedance, topazUpscale, topazArgs, validateFal, isValidationError, isTransientFalError };
+export default { fileToDataUri, uploadToStorage, toFalInput, toFalInputAs, falRef, mintVoice, generateKling, generateSeedance, topazUpscale, topazArgs, validateFal, isValidationError, isTransientFalError, isContentPolicyError };
