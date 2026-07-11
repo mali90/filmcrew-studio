@@ -23,7 +23,7 @@ export default function CastPage() {
       <header>
         <h1 className="text-display text-ink">Cast</h1>
         <p className="mt-1 text-body text-ink-secondary">
-          Characters carry a profile, reference images and a voice into every plan. All of it is optional — ideas work fine without a cast.
+          Characters carry a profile, reference images and a voice into every plan; environments carry a world in words. All of it is optional — ideas work fine without either.
         </p>
       </header>
 
