@@ -89,7 +89,9 @@ export function CreateHero({ idea, onIdeaChange, ideaRef }: {
       aspect,
       durationS: durationMode === 'custom' && Number.isFinite(customS) ? clampDuration(customS) : null,
       ...(castSlugs.length ? { cast: castSlugs } : {}),
-      ...(envSlug ? { environment: envSlug } : {}),
+      // derived from the LIVE list, not raw envSlug state — an environment deleted while Home is
+      // mounted drops out of the payload instead of 400-ing every submit until a reload
+      ...(selectedEnv ? { environment: selectedEnv.slug } : {}),
     });
   };
 
