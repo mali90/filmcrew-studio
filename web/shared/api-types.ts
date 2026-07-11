@@ -89,6 +89,8 @@ export interface Shot {
 export interface ProductionSpec {
   spec_version: string;
   render_backend?: Backend;
+  cast?: string[];                          // engine-stamped: the run's starred slugs (revisions re-inject them)
+  environment?: string;                     // engine-stamped: the run's "Set in" slug (revisions re-inject it)
   project: { title: string; logline?: string; format?: string; duration_target_s?: number; aspect_ratio?: Aspect; hook?: string; payoff?: string; cast?: string[]; cover_frame_s?: number };
   shots: Shot[];
   audio?: { voice?: { lines?: { shot_id?: string; at_s?: number; text: string; speaker?: string; tone?: string }[] } };

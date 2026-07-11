@@ -398,3 +398,23 @@ test('buildApp cuts an unspaced dotenv comment from the .env ENVIRONMENTS_DIR va
     fs.rmSync(envRoot, { recursive: true, force: true });
   }
 });
+
+// dotenv precedence: when .env assigns ENVIRONMENTS_DIR twice, the LAST assignment wins — a
+// directly-invoked engine (dotenv) and the web server must land on the same directory.
+test('buildApp honors the LAST .env ENVIRONMENTS_DIR assignment, like dotenv', async () => {
+  const envRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-env-dotenvl-'));
+  fs.writeFileSync(path.join(envRoot, '.env'), 'ENVIRONMENTS_DIR=./stale\nENVIRONMENTS_DIR=./current\n');
+  const viaFile = await buildApp({
+    root: HOST_ROOT,
+    runsDir: path.join(envRoot, 'runs'),
+    outDir: path.join(envRoot, 'out'),
+    envRoot,
+    childEnv: { PATH: process.env.PATH, HOME: process.env.HOME },
+  });
+  try {
+    assert.equal(viaFile.ctx.environmentsDir, path.resolve(HOST_ROOT, './current'));
+  } finally {
+    await viaFile.close();
+    fs.rmSync(envRoot, { recursive: true, force: true });
+  }
+});

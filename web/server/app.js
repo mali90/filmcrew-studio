@@ -43,8 +43,10 @@ export async function buildApp({
   // root-anchored, like RUNS_DIR/OUT_DIR in server.js.
   if (environmentsDir == null && !process.env.ENVIRONMENTS_DIR) {
     try {
-      const { parseEnv, getEnvValue } = await import(path.join(root, 'src/lib/env-file.js'));
-      const raw = getEnvValue(parseEnv(fs.readFileSync(path.join(envRoot, '.env'), 'utf8')), 'ENVIRONMENTS_DIR');
+      const { parseEnv } = await import(path.join(root, 'src/lib/env-file.js'));
+      // LAST assignment wins, exactly like dotenv (getEnvValue takes the first — wrong here)
+      const kvs = parseEnv(fs.readFileSync(path.join(envRoot, '.env'), 'utf8')).filter((e) => e.type === 'kv' && e.key === 'ENVIRONMENTS_DIR');
+      const raw = kvs.length ? kvs[kvs.length - 1].value : undefined;
       // dotenv semantics for the value — surrounding quotes stripped, an unquoted trailing
       // "# comment" dropped: children parse .env with dotenv, so the API must read it alike
       // or a validly-quoted path would point the two at different directories.
