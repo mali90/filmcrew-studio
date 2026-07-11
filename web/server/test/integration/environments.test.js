@@ -270,6 +270,7 @@ test('childEnv always pins ENVIRONMENTS_DIR so the API and engine children agree
     root: HOST_ROOT,
     runsDir: path.join(defRoot, 'runs'),
     outDir: path.join(defRoot, 'out'),
+    envRoot: defRoot, // no .env in here — a developer's real repo .env must not steer this test
     childEnv: { PATH: process.env.PATH, HOME: process.env.HOME },
   });
   try {
@@ -299,6 +300,13 @@ test('duplicate-normalizing filenames collapse to the engine\'s (last-sorted) wi
     assert.equal(up.statusCode, 200);
     assert.match(fs.readFileSync(winner, 'utf8'), /Edited\./, 'PUT edits the engine\'s winner');
     assert.match(fs.readFileSync(loser, 'utf8'), /loser copy/, 'the shadowed file is untouched');
+
+    // DELETE removes EVERY file behind the slug — a shadowed copy must not resurrect it on next list
+    const rm = await del('/api/environments/rain-city');
+    assert.equal(rm.statusCode, 200);
+    assert.ok(!fs.existsSync(winner) && !fs.existsSync(loser), 'both slug-collapsed files are gone');
+    const after = (await get('/api/environments')).json().environments;
+    assert.ok(!after.some((e) => e.slug === 'rain-city'), 'the slug no longer lists');
   } finally {
     fs.rmSync(loser, { force: true });
     fs.rmSync(winner, { force: true });
@@ -324,5 +332,27 @@ test('buildApp honors a process-env ENVIRONMENTS_DIR when no explicit param over
   } finally {
     delete process.env.ENVIRONMENTS_DIR;
     fs.rmSync(envDir, { recursive: true, force: true });
+  }
+});
+
+// The project's .env (at envRoot) is the documented override channel — buildApp reads it as DATA
+// (the server process still never loads .env) and steers both the API dir and the child pin.
+test('buildApp honors ENVIRONMENTS_DIR from the project .env when neither param nor process env set it', async () => {
+  const envRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-env-dotenv-'));
+  const target = path.join(envRoot, 'worlds');
+  fs.writeFileSync(path.join(envRoot, '.env'), `ENVIRONMENTS_DIR=${target}\n`);
+  const viaFile = await buildApp({
+    root: HOST_ROOT,
+    runsDir: path.join(envRoot, 'runs'),
+    outDir: path.join(envRoot, 'out'),
+    envRoot,
+    childEnv: { PATH: process.env.PATH, HOME: process.env.HOME },
+  });
+  try {
+    assert.equal(viaFile.ctx.environmentsDir, path.resolve(target));
+    assert.equal(viaFile.ctx.childEnv.ENVIRONMENTS_DIR, path.resolve(target)); // children pinned to it too
+  } finally {
+    await viaFile.close();
+    fs.rmSync(envRoot, { recursive: true, force: true });
   }
 });

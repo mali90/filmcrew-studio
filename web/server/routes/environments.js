@@ -90,9 +90,12 @@ export async function registerEnvironmentsRoutes(app) {
 
   app.delete('/api/environments/:slug', async (req) => {
     const { slug } = await host('util.js');
-    const file = resolveFile(req.params.slug, slug);
-    if (!file) throw Object.assign(new Error('no such environment'), { statusCode: 404, hint: 'GET /api/environments lists them' });
-    fs.rmSync(file);
+    if (!SLUG_FILE.test(req.params.slug)) throw Object.assign(new Error('not an environment id'), { statusCode: 400, hint: 'lowercase letters, digits and dashes' });
+    // remove EVERY file that normalizes to this slug — deleting only the map winner would let a
+    // shadowed duplicate ("Rain_City.md" behind "rain-city.md") resurrect the slug on the next list.
+    const hits = listEnvironments().filter((f) => slug(f.replace(/\.md$/, '')) === req.params.slug);
+    if (!hits.length) throw Object.assign(new Error('no such environment'), { statusCode: 404, hint: 'GET /api/environments lists them' });
+    for (const f of hits) fs.rmSync(path.join(environmentsDir, f));
     return { deleted: req.params.slug };
   });
 }

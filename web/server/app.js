@@ -37,8 +37,17 @@ export async function buildApp({
   outDir = path.resolve(outDir ?? path.join(root, 'out'));
   envRoot = path.resolve(envRoot ?? root);
   profilesDir = path.resolve(profilesDir ?? path.join(root, 'profiles'));
-  // Precedence: explicit param (demo/tests) → ENVIRONMENTS_DIR in the server's own env (the
-  // documented override, root-anchored like RUNS_DIR/OUT_DIR in server.js) → <root>/environments.
+  // Precedence: explicit param (demo/tests) → ENVIRONMENTS_DIR in the server's own env → the
+  // project's .env at envRoot (the documented override — read as DATA like the Settings page
+  // does; the server still never loads .env into its process) → <root>/environments. All
+  // root-anchored, like RUNS_DIR/OUT_DIR in server.js.
+  if (environmentsDir == null && !process.env.ENVIRONMENTS_DIR) {
+    try {
+      const { parseEnv, getEnvValue } = await import(path.join(root, 'src/lib/env-file.js'));
+      const configured = getEnvValue(parseEnv(fs.readFileSync(path.join(envRoot, '.env'), 'utf8')), 'ENVIRONMENTS_DIR');
+      if (configured) environmentsDir = path.resolve(root, configured);
+    } catch { /* no .env — fall through to the default */ }
+  }
   environmentsDir = path.resolve(environmentsDir
     ?? (process.env.ENVIRONMENTS_DIR ? path.resolve(root, process.env.ENVIRONMENTS_DIR) : path.join(root, 'environments')));
   elementsRoot = path.resolve(elementsRoot ?? path.join(root, 'elements'));
