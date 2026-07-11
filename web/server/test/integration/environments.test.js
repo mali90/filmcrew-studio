@@ -67,8 +67,8 @@ test('the environments route statically imports ONLY node:fs and node:path (conf
   assert.ok(specifiers.length > 0, 'the route module has static imports to inspect');
   for (const spec of specifiers) {
     assert.ok(
-      spec === 'node:fs' || spec === 'node:path',
-      `only node:fs / node:path may be statically imported (host lib is dynamic-imported via app.ctx.root); found: ${spec}`,
+      spec === 'node:fs' || spec === 'node:path' || spec === 'node:url',
+      `only node:fs / node:path / node:url may be statically imported (host lib is dynamic-imported via app.ctx.root); found: ${spec}`,
     );
   }
 });

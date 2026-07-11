@@ -3,17 +3,19 @@
 // the web UI and CLI produce identical artifacts. All paths come from app.ctx (environmentsDir), so
 // the demo server and tests isolate their environments workspace completely. This module is
 // CONFIG-FREE by design (see web/README.md "Children, not imports"): it statically imports ONLY
-// node:fs / node:path and reaches host lib code through a dynamic import off app.ctx.root — a static
-// config.js import here would make the demo/e2e validators miss the mock and hang the wizard flow.
+// node: builtins (fs/path/url) and reaches host lib code through a dynamic import off app.ctx.root —
+// a static config.js import here would make the demo/e2e validators miss the mock and hang the wizard flow.
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$/;
 const SLUG_FILE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 export async function registerEnvironmentsRoutes(app) {
   const { root, environmentsDir } = app.ctx;
-  const host = async (rel) => import(path.join(root, 'src/lib', rel));
+  // file: URL, not a bare path — Windows absolute paths (C:\…) are rejected by ESM import()
+  const host = async (rel) => import(pathToFileURL(path.join(root, 'src/lib', rel)).href);
 
   // ——— shared local helpers (ctx paths, no host-config coupling) ———
 

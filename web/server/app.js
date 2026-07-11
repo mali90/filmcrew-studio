@@ -4,6 +4,7 @@
 // children (the host config.js freezes process.env at import — children re-read .env fresh).
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import Fastify from 'fastify';
 import fastifyStatic from '@fastify/static';
 import fastifyMultipart from '@fastify/multipart';
@@ -47,7 +48,7 @@ export async function buildApp({
       // exact same grammar (quotes, comments, `export` prefixes, last-assignment-wins) must decide
       // what the API sees. Importing dotenv's main module does NOT load .env into this process
       // (only the `dotenv/config` entrypoint auto-runs) — the server still treats .env as data.
-      const dotenvMod = await import(path.join(root, 'node_modules', 'dotenv', 'lib', 'main.js'));
+      const dotenvMod = await import(pathToFileURL(path.join(root, 'node_modules', 'dotenv', 'lib', 'main.js')).href);
       const dotenvParse = dotenvMod.parse ?? dotenvMod.default?.parse;
       const configured = dotenvParse(fs.readFileSync(path.join(envRoot, '.env'), 'utf8')).ENVIRONMENTS_DIR;
       if (configured) environmentsDir = path.resolve(root, configured);
