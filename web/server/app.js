@@ -43,20 +43,13 @@ export async function buildApp({
   // root-anchored, like RUNS_DIR/OUT_DIR in server.js.
   if (environmentsDir == null && !process.env.ENVIRONMENTS_DIR) {
     try {
-      const { parseEnv } = await import(path.join(root, 'src/lib/env-file.js'));
-      // LAST assignment wins, exactly like dotenv (getEnvValue takes the first — wrong here)
-      const kvs = parseEnv(fs.readFileSync(path.join(envRoot, '.env'), 'utf8')).filter((e) => e.type === 'kv' && e.key === 'ENVIRONMENTS_DIR');
-      const raw = kvs.length ? kvs[kvs.length - 1].value : undefined;
-      // dotenv semantics for the value — surrounding quotes stripped, an unquoted trailing
-      // "# comment" dropped: children parse .env with dotenv, so the API must read it alike
-      // or a validly-quoted path would point the two at different directories.
-      const configured = (() => {
-        const v = String(raw ?? '').trim();
-        const q = v[0];
-        if (q === '"' || q === "'") { const end = v.indexOf(q, 1); if (end !== -1) return v.slice(1, end); }
-        const hash = v.indexOf('#'); // dotenv ends an unquoted value at the FIRST '#', spaced or not
-        return (hash === -1 ? v : v.slice(0, hash)).trim();
-      })();
+      // parse with dotenv ITSELF (a root dependency) — children read .env through dotenv, so the
+      // exact same grammar (quotes, comments, `export` prefixes, last-assignment-wins) must decide
+      // what the API sees. Importing dotenv's main module does NOT load .env into this process
+      // (only the `dotenv/config` entrypoint auto-runs) — the server still treats .env as data.
+      const dotenvMod = await import(path.join(root, 'node_modules', 'dotenv', 'lib', 'main.js'));
+      const dotenvParse = dotenvMod.parse ?? dotenvMod.default?.parse;
+      const configured = dotenvParse(fs.readFileSync(path.join(envRoot, '.env'), 'utf8')).ENVIRONMENTS_DIR;
       if (configured) environmentsDir = path.resolve(root, configured);
     } catch { /* no .env — fall through to the default */ }
   }

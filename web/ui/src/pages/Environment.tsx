@@ -93,8 +93,10 @@ export default function EnvironmentPage() {
       env
         ? api.updateEnvironment(env.slug, { description }) // the server prepends the # Name heading
         : api.createEnvironment(description ? { name: trimmed, description } : { name: trimmed }),
-    onSuccess: ({ slug: savedSlug }) => {
-      qc.invalidateQueries({ queryKey: ['environments'] });
+    onSuccess: async ({ slug: savedSlug }) => {
+      // await the refetch BEFORE navigating — landing on /environments/<slug> with the stale
+      // list still cached would flash the "No such environment" state until the refetch lands
+      await qc.invalidateQueries({ queryKey: ['environments'] });
       toast({ kind: 'success', text: 'Environment saved.' });
       if (!isEdit) navigate(`/environments/${savedSlug}`);
     },

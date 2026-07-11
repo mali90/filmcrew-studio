@@ -418,3 +418,22 @@ test('buildApp honors the LAST .env ENVIRONMENTS_DIR assignment, like dotenv', a
     fs.rmSync(envRoot, { recursive: true, force: true });
   }
 });
+
+// The reader IS dotenv now — shell-style `export KEY=value` lines (valid for dotenv) must work too.
+test('buildApp reads an export-prefixed ENVIRONMENTS_DIR from .env (full dotenv grammar)', async () => {
+  const envRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-env-dotenvx-'));
+  fs.writeFileSync(path.join(envRoot, '.env'), 'export ENVIRONMENTS_DIR=./worlds\n');
+  const viaFile = await buildApp({
+    root: HOST_ROOT,
+    runsDir: path.join(envRoot, 'runs'),
+    outDir: path.join(envRoot, 'out'),
+    envRoot,
+    childEnv: { PATH: process.env.PATH, HOME: process.env.HOME },
+  });
+  try {
+    assert.equal(viaFile.ctx.environmentsDir, path.resolve(HOST_ROOT, './worlds'));
+  } finally {
+    await viaFile.close();
+    fs.rmSync(envRoot, { recursive: true, force: true });
+  }
+});
