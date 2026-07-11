@@ -279,3 +279,50 @@ test('childEnv always pins ENVIRONMENTS_DIR so the API and engine children agree
     fs.rmSync(defRoot, { recursive: true, force: true });
   }
 });
+
+// Two files that NORMALIZE to the same slug must collapse to the engine's winner everywhere:
+// loadEnvironment builds a Map over sorted files (last set wins), so the API must list ONE card
+// and edit/delete that same file — never .find()'s first match while the engine plans with the last.
+test('duplicate-normalizing filenames collapse to the engine\'s (last-sorted) winner in list and CRUD', async () => {
+  fs.mkdirSync(dirs.environments, { recursive: true });
+  const loser = path.join(dirs.environments, 'Rain_City.md');   // sorts first ("R" < "r") — engine ignores it
+  const winner = path.join(dirs.environments, 'rain-city.md');  // sorts last — engine loads THIS one
+  fs.writeFileSync(loser, '# Rain City\n\nThe loser copy.\n');
+  fs.writeFileSync(winner, '# Rain City\n\nThe winner copy.\n');
+  try {
+    const list = (await get('/api/environments')).json().environments;
+    const cards = list.filter((e) => e.slug === 'rain-city');
+    assert.equal(cards.length, 1, 'one card per slug, never duplicate-key cards');
+    assert.match(cards[0].description, /winner copy/, 'the listed card is the engine\'s winner');
+
+    const up = await put('/api/environments/rain-city', { description: 'Edited.' });
+    assert.equal(up.statusCode, 200);
+    assert.match(fs.readFileSync(winner, 'utf8'), /Edited\./, 'PUT edits the engine\'s winner');
+    assert.match(fs.readFileSync(loser, 'utf8'), /loser copy/, 'the shadowed file is untouched');
+  } finally {
+    fs.rmSync(loser, { force: true });
+    fs.rmSync(winner, { force: true });
+  }
+});
+
+// The documented override: launching the server with ENVIRONMENTS_DIR in its own env must steer
+// the API (and, via the always-pin, the children) to that dir — param (demo/tests) still wins.
+test('buildApp honors a process-env ENVIRONMENTS_DIR when no explicit param overrides it', async () => {
+  const envDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-env-envvar-'));
+  process.env.ENVIRONMENTS_DIR = envDir;
+  try {
+    const viaEnv = await buildApp({
+      root: HOST_ROOT,
+      runsDir: path.join(envDir, 'runs'),
+      outDir: path.join(envDir, 'out'),
+      childEnv: { PATH: process.env.PATH, HOME: process.env.HOME },
+    });
+    try {
+      assert.equal(viaEnv.ctx.environmentsDir, path.resolve(envDir));
+      assert.equal(viaEnv.ctx.childEnv.ENVIRONMENTS_DIR, path.resolve(envDir)); // children pinned to the same dir
+    } finally { await viaEnv.close(); }
+  } finally {
+    delete process.env.ENVIRONMENTS_DIR;
+    fs.rmSync(envDir, { recursive: true, force: true });
+  }
+});

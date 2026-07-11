@@ -37,13 +37,16 @@ export async function registerEnvironmentsRoutes(app) {
     if (!SLUG_FILE.test(slugName)) throw Object.assign(new Error('not an environment id'), { statusCode: 400, hint: 'lowercase letters, digits and dashes' });
     return path.join(environmentsDir, `${slugName}.md`);
   };
-  /** Resolve an id to the on-disk file the ENGINE would load: loadEnvironment slug()-maps every
-   *  *.md in the dir, so a hand-authored "Rain_City.md" answers to "rain-city". The API must
-   *  resolve (and collide) exactly the same way — probing only for the literal <slug>.md would
-   *  list a file it then can't edit, delete, or plan with. Returns null when nothing matches. */
+  /** slug → filename, built EXACTLY like the engine's loadEnvironment (sorted files into a Map,
+   *  so duplicate-normalizing names — "Rain_City.md" vs "rain-city.md" — collapse to the SAME
+   *  last-sorted winner the engine will load). Every read path below (list, resolve, collide)
+   *  must go through this map, or CRUD could target a different file than planning injects. */
+  const slugMap = (slug) =>
+    new Map(listEnvironments().map((f) => [slug(f.replace(/\.md$/, '')), f]));
+  /** Resolve an id to the on-disk file the ENGINE would load. Returns null when nothing matches. */
   const resolveFile = (id, slug) => {
     if (!SLUG_FILE.test(id)) throw Object.assign(new Error('not an environment id'), { statusCode: 400, hint: 'lowercase letters, digits and dashes' });
-    const hit = listEnvironments().find((f) => slug(f.replace(/\.md$/, '')) === id);
+    const hit = slugMap(slug).get(id);
     return hit ? path.join(environmentsDir, hit) : null;
   };
 
@@ -51,8 +54,7 @@ export async function registerEnvironmentsRoutes(app) {
 
   app.get('/api/environments', async () => {
     const { slug } = await host('util.js');
-    const environments = listEnvironments().map((f) => {
-      const eslug = slug(f.replace(/\.md$/, ''));
+    const environments = [...slugMap(slug)].map(([eslug, f]) => {
       const content = fs.readFileSync(path.join(environmentsDir, f), 'utf8');
       return { slug: eslug, name: displayName(content, eslug), description: content };
     });

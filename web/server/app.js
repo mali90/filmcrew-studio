@@ -37,7 +37,10 @@ export async function buildApp({
   outDir = path.resolve(outDir ?? path.join(root, 'out'));
   envRoot = path.resolve(envRoot ?? root);
   profilesDir = path.resolve(profilesDir ?? path.join(root, 'profiles'));
-  environmentsDir = path.resolve(environmentsDir ?? path.join(root, 'environments'));
+  // Precedence: explicit param (demo/tests) → ENVIRONMENTS_DIR in the server's own env (the
+  // documented override, root-anchored like RUNS_DIR/OUT_DIR in server.js) → <root>/environments.
+  environmentsDir = path.resolve(environmentsDir
+    ?? (process.env.ENVIRONMENTS_DIR ? path.resolve(root, process.env.ENVIRONMENTS_DIR) : path.join(root, 'environments')));
   elementsRoot = path.resolve(elementsRoot ?? path.join(root, 'elements'));
   voicesFile = path.resolve(voicesFile ?? path.join(root, 'voices', 'voices.json'));
   fs.mkdirSync(runsDir, { recursive: true });
