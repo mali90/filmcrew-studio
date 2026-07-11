@@ -356,3 +356,25 @@ test('buildApp honors ENVIRONMENTS_DIR from the project .env when neither param 
     fs.rmSync(envRoot, { recursive: true, force: true });
   }
 });
+
+// dotenv semantics: a QUOTED path (spaces) with a trailing comment is valid .env syntax — children
+// parse it with dotenv, so buildApp's data-read must resolve the same directory, not the raw text.
+test('buildApp reads a quoted/commented ENVIRONMENTS_DIR from .env with dotenv semantics', async () => {
+  const envRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-env-dotenvq-'));
+  const target = path.join(envRoot, 'my worlds');
+  fs.writeFileSync(path.join(envRoot, '.env'), `ENVIRONMENTS_DIR="${target}" # reusable settings\n`);
+  const viaFile = await buildApp({
+    root: HOST_ROOT,
+    runsDir: path.join(envRoot, 'runs'),
+    outDir: path.join(envRoot, 'out'),
+    envRoot,
+    childEnv: { PATH: process.env.PATH, HOME: process.env.HOME },
+  });
+  try {
+    assert.equal(viaFile.ctx.environmentsDir, path.resolve(target), 'quotes stripped, comment dropped');
+    assert.equal(viaFile.ctx.childEnv.ENVIRONMENTS_DIR, path.resolve(target));
+  } finally {
+    await viaFile.close();
+    fs.rmSync(envRoot, { recursive: true, force: true });
+  }
+});

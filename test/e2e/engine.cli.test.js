@@ -187,3 +187,15 @@ test('engine --environment with an unknown slug fails BEFORE any agent runs (no 
     assert.ok(!fs.existsSync(path.join(dir, 'spec-00.json')), 'no agent output was produced');
   } finally { cleanup(); envs.cleanup(); }
 });
+
+test('engine --environment with NO value fails before any agent runs (explicit flag never silently skipped)', async () => {
+  const { dir, cleanup } = mkTmp('engine-cli-envnoval');
+  try {
+    const { code, stdout, stderr } = await runCli('src/cli/engine.js',
+      ['--brief', 'x', '--out', dir, '--environment'],
+      { env: { LLM_PROVIDER: 'claude', LLM_TRANSPORT: 'cli', LLM_CLI_BIN: FAKE, LLM_MODEL: 'fake' } });
+    assert.notEqual(code, 0);
+    assert.match(stderr + stdout, /--environment needs a value/);
+    assert.ok(!fs.existsSync(path.join(dir, 'spec-00.json')), 'no agent output was produced — nothing was spent');
+  } finally { cleanup(); }
+});

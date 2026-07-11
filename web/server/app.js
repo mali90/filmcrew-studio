@@ -44,7 +44,17 @@ export async function buildApp({
   if (environmentsDir == null && !process.env.ENVIRONMENTS_DIR) {
     try {
       const { parseEnv, getEnvValue } = await import(path.join(root, 'src/lib/env-file.js'));
-      const configured = getEnvValue(parseEnv(fs.readFileSync(path.join(envRoot, '.env'), 'utf8')), 'ENVIRONMENTS_DIR');
+      const raw = getEnvValue(parseEnv(fs.readFileSync(path.join(envRoot, '.env'), 'utf8')), 'ENVIRONMENTS_DIR');
+      // dotenv semantics for the value — surrounding quotes stripped, an unquoted trailing
+      // "# comment" dropped: children parse .env with dotenv, so the API must read it alike
+      // or a validly-quoted path would point the two at different directories.
+      const configured = (() => {
+        const v = String(raw ?? '').trim();
+        const q = v[0];
+        if (q === '"' || q === "'") { const end = v.indexOf(q, 1); if (end !== -1) return v.slice(1, end); }
+        const hash = v.search(/\s#/);
+        return (hash === -1 ? v : v.slice(0, hash)).trim();
+      })();
       if (configured) environmentsDir = path.resolve(root, configured);
     } catch { /* no .env — fall through to the default */ }
   }
