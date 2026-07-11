@@ -378,3 +378,23 @@ test('buildApp reads a quoted/commented ENVIRONMENTS_DIR from .env with dotenv s
     fs.rmSync(envRoot, { recursive: true, force: true });
   }
 });
+
+// dotenv ends an unquoted value at the FIRST '#' even with no whitespace before it —
+// `ENVIRONMENTS_DIR=./worlds#local` must resolve "./worlds", exactly as children will read it.
+test('buildApp cuts an unspaced dotenv comment from the .env ENVIRONMENTS_DIR value', async () => {
+  const envRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-env-dotenvh-'));
+  fs.writeFileSync(path.join(envRoot, '.env'), 'ENVIRONMENTS_DIR=./worlds#local\n');
+  const viaFile = await buildApp({
+    root: HOST_ROOT,
+    runsDir: path.join(envRoot, 'runs'),
+    outDir: path.join(envRoot, 'out'),
+    envRoot,
+    childEnv: { PATH: process.env.PATH, HOME: process.env.HOME },
+  });
+  try {
+    assert.equal(viaFile.ctx.environmentsDir, path.resolve(HOST_ROOT, './worlds'), 'the unspaced #comment is not part of the path');
+  } finally {
+    await viaFile.close();
+    fs.rmSync(envRoot, { recursive: true, force: true });
+  }
+});

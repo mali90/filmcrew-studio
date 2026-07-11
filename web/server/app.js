@@ -52,7 +52,7 @@ export async function buildApp({
         const v = String(raw ?? '').trim();
         const q = v[0];
         if (q === '"' || q === "'") { const end = v.indexOf(q, 1); if (end !== -1) return v.slice(1, end); }
-        const hash = v.search(/\s#/);
+        const hash = v.indexOf('#'); // dotenv ends an unquoted value at the FIRST '#', spaced or not
         return (hash === -1 ? v : v.slice(0, hash)).trim();
       })();
       if (configured) environmentsDir = path.resolve(root, configured);

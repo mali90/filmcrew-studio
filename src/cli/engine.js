@@ -28,9 +28,9 @@ async function main() {
   const aspectRatio = str('aspect');
   const cast = str('cast')?.split(',').map((s) => s.trim()).filter(Boolean); // star these profiles (comma-separated names)
   const environment = str('environment'); // a SINGLE world/mood/style bible (not comma-split — exactly one environment per idea)
-  // an explicit flag with no value must fail here, BEFORE any LLM spend — silently planning
-  // without the world the user asked for would waste the whole paid planning pass
-  if (args.environment === true) throw new Error('--environment needs a value — e.g. --environment neon-city (exactly one per idea).');
+  // an explicit flag with no value (bare or "") must fail here, BEFORE any LLM spend — silently
+  // planning without the world the user asked for would waste the whole paid planning pass
+  if ('environment' in args && environment === undefined) throw new Error('--environment needs a value — e.g. --environment neon-city (exactly one per idea).');
 
   log.step(`Content Engine — run dir ${path.relative(config.root, runDir)}`);
   log.info(`Brief: ${brief.slice(0, 200)}${brief.length > 200 ? '…' : ''}`);
