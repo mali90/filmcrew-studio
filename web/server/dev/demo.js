@@ -59,6 +59,7 @@ const app = await buildApp({
   // the demo's cast workspace is isolated too — creating characters, uploading refs and
   // re-keying voices must never write into the real repo's profiles/, elements/ or voices/
   profilesDir: path.join(ROOT, 'runs-demo', 'cast', 'profiles'),
+  environmentsDir: path.join(ROOT, 'runs-demo', 'cast', 'environments'),
   elementsRoot: path.join(ROOT, 'runs-demo', 'cast', 'elements'),
   voicesFile: path.join(ROOT, 'runs-demo', 'cast', 'voices', 'voices.json'),
   childEnv,

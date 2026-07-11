@@ -74,6 +74,7 @@ From there: type an idea → the agents plan it (uses your LLM, no render spend)
 - **Stop:** Settings → Application → **Shut down** (or Ctrl+C in its terminal).
 - **Restart** (picks up `.env` and updates): Settings → Application → **Restart** — the page reconnects on its own.
 - Give recurring characters a face and a voice on the **Cast** page, then star them in any idea.
+- Describe a reusable **environment** — a world, mood and palette in words — once on the **Cast** page, then set any idea in it.
 
 ## Prefer the terminal?
 
@@ -87,7 +88,7 @@ npm run engine -- --brief "your idea here" --render --probe   # long multi-job v
 | Command | What it does |
 |---|---|
 | `npm run doctor` | Health check (keys, ffmpeg, and everything a render needs). |
-| `npm run engine -- --brief "..." --render` | Plan a one-line idea and render it. Add `--probe` (multi-job plans: first job only), `--upscale`, `--backend seedance`, `--cast <names>`; drop `--render` for the plan only. |
+| `npm run engine -- --brief "..." --render` | Plan a one-line idea and render it. Add `--probe` (multi-job plans: first job only), `--upscale`, `--backend seedance`, `--cast <names>`, `--environment <name>`; drop `--render` for the plan only. |
 | `npm run revise -- --from runs/<id> --feedback "..."` | Send director feedback back through the owning agents. |
 | `npm run render-job -- --from runs/<id> --job K2` | Re-render one job as a new take (seam-chained). |
 | `npm run render -- --spec <spec.json>` | Render an existing plan. |
@@ -101,6 +102,7 @@ Two video models: **Kling 3.0** (default) and **Seedance 2.0** — pick per run 
 - **An 8-agent planning engine** with a QC gate that re-runs only the agents whose work fails — the plan is sound before a single paid frame renders.
 - **Two render backends** behind one spec — any plan renders on either.
 - **Characters that persist**: reference images, subject bibles and minted voices, managed on the Cast page and starrable per idea. A sample character, **Wren**, ships in the box — open the Cast page or add `--cast wren` to any idea to try it (activate his voice with `npm run mint-voice -- "Wren" voices/wren.mp3`).
+- **Environments that persist**: a purely descriptive world/mood/palette bible (`environments/<slug>.md`, no images or voice), managed on the Cast page and set per idea to steer every shot's look. A sample environment, **Neon City**, ships in the box — open the Cast page or add `--environment neon-city` to any idea to try it.
 - **Honest money UX**: a price on every render button, first-job probes on multi-job plans, free re-assembly, upscale only when you choose it.
 - **Review like an editor**: per-clip strip with take history, scoped re-renders with seam-cascade warnings, change requests that re-run the engine.
 - **A fully mocked test suite** — every test runs without keys, network, or spend.

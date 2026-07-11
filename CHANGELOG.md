@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.4.0 — 2026-07-11
+
+### Added
+- **Environments** — a reusable, purely descriptive setting (world, mood, look): create/edit an
+  environment bible (`environments/<slug>.md` — a name heading plus prose, no images or voice) in the
+  new **Environments** section of the Cast page, then set exactly one per idea from Home's **Set in**
+  picker and the 8-agent engine anchors the plan's look to it (its world/style takes precedence over a
+  starred character's own world notes). New engine flag: `--environment <name>` (an unknown environment
+  fails before any LLM spend; the spec records its environment so revisions re-inject the same setting).
+  `ENVIRONMENTS_DIR` is env-overridable and the web demo isolates it; a sample environment, **Neon
+  City**, ships in the box.
+
 ## 1.3.0 — 2026-07-08
 
 ### Added

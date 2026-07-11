@@ -192,6 +192,13 @@ optional `--factor <1-4>` (auto-picks to reach ~1080p when omitted), optional `-
 **Profiles** — a recurring character/world is a short Markdown file in `profiles/` describing tone,
 behaviour, and world so the engine keeps it consistent. Copy `profiles/example-subject.md` to start.
 
+**Environments** — a reusable *setting* (world, mood, look) is a short, purely descriptive Markdown
+file in `environments/` (`environments/<slug>.md`): a `# Name` heading followed by prose (mood, time,
+weather, light, palette — no images, no voice). One environment is picked per idea, so it is reusable
+across videos and orthogonal to your characters. Select it on Home's **Set in** picker or pass
+`--environment <slug>` on the CLI, and the engine injects it into the plan to steer every shot's look
+(put the people in Cast). Copy the bundled `environments/neon-city.md` to start.
+
 > Common defaults (resolution, aspect, audio…) are the **Optional overrides** in `.env` — see
 > [PROVIDERS.md](PROVIDERS.md#optional-overrides-env). The full list lives in `config.js`.
 

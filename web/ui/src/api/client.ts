@@ -1,7 +1,7 @@
 // Typed same-origin API client. Every non-2xx response throws ApiClientError carrying the
 // server's {error, hint} body — surfaces verbatim in the UI's error states.
 import type {
-  CharactersResponse, CliStatus, CreateRunBody, DoctorReport, Estimate, InstallCliEvent, ModelsResponse,
+  CharactersResponse, CliStatus, CreateRunBody, DoctorReport, EnvironmentsResponse, Estimate, InstallCliEvent, ModelsResponse,
   ReferencesList, RunDetail, RunSummary, SetupStatus, VoicesList,
 } from '../../../shared/api-types';
 
@@ -114,6 +114,12 @@ export const api = {
     req<{ slug: string }>(`/cast/profiles/${slug}`, { method: 'PUT', body: JSON.stringify(body) }),
   deleteProfile: (slug: string, deleteRefs = false) =>
     del<{ deleted: string; refsDeleted: number }>(`/cast/profiles/${slug}${deleteRefs ? '?deleteRefs=1' : ''}`),
+  environments: () => get<EnvironmentsResponse>('/environments'),
+  createEnvironment: (body: { name: string; description?: string }) => post<{ slug: string }>('/environments', body),
+  updateEnvironment: (slug: string, body: { description: string }) =>
+    req<{ slug: string }>(`/environments/${slug}`, { method: 'PUT', body: JSON.stringify(body) }),
+  deleteEnvironment: (slug: string) => del<{ deleted: string }>(`/environments/${slug}`),
+
   assignReference: (id: string, character: string | null) =>
     post<{ id: string }>(`/cast/references/${id}/assign`, character ? { character } : {}),
   assignVoice: (key: string, character: string | null) =>

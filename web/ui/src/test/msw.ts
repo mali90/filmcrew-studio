@@ -27,6 +27,7 @@ export const handlers = [
   http.get('/api/cast/voices', () => HttpResponse.json({ mintUsd: 0.007, voices: [] })),
   http.get('/api/cast/profiles', () => HttpResponse.json({ profiles: [] })),
   http.get('/api/cast/characters', () => HttpResponse.json({ characters: [], unassigned: { references: [], voices: [] } })),
+  http.get('/api/environments', () => HttpResponse.json({ environments: [] })),
   http.post('/api/doctor', () => HttpResponse.json({ checks: [{ ok: true, label: 'FAL_KEY set', hint: '', soft: false }], hard: 0 })),
 ];
 

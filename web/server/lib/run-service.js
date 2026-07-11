@@ -300,18 +300,19 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
 
   // ── Public API (what the routes call) ────────────────────────────────────
 
-  function createRun({ idea, backend, aspect, durationS, cast = [] }) {
+  function createRun({ idea, backend, aspect, durationS, cast = [], environment = null }) {
     const stamp = now().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
     const runId = `web-${stamp}-${Math.random().toString(36).slice(2, 6)}`;
     const dir = dirFor(runId);
     fs.mkdirSync(dir, { recursive: true });
-    writeManifest(dir, newManifest({ idea, backend, aspect, durationS, cast }, now().toISOString()));
+    writeManifest(dir, newManifest({ idea, backend, aspect, durationS, cast, environment }, now().toISOString()));
     const queued = mgr.enqueue({
       runId, lane: 'plan', kind: 'plan',
       script: CLI(root, 'engine.js'),
       args: ['--brief', idea, '--out', dir, '--backend', backend, '--aspect', aspect,
         ...(durationS ? ['--duration', String(durationS)] : []),
-        ...(cast.length ? ['--cast', cast.join(',')] : [])],
+        ...(cast.length ? ['--cast', cast.join(',')] : []),
+        ...(environment ? ['--environment', environment] : [])],
       env: env(), cwd: root,
     });
     return { runId, queued };
@@ -331,7 +332,8 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
       script: CLI(root, 'engine.js'),
       args: ['--brief', m.idea, '--out', dir, '--backend', m.backend, '--aspect', m.aspect,
         ...(m.durationS ? ['--duration', String(m.durationS)] : []),
-        ...(m.cast?.length ? ['--cast', m.cast.join(',')] : [])],
+        ...(m.cast?.length ? ['--cast', m.cast.join(',')] : []),
+        ...(m.environment ? ['--environment', m.environment] : [])],
       env: env(), cwd: root,
     });
     emitStatus(runId);

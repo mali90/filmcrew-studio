@@ -16,12 +16,14 @@ import { registerMediaRoutes } from './routes/media.js';
 import { registerEventRoutes } from './routes/events.js';
 import { registerSetupRoutes } from './routes/setup.js';
 import { registerCastRoutes } from './routes/cast.js';
+import { registerEnvironmentsRoutes } from './routes/environments.js';
 
 export async function buildApp({
   root,                       // host repo root (src/cli lives here; children cwd)
   runsDir, outDir,
   envRoot,                    // where .env lives (defaults to root; the demo isolates it)
   profilesDir,                // character profiles (defaults to <root>/profiles; demo/tests isolate)
+  environmentsDir,            // world/mood/style bibles (defaults to <root>/environments; demo/tests isolate)
   elementsRoot,               // reference images + media serving root (defaults to <root>/elements)
   voicesFile,                 // voices.json (defaults to <root>/voices/voices.json)
   childEnv = { PATH: process.env.PATH, HOME: process.env.HOME },
@@ -35,6 +37,7 @@ export async function buildApp({
   outDir = path.resolve(outDir ?? path.join(root, 'out'));
   envRoot = path.resolve(envRoot ?? root);
   profilesDir = path.resolve(profilesDir ?? path.join(root, 'profiles'));
+  environmentsDir = path.resolve(environmentsDir ?? path.join(root, 'environments'));
   elementsRoot = path.resolve(elementsRoot ?? path.join(root, 'elements'));
   voicesFile = path.resolve(voicesFile ?? path.join(root, 'voices', 'voices.json'));
   fs.mkdirSync(runsDir, { recursive: true });
@@ -43,6 +46,7 @@ export async function buildApp({
   if (envRoot !== path.resolve(root)) childEnv = { ...childEnv, DOTENV_CONFIG_PATH: path.join(envRoot, '.env') };
   // isolated cast roots: engine/mint children must see the SAME profiles/refs/voices the API serves
   if (profilesDir !== path.resolve(root, 'profiles')) childEnv = { ...childEnv, PROFILES_DIR: profilesDir };
+  if (environmentsDir !== path.resolve(root, 'environments')) childEnv = { ...childEnv, ENVIRONMENTS_DIR: environmentsDir };
   if (elementsRoot !== path.resolve(root, 'elements')) childEnv = { ...childEnv, ELEMENTS_REFERENCES_DIR: path.join(elementsRoot, 'references') };
   if (voicesFile !== path.resolve(root, 'voices', 'voices.json')) childEnv = { ...childEnv, VOICES_DIR: path.dirname(voicesFile) };
 
@@ -52,7 +56,7 @@ export async function buildApp({
   const mgr = createJobManager({ spawnCli, onEvent: (runId, evt) => svc?.onEvent(runId, evt) });
   svc = createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr, bus, isAlive });
 
-  app.decorate('ctx', { root, runsDir, outDir, envRoot, profilesDir, elementsRoot, voicesFile, childEnv, svc, mgr, bus, lifecycle });
+  app.decorate('ctx', { root, runsDir, outDir, envRoot, profilesDir, environmentsDir, elementsRoot, voicesFile, childEnv, svc, mgr, bus, lifecycle });
 
   // App lifecycle — quit stops the server (children get SIGTERM + 5s grace via close hooks);
   // restart respawns the same process and the UI reconnects. Only real servers wire `lifecycle`.
@@ -86,6 +90,7 @@ export async function buildApp({
   registerMediaRoutes(app);
   registerEventRoutes(app);
   await registerCastRoutes(app);
+  await registerEnvironmentsRoutes(app);
 
   // Production: serve the built SPA on the same origin; client routes fall back to index.html.
   if (uiDist && fs.existsSync(path.join(uiDist, 'index.html'))) {
