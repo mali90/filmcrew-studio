@@ -46,7 +46,11 @@ export async function buildApp({
   if (envRoot !== path.resolve(root)) childEnv = { ...childEnv, DOTENV_CONFIG_PATH: path.join(envRoot, '.env') };
   // isolated cast roots: engine/mint children must see the SAME profiles/refs/voices the API serves
   if (profilesDir !== path.resolve(root, 'profiles')) childEnv = { ...childEnv, PROFILES_DIR: profilesDir };
-  if (environmentsDir !== path.resolve(root, 'environments')) childEnv = { ...childEnv, ENVIRONMENTS_DIR: environmentsDir };
+  // ENVIRONMENTS_DIR is ALWAYS pinned (not just when isolated): the server process never loads
+  // .env, so an .env override would otherwise steer engine children to a different dir than the
+  // one the API lists/validates and every "Set in" run would fail as unknown. An explicit child
+  // env var wins over .env (dotenv never overwrites) — API and children stay on the same dir.
+  childEnv = { ...childEnv, ENVIRONMENTS_DIR: environmentsDir };
   if (elementsRoot !== path.resolve(root, 'elements')) childEnv = { ...childEnv, ELEMENTS_REFERENCES_DIR: path.join(elementsRoot, 'references') };
   if (voicesFile !== path.resolve(root, 'voices', 'voices.json')) childEnv = { ...childEnv, VOICES_DIR: path.dirname(voicesFile) };
 

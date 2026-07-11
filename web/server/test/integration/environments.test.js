@@ -218,3 +218,64 @@ test('the bundled sample environment loads from the repo environments/ dir (Home
     fs.rmSync(sampleRoot, { recursive: true, force: true });
   }
 });
+
+// ── Codex cross-review regressions (P2s, both confirmed) ────────────────────────────────────────
+
+// A hand-authored file whose NAME isn't canonical ("Rain_City.md") is listed under its slug
+// ("rain-city") — the engine's loadEnvironment slug-maps it, so the API and the run guard must
+// resolve it the same way, or a listed environment can't be edited, deleted, or planned with.
+test('a hand-authored non-canonical filename round-trips: list → edit → run → delete by its slug', async () => {
+  fs.mkdirSync(dirs.environments, { recursive: true });
+  const handFile = path.join(dirs.environments, 'Rain_City.md');
+  fs.writeFileSync(handFile, '# Rain City\n\nA drowned town where it never stops raining.\n');
+  try {
+    const list = (await get('/api/environments')).json().environments;
+    const listed = list.find((e) => e.slug === 'rain-city');
+    assert.ok(listed, 'hand-authored file is listed under its normalised slug');
+
+    // edit by the listed slug — must hit the ACTUAL file, keeping its heading
+    const up = await put('/api/environments/rain-city', { description: 'Now with thunder.' });
+    assert.equal(up.statusCode, 200);
+    assert.match(fs.readFileSync(handFile, 'utf8'), /^# Rain City\n\nNow with thunder\.\n$/);
+
+    // creating a name that slug-collides with the hand-authored file is a 409, not a shadow file
+    const dup = await post('/api/environments', { name: 'Rain City', description: 'shadow' });
+    assert.equal(dup.statusCode, 409);
+    assert.ok(!fs.existsSync(path.join(dirs.environments, 'rain-city.md')), 'no duplicate-slug file created');
+
+    // the run guard accepts it AND the engine plans with it (loadEnvironment slug-maps identically)
+    const run = post('/api/runs', { idea: 'a storm rolls in', backend: 'kling', aspect: '9:16', durationS: null, environment: 'rain-city' });
+    assert.equal((await run).statusCode, 201);
+    const ready = await waitPlanReady((await run).json().runId);
+    assert.equal(ready.manifest.environment, 'rain-city');
+    assert.equal(ready.spec.environment, 'rain-city');
+
+    // delete by the listed slug removes the actual file
+    const rm = await del('/api/environments/rain-city');
+    assert.equal(rm.statusCode, 200);
+    assert.ok(!fs.existsSync(handFile));
+  } finally {
+    fs.rmSync(handFile, { force: true });
+  }
+});
+
+// The server process never loads .env, but engine children re-read it fresh — so childEnv must
+// ALWAYS pin ENVIRONMENTS_DIR (even at the default dir), or an .env override would steer children
+// to a different dir than the API lists/validates and every "Set in" run would 400 as unknown.
+test('childEnv always pins ENVIRONMENTS_DIR so the API and engine children agree regardless of .env', async () => {
+  assert.equal(app.ctx.childEnv.ENVIRONMENTS_DIR, dirs.environments); // isolated app: pinned
+
+  const defRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-env-default-'));
+  const def = await buildApp({
+    root: HOST_ROOT,
+    runsDir: path.join(defRoot, 'runs'),
+    outDir: path.join(defRoot, 'out'),
+    childEnv: { PATH: process.env.PATH, HOME: process.env.HOME },
+  });
+  try {
+    assert.equal(def.ctx.childEnv.ENVIRONMENTS_DIR, path.resolve(HOST_ROOT, 'environments')); // default dir: STILL pinned
+  } finally {
+    await def.close();
+    fs.rmSync(defRoot, { recursive: true, force: true });
+  }
+});

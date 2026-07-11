@@ -86,10 +86,13 @@ export function registerRunRoutes(app) {
       if (typeof environment !== 'string' || !environment.trim()) {
         throw Object.assign(new Error('environment must be a single environment name'), { statusCode: 400, hint: 'the slug from GET /api/environments' });
       }
-      // resolve exactly as the engine does — slug()-normalize, then confirm the file exists — so the
-      // web guard accepts what the engine accepts and rejects traversal-shaped input up front
+      // resolve exactly as the engine does — slug()-normalize, then slug-match against the dir's
+      // *.md files (a hand-authored "Rain_City.md" answers to "rain-city", just like loadEnvironment)
+      // — so the web guard accepts what the engine accepts and rejects traversal-shaped input up front
       environmentSlug = toSlug(environment);
-      if (!environmentSlug || !fs.existsSync(path.join(app.ctx.environmentsDir, `${environmentSlug}.md`))) {
+      let envFiles = [];
+      try { envFiles = fs.readdirSync(app.ctx.environmentsDir).filter((f) => f.endsWith('.md')); } catch { /* no dir yet */ }
+      if (!environmentSlug || !envFiles.some((f) => toSlug(f.replace(/\.md$/, '')) === environmentSlug)) {
         throw Object.assign(new Error(`unknown environment "${environment}"`), { statusCode: 400, hint: 'create the environment on the Cast page first' });
       }
     }

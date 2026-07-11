@@ -37,6 +37,15 @@ export async function registerEnvironmentsRoutes(app) {
     if (!SLUG_FILE.test(slugName)) throw Object.assign(new Error('not an environment id'), { statusCode: 400, hint: 'lowercase letters, digits and dashes' });
     return path.join(environmentsDir, `${slugName}.md`);
   };
+  /** Resolve an id to the on-disk file the ENGINE would load: loadEnvironment slug()-maps every
+   *  *.md in the dir, so a hand-authored "Rain_City.md" answers to "rain-city". The API must
+   *  resolve (and collide) exactly the same way — probing only for the literal <slug>.md would
+   *  list a file it then can't edit, delete, or plan with. Returns null when nothing matches. */
+  const resolveFile = (id, slug) => {
+    if (!SLUG_FILE.test(id)) throw Object.assign(new Error('not an environment id'), { statusCode: 400, hint: 'lowercase letters, digits and dashes' });
+    const hit = listEnvironments().find((f) => slug(f.replace(/\.md$/, '')) === id);
+    return hit ? path.join(environmentsDir, hit) : null;
+  };
 
   // ——— CRUD ———
 
@@ -60,15 +69,16 @@ export async function registerEnvironmentsRoutes(app) {
     const eslug = slug(name);
     if (!eslug) throw Object.assign(new Error('that name has no usable characters'), { statusCode: 400, hint: 'use letters or numbers' });
     const file = envPath(eslug);
-    if (fs.existsSync(file)) throw Object.assign(new Error(`"${name}" already exists`), { statusCode: 409, hint: 'edit the existing environment, or pick another name' });
+    if (resolveFile(eslug, slug)) throw Object.assign(new Error(`"${name}" already exists`), { statusCode: 409, hint: 'edit the existing environment, or pick another name' });
     fs.mkdirSync(environmentsDir, { recursive: true });
     fs.writeFileSync(file, `# ${name}\n\n${stripLeadingHeading(description, name)}\n`.replace(/\n+$/, '\n'));
     return reply.code(201).send({ slug: eslug });
   });
 
   app.put('/api/environments/:slug', async (req) => {
-    const file = envPath(req.params.slug);
-    if (!fs.existsSync(file)) throw Object.assign(new Error('no such environment'), { statusCode: 404, hint: 'GET /api/environments lists them' });
+    const { slug } = await host('util.js');
+    const file = resolveFile(req.params.slug, slug);
+    if (!file) throw Object.assign(new Error('no such environment'), { statusCode: 404, hint: 'GET /api/environments lists them' });
     // name/slug are immutable after creation (like cast) — keep the existing heading.
     const name = displayName(fs.readFileSync(file, 'utf8'), req.params.slug);
     const description = String(req.body?.description ?? '').trim();
@@ -77,8 +87,9 @@ export async function registerEnvironmentsRoutes(app) {
   });
 
   app.delete('/api/environments/:slug', async (req) => {
-    const file = envPath(req.params.slug);
-    if (!fs.existsSync(file)) throw Object.assign(new Error('no such environment'), { statusCode: 404, hint: 'GET /api/environments lists them' });
+    const { slug } = await host('util.js');
+    const file = resolveFile(req.params.slug, slug);
+    if (!file) throw Object.assign(new Error('no such environment'), { statusCode: 404, hint: 'GET /api/environments lists them' });
     fs.rmSync(file);
     return { deleted: req.params.slug };
   });
