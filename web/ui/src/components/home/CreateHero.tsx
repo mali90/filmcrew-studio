@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type R
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import clsx from 'clsx';
+import { Mountain } from 'lucide-react';
 import type { Aspect, Backend } from '../../../../shared/api-types';
 import { api, ApiClientError } from '../../api/client';
 import { Button } from '../ui/Button';
@@ -57,6 +58,14 @@ export function CreateHero({ idea, onIdeaChange, ideaRef }: {
   const toggleCast = (slug: string) =>
     setCastSlugs((prev) => (prev.includes(slug) ? prev.filter((s) => s !== slug) : [...prev, slug]));
 
+  // "Set in" picker — a single environment anchors the plan's look. Zero environments renders nothing.
+  const environmentsQuery = useQuery({ queryKey: ['environments'], queryFn: api.environments });
+  const environments = environmentsQuery.data?.environments ?? [];
+  const [envSlug, setEnvSlug] = useState<string | null>(null);
+  const selectedEnv = environments.find((e) => e.slug === envSlug) ?? null;
+  // single-select: clicking the selected chip again clears the whole selection
+  const selectEnv = (slug: string) => setEnvSlug((prev) => (prev === slug ? null : slug));
+
   const create = useMutation({
     mutationFn: api.createRun,
     onSuccess: ({ runId }) => navigate(`/runs/${runId}`),
@@ -80,6 +89,9 @@ export function CreateHero({ idea, onIdeaChange, ideaRef }: {
       aspect,
       durationS: durationMode === 'custom' && Number.isFinite(customS) ? clampDuration(customS) : null,
       ...(castSlugs.length ? { cast: castSlugs } : {}),
+      // derived from the LIVE list, not raw envSlug state — an environment deleted while Home is
+      // mounted drops out of the payload instead of 400-ing every submit until a reload
+      ...(selectedEnv ? { environment: selectedEnv.slug } : {}),
     });
   };
 
@@ -150,6 +162,42 @@ export function CreateHero({ idea, onIdeaChange, ideaRef }: {
                 {`${selectedNoRefs.map((c) => c.name).join(' & ')} ${selectedNoRefs.length > 1 ? 'have' : 'has'} no reference images — their look will vary between shots.`}
               </span>
             )}
+          </div>
+        )}
+
+        {environments.length > 0 && (
+          <div className="flex flex-col gap-1.5">
+            <span className="text-caption font-medium text-ink-muted">Set in</span>
+            <div role="radiogroup" aria-label="Set in" className="flex max-h-[76px] flex-wrap gap-1.5 overflow-y-auto">
+              {environments.map((e) => {
+                const selected = envSlug === e.slug;
+                return (
+                  <button
+                    key={e.slug}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    onClick={() => selectEnv(e.slug)}
+                    className={clsx(
+                      'inline-flex h-8 items-center gap-1.5 rounded-full border px-2.5 py-0 text-label transition-colors duration-[120ms]',
+                      selected
+                        ? 'border-accent bg-[var(--accent-soft)] text-ink'
+                        : 'border-line bg-surface-1 text-ink-secondary hover:border-line-strong',
+                    )}
+                  >
+                    <Mountain size={14} aria-hidden className={selected ? 'text-accent' : 'text-ink-muted'} />
+                    {e.name}
+                  </button>
+                );
+              })}
+            </div>
+            <span className="text-caption text-ink-muted">
+              {!selectedEnv
+                ? 'Optional — pick an environment to anchor the plan’s look.'
+                : selectedCast.length > 0
+                  ? `Set in ${selectedEnv.name} — steers the world; ${selectedCast.map((c) => c.name).join(' & ')}’s own world notes take a back seat.`
+                  : `${selectedEnv.name} — its mood, light and palette will guide every shot.`}
+            </span>
           </div>
         )}
 

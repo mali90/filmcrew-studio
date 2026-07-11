@@ -44,6 +44,7 @@ const config = {
     maxFix: numEnv('ENGINE_MAX_FIX', 3),   // per-agent validation-retry attempts
     maxQc: numEnv('ENGINE_MAX_QC', 2),     // QC re-run cycles
     profilesDir: process.env.PROFILES_DIR || './profiles', // optional subject 'bible' markdown (one file per character)
+    environmentsDir: process.env.ENVIRONMENTS_DIR || './environments', // optional world/mood/style 'bible' markdown (one file per environment)
   },
 
   // ── Render backend selector — which video model renders spec.kling.jobs[] (both ride the fal

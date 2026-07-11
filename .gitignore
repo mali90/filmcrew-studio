@@ -10,6 +10,7 @@ voices/*.mp3
 voices/*.wav
 voices/voices.json
 profiles/*.md
+environments/*.md
 elements/references/*
 !voices/README.md
 !**/.gitkeep
@@ -17,6 +18,8 @@ elements/references/*
 !profiles/wren.md
 !elements/references/wren-*
 !voices/wren.mp3
+# — bundled sample environment: "Neon City" (users' own environments stay local) —
+!environments/neon-city.md
 
 # dependencies
 node_modules/

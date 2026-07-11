@@ -25,7 +25,7 @@ web/
     app.js              buildApp() factory — all deps injectable (fastify.inject tests)
     lib/                run-scan (disk→status), run-service (orchestration), job-manager (CLI
                         children in 3 FIFO lanes), ring-log, artifact-watch, estimator, env-settings
-    routes/             setup/settings/doctor · runs · actions · media (range-served) · SSE · cast
+    routes/             setup/settings/doctor · runs · actions · media (range-served) · SSE · cast · environments
     dev/demo.js         the zero-spend dev server (mock fal + fake LLM; drives the Playwright e2e)
   ui/                   React 18 + TypeScript + Tailwind (CSS-variable tokens), vitest + Testing
                         Library + MSW, Playwright e2e; fonts vendored locally (no CDN)
@@ -57,7 +57,10 @@ See `web/shared/api-types.ts` for shapes. Routes: `GET /api/health`, setup
 (`/api/runs/:id/events`, `/api/events`), media (`/api/media/runs/*|out/*|elements/*`, range-served),
 cast (`/api/cast/characters|references|voices|profiles`, profile CRUD via
 `POST/PUT/DELETE /api/cast/profiles[/:slug]`, asset linking via
-`POST /api/cast/references/:id/assign` and `POST /api/cast/voices/:key/assign`).
+`POST /api/cast/references/:id/assign` and `POST /api/cast/voices/:key/assign`),
+environments (`GET /api/environments`, descriptive-only setting CRUD via
+`POST /api/environments` and `PUT/DELETE /api/environments/:slug`; a run's optional
+`environment` slug is validated against disk before any LLM spend).
 Errors are always `{error, hint}`.
 `POST /api/runs/:id/assemble` also accepts a `{composition: {jobId: takeId}}` body to stitch a
 mixed cut from existing takes without re-rendering — an API-level feature for now (the UI's

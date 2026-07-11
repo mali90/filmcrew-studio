@@ -4,6 +4,7 @@
 // children (the host config.js freezes process.env at import — children re-read .env fresh).
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import Fastify from 'fastify';
 import fastifyStatic from '@fastify/static';
 import fastifyMultipart from '@fastify/multipart';
@@ -16,12 +17,14 @@ import { registerMediaRoutes } from './routes/media.js';
 import { registerEventRoutes } from './routes/events.js';
 import { registerSetupRoutes } from './routes/setup.js';
 import { registerCastRoutes } from './routes/cast.js';
+import { registerEnvironmentsRoutes } from './routes/environments.js';
 
 export async function buildApp({
   root,                       // host repo root (src/cli lives here; children cwd)
   runsDir, outDir,
   envRoot,                    // where .env lives (defaults to root; the demo isolates it)
   profilesDir,                // character profiles (defaults to <root>/profiles; demo/tests isolate)
+  environmentsDir,            // world/mood/style bibles (defaults to <root>/environments; demo/tests isolate)
   elementsRoot,               // reference images + media serving root (defaults to <root>/elements)
   voicesFile,                 // voices.json (defaults to <root>/voices/voices.json)
   childEnv = { PATH: process.env.PATH, HOME: process.env.HOME },
@@ -35,6 +38,24 @@ export async function buildApp({
   outDir = path.resolve(outDir ?? path.join(root, 'out'));
   envRoot = path.resolve(envRoot ?? root);
   profilesDir = path.resolve(profilesDir ?? path.join(root, 'profiles'));
+  // Precedence: explicit param (demo/tests) → ENVIRONMENTS_DIR in the server's own env → the
+  // project's .env at envRoot (the documented override — read as DATA like the Settings page
+  // does; the server still never loads .env into its process) → <root>/environments. All
+  // root-anchored, like RUNS_DIR/OUT_DIR in server.js.
+  if (environmentsDir == null && !process.env.ENVIRONMENTS_DIR) {
+    try {
+      // parse with dotenv ITSELF (a root dependency) — children read .env through dotenv, so the
+      // exact same grammar (quotes, comments, `export` prefixes, last-assignment-wins) must decide
+      // what the API sees. Importing dotenv's main module does NOT load .env into this process
+      // (only the `dotenv/config` entrypoint auto-runs) — the server still treats .env as data.
+      const dotenvMod = await import(pathToFileURL(path.join(root, 'node_modules', 'dotenv', 'lib', 'main.js')).href);
+      const dotenvParse = dotenvMod.parse ?? dotenvMod.default?.parse;
+      const configured = dotenvParse(fs.readFileSync(path.join(envRoot, '.env'), 'utf8')).ENVIRONMENTS_DIR;
+      if (configured) environmentsDir = path.resolve(root, configured);
+    } catch { /* no .env — fall through to the default */ }
+  }
+  environmentsDir = path.resolve(environmentsDir
+    ?? (process.env.ENVIRONMENTS_DIR ? path.resolve(root, process.env.ENVIRONMENTS_DIR) : path.join(root, 'environments')));
   elementsRoot = path.resolve(elementsRoot ?? path.join(root, 'elements'));
   voicesFile = path.resolve(voicesFile ?? path.join(root, 'voices', 'voices.json'));
   fs.mkdirSync(runsDir, { recursive: true });
@@ -43,6 +64,11 @@ export async function buildApp({
   if (envRoot !== path.resolve(root)) childEnv = { ...childEnv, DOTENV_CONFIG_PATH: path.join(envRoot, '.env') };
   // isolated cast roots: engine/mint children must see the SAME profiles/refs/voices the API serves
   if (profilesDir !== path.resolve(root, 'profiles')) childEnv = { ...childEnv, PROFILES_DIR: profilesDir };
+  // ENVIRONMENTS_DIR is ALWAYS pinned (not just when isolated): the server process never loads
+  // .env, so an .env override would otherwise steer engine children to a different dir than the
+  // one the API lists/validates and every "Set in" run would fail as unknown. An explicit child
+  // env var wins over .env (dotenv never overwrites) — API and children stay on the same dir.
+  childEnv = { ...childEnv, ENVIRONMENTS_DIR: environmentsDir };
   if (elementsRoot !== path.resolve(root, 'elements')) childEnv = { ...childEnv, ELEMENTS_REFERENCES_DIR: path.join(elementsRoot, 'references') };
   if (voicesFile !== path.resolve(root, 'voices', 'voices.json')) childEnv = { ...childEnv, VOICES_DIR: path.dirname(voicesFile) };
 
@@ -52,7 +78,7 @@ export async function buildApp({
   const mgr = createJobManager({ spawnCli, onEvent: (runId, evt) => svc?.onEvent(runId, evt) });
   svc = createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr, bus, isAlive });
 
-  app.decorate('ctx', { root, runsDir, outDir, envRoot, profilesDir, elementsRoot, voicesFile, childEnv, svc, mgr, bus, lifecycle });
+  app.decorate('ctx', { root, runsDir, outDir, envRoot, profilesDir, environmentsDir, elementsRoot, voicesFile, childEnv, svc, mgr, bus, lifecycle });
 
   // App lifecycle — quit stops the server (children get SIGTERM + 5s grace via close hooks);
   // restart respawns the same process and the UI reconnects. Only real servers wire `lifecycle`.
@@ -86,6 +112,7 @@ export async function buildApp({
   registerMediaRoutes(app);
   registerEventRoutes(app);
   await registerCastRoutes(app);
+  await registerEnvironmentsRoutes(app);
 
   // Production: serve the built SPA on the same origin; client routes fall back to index.html.
   if (uiDist && fs.existsSync(path.join(uiDist, 'index.html'))) {

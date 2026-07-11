@@ -38,6 +38,7 @@ export interface Manifest {
   backend: Backend;
   aspect: Aspect;
   durationS: number | null;                 // null = auto (the engine decides)
+  environment?: string | null;              // selected world/mood/style bible slug (null = none) — revisions re-inject it
   createdAt: string;
   revisions: { id: string; feedback: string | null; scope: string; owners: number[]; createdAt: string }[];
   takes: { id: string; mode: 'probe' | 'full' | 'job'; jobId?: string; cascade?: boolean; revision: string | null; createdAt: string; estUsd?: number; feedback?: string | null }[];
@@ -88,6 +89,8 @@ export interface Shot {
 export interface ProductionSpec {
   spec_version: string;
   render_backend?: Backend;
+  cast?: string[];                          // engine-stamped: the run's starred slugs (revisions re-inject them)
+  environment?: string;                     // engine-stamped: the run's "Set in" slug (revisions re-inject it)
   project: { title: string; logline?: string; format?: string; duration_target_s?: number; aspect_ratio?: Aspect; hook?: string; payoff?: string; cast?: string[]; cover_frame_s?: number };
   shots: Shot[];
   audio?: { voice?: { lines?: { shot_id?: string; at_s?: number; text: string; speaker?: string; tone?: string }[] } };
@@ -124,7 +127,7 @@ export type GlobalEvent =
   | { type: 'run-activity'; runId: string; eventType: string };
 
 // ── Endpoint payloads ──
-export interface CreateRunBody { idea: string; backend: Backend; aspect: Aspect; durationS: number | null; cast?: string[] }
+export interface CreateRunBody { idea: string; backend: Backend; aspect: Aspect; durationS: number | null; cast?: string[]; environment?: string }
 export interface Estimate { perJob: { jobId: string; seconds: number; usd: number }[]; totalUsd: number; currency: 'USD'; label: 'estimate' }
 export interface SetupStatus {
   envSource: '.env' | '.env.example' | 'none';
@@ -173,6 +176,13 @@ export interface CharactersResponse {
   characters: CharacterView[];
   unassigned: { references: ReferenceRow[]; voices: VoiceRow[] };
 }
+/** An environment = environments/<slug>.md — a descriptive-only world/mood/style bible (no assets). */
+export interface EnvironmentView {
+  slug: string;
+  name: string;
+  description: string;         // the full environment markdown (first heading = display name)
+}
+export interface EnvironmentsResponse { environments: EnvironmentView[] }
 export interface ApiError { error: string; hint: string }
 
 // The 8 agents, in pipeline order — names/roles mirror engine/agents/*.md.

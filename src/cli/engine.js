@@ -27,12 +27,16 @@ async function main() {
   const durationTargetS = args.duration && args.duration !== true ? Number(args.duration) : undefined;
   const aspectRatio = str('aspect');
   const cast = str('cast')?.split(',').map((s) => s.trim()).filter(Boolean); // star these profiles (comma-separated names)
+  const environment = str('environment'); // a SINGLE world/mood/style bible (not comma-split — exactly one environment per idea)
+  // an explicit flag with no value (bare or "") must fail here, BEFORE any LLM spend — silently
+  // planning without the world the user asked for would waste the whole paid planning pass
+  if ('environment' in args && environment === undefined) throw new Error('--environment needs a value — e.g. --environment neon-city (exactly one per idea).');
 
   log.step(`Content Engine — run dir ${path.relative(config.root, runDir)}`);
   log.info(`Brief: ${brief.slice(0, 200)}${brief.length > 200 ? '…' : ''}`);
 
   const backend = str('backend');
-  const { spec, passed } = await runEngine({ brief, runDir, durationTargetS, backend, aspectRatio, cast });
+  const { spec, passed } = await runEngine({ brief, runDir, durationTargetS, backend, aspectRatio, cast, environment });
   if (backend) {
     // Stamp the explicit choice into the persisted spec so re-renders/assembles of this run
     // pick the same backend without the flag.

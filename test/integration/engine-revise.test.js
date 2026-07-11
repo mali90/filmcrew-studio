@@ -3,6 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { neutralizeDotenv } from '../helpers/env.js';
 import { mkTmp } from '../helpers/tmp.js';
@@ -11,8 +12,26 @@ import { ROOT, loadGoldenSpec } from '../helpers/fixtures.js';
 neutralizeDotenv();
 const FAKE = path.join(ROOT, 'test/helpers/fake-llm.mjs');
 fs.chmodSync(FAKE, 0o755);
-Object.assign(process.env, { LLM_PROVIDER: 'claude', LLM_TRANSPORT: 'cli', LLM_CLI_BIN: FAKE, LLM_MODEL: 'fake' });
+// Isolated environments dir (config.js snapshots it at import) — holds the file a revision re-derives
+// from the persisted spec.environment; absent-environment revisions are unaffected (loadEnvironment
+// returns '' when no environment is selected).
+const ENV_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-revise-env-'));
+fs.writeFileSync(path.join(ENV_DIR, 'harbor-town.md'), '# Harbor Town\n\nGrey docks, foghorns, wet cobbles.\n');
+Object.assign(process.env, { LLM_PROVIDER: 'claude', LLM_TRANSPORT: 'cli', LLM_CLI_BIN: FAKE, LLM_MODEL: 'fake', ENVIRONMENTS_DIR: ENV_DIR });
 const { reviseSpec } = await import('../../src/lib/engine.js');
+
+test.after(() => fs.rmSync(ENV_DIR, { recursive: true, force: true }));
+
+test('re-injection: a revision re-derives the environment from the persisted spec and re-stamps it', async () => {
+  const { dir, cleanup } = mkTmp('revise-environment');
+  try {
+    const seed = loadGoldenSpec();
+    seed.environment = 'harbor-town'; // engine-stamped top-level key (parity with spec.cast)
+    const { spec, passed } = await reviseSpec({ spec: seed, runDir: dir, feedback: 'more fog on the water', owners: [2] });
+    assert.equal(passed, true);
+    assert.equal(spec.environment, 'harbor-town', 'the revised spec still carries the environment slug');
+  } finally { cleanup(); }
+});
 
 test('explicit owners: re-runs exactly those agents + QC, with the feedback in their prompts', async () => {
   const { dir, cleanup } = mkTmp('revise-owners');

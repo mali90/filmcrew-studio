@@ -97,6 +97,19 @@ export function contextBlock(ctx) {
     '',
     '## Subject profiles (consistency reference — keep subjects/style on-model)',
     ctx.profilesText || '(none provided)',
+    // The selected environment (the Home "Set in" pick / --environment) is the authoritative
+    // world/mood/style bible. It is the LAST block so it is the final word, and it explicitly
+    // OVERRIDES a character's own "## World & style" notes — the per-idea environment beats the
+    // character's baked-in world when they conflict. Absent unless an environment was selected.
+    ...(ctx.environmentText
+      ? ['',
+         `## Set in — ${ctx.environmentName || 'Environment'} (REQUIRED world/mood/style bible)`,
+         'This is the authoritative setting, mood, lighting, palette, era, and weather for EVERY shot —' +
+           ' build the whole video inside it.',
+         'PRECEDENCE: this environment OVERRIDES any character\'s own "## World & style" notes when they' +
+           ' conflict — the per-idea environment takes priority and wins.',
+         ctx.environmentText]
+      : []),
   ].join('\n');
 }
 
@@ -215,8 +228,24 @@ async function loadProfiles(cast) {
   return parts.join('\n\n---\n\n');
 }
 
+/**
+ * Load the selected environment's world/mood/style bible (environments/<slug>.md). No environment =
+ * '' (planning unchanged). A named environment with no file throws BEFORE any LLM spend — a typo'd
+ * "Set in" must not silently plan without its world (parity with loadProfiles' unknown-cast throw).
+ */
+async function loadEnvironment(environment) {
+  if (!environment) return '';
+  const dir = resolvePath(config.engine.environmentsDir);
+  let files = [];
+  try { files = (await fsp.readdir(dir)).filter((f) => f.endsWith('.md')).sort(); } catch { files = []; }
+  const bySlug = new Map(files.map((f) => [slug(f.replace(/\.md$/, '')), f]));
+  const hit = bySlug.get(slug(environment));
+  if (!hit) throw new Error(`Unknown environment "${environment}" — no file found in ${config.engine.environmentsDir}/ (have: ${[...bySlug.keys()].join(', ') || 'none'}).`);
+  return fsp.readFile(path.join(dir, hit), 'utf8');
+}
+
 /** Validate backend + aspect up-front (BEFORE any LLM spend) and build the shared agent context. */
-async function buildCtx({ brief, backend, aspectRatio, durationTargetS, cast }) {
+export async function buildCtx({ brief, backend, aspectRatio, durationTargetS, cast, environment }) {
   const be = backend ?? config.render.backend;
   if (!RENDER_BACKENDS.includes(be)) {
     throw new Error(`Unknown render backend "${be}" — use one of: ${RENDER_BACKENDS.join(', ')} (RENDER_BACKEND in .env, or --backend).`);
@@ -225,6 +254,10 @@ async function buildCtx({ brief, backend, aspectRatio, durationTargetS, cast }) 
     throw new Error(`Unknown aspect ratio "${aspectRatio}" — use one of: ${ASPECTS.join(', ')}.`);
   }
   const inv = buildInventory();
+  // The environment carries NO reference image, so it is loaded AFTER (and independently of) the
+  // text-to-video decision — enriching a t2v prompt must never flip the render mode. `environment`
+  // is deliberately NOT a param of isTextToVideoPlan below.
+  const environmentText = await loadEnvironment(environment);
   return {
     brief,
     backend: be,
@@ -236,6 +269,9 @@ async function buildCtx({ brief, backend, aspectRatio, durationTargetS, cast }) 
     voicesText: voicesInventoryText(),
     profilesText: await loadProfiles(cast),
     castNames: cast?.length ? [...cast] : null,
+    environmentText,
+    environmentName: (environmentText.match(/^#\s+(.+)$/m)?.[1] ?? '').trim(),
+    environmentSlug: environment ? slug(environment) : null,
   };
 }
 
@@ -253,13 +289,15 @@ function stampAspect(spec, aspectRatio) {
  *   its caps and the incremental validation enforces them. `aspectRatio` (16:9|9:16|1:1): overrides
  *   the config default in the agents' context and is stamped onto the final spec. `cast` (character
  *   names with profiles/<name>.md): narrows the injected profiles to those characters and directs
- *   the agents to star them; unknown names throw before any LLM spend.
+ *   the agents to star them; unknown names throw before any LLM spend. `environment` (a single
+ *   environments/<slug>.md): injects that world/mood/style bible with precedence over character
+ *   world notes and is stamped onto the spec; an unknown slug throws before any LLM spend.
  * @returns {Promise<{spec:object, passed:boolean}>}
  */
-export async function runEngine({ brief, runDir, durationTargetS, backend, aspectRatio, cast, maxFix = config.engine.maxFix, maxQc = config.engine.maxQc }) {
-  // buildCtx rejects a bad backend/aspect/cast (typo'd flag or env) BEFORE any LLM spend —
+export async function runEngine({ brief, runDir, durationTargetS, backend, aspectRatio, cast, environment, maxFix = config.engine.maxFix, maxQc = config.engine.maxQc }) {
+  // buildCtx rejects a bad backend/aspect/cast/environment (typo'd flag or env) BEFORE any LLM spend —
   // otherwise the whole 8-agent plan runs, gets stamped with the bogus name, and only render fails.
-  const ctx = await buildCtx({ brief, backend, aspectRatio, durationTargetS, cast });
+  const ctx = await buildCtx({ brief, backend, aspectRatio, durationTargetS, cast, environment });
   ensureDir(runDir);
 
   let spec = JSON.parse(await fsp.readFile(TEMPLATE, 'utf8'));
@@ -277,6 +315,7 @@ export async function runEngine({ brief, runDir, durationTargetS, backend, aspec
   stampAspect(spec, ctx.aspectRatio);
   spec.render_backend = ctx.backend; // the spec is planned FOR this backend — renders must not silently fall back to the config default
   if (ctx.castNames) spec.cast = ctx.castNames; // revisions re-inject the same starred profiles
+  if (ctx.environmentSlug) spec.environment = ctx.environmentSlug; // revisions re-inject the same world bible
   const final = validateSpec(spec, { upTo: 7, backend: ctx.backend });
   const passed = spec.qc?.status === 'pass' && final.ok;
   await writeJson(path.join(runDir, 'spec.json'), spec);
@@ -368,6 +407,7 @@ export async function reviseSpec({ spec, runDir, feedback, scope, owners, brief,
     aspectRatio: aspectRatio ?? spec?.kling?.aspect_ratio ?? spec?.project?.aspect_ratio,
     durationTargetS: spec.project?.duration_target_s,
     cast: Array.isArray(spec?.cast) && spec.cast.length ? spec.cast : undefined, // same starred profiles as the plan
+    environment: spec?.environment, // re-derive the same world bible from the persisted spec
   });
   ensureDir(runDir);
 
@@ -400,6 +440,7 @@ export async function reviseSpec({ spec, runDir, feedback, scope, owners, brief,
   stampAspect(cur, ctx.aspectRatio);
   cur.render_backend = ctx.backend; // a revision keeps (or deliberately changes) the planned backend — never loses it
   if (ctx.castNames) cur.cast = ctx.castNames;
+  if (ctx.environmentSlug) cur.environment = ctx.environmentSlug; // the revision re-stamps the same world bible
   const final = validateSpec(cur, { upTo: 7, backend: ctx.backend });
   const passed = cur.qc?.status === 'pass' && final.ok;
   await writeJson(path.join(runDir, 'spec.json'), cur);

@@ -9,13 +9,14 @@ export const MANIFEST_V = 1;
 export const MANIFEST_FILE = 'web.json';
 
 /** A fresh manifest for a just-created run. */
-export function newManifest({ idea, backend, aspect, durationS = null, cast = [] }, createdAt = new Date().toISOString()) {
+export function newManifest({ idea, backend, aspect, durationS = null, cast = [], environment = null }, createdAt = new Date().toISOString()) {
   return {
     v: MANIFEST_V,
     idea: String(idea ?? ''),
     backend, aspect,
     durationS, // number of seconds, or null = "auto" (the engine decides)
     cast,     // starred character slugs (their profiles/refs/voices steer the plan)
+    environment, // selected world/mood/style bible slug, or null — the engine injects it, revisions re-inject it
     createdAt,
     revisions: [],  // [{id:'r1', feedback, scope, owners, createdAt}]
     takes: [],      // [{id:'t1', mode:'probe'|'full'|'job', jobId?, revision?, composition?, createdAt, estUsd?}]

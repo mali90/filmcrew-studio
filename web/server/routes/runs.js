@@ -8,6 +8,12 @@ import { estimateRender, estimateUpscale, jobSeconds, readSeedanceResolution } f
 
 const SPEC_FILE_RE = /^(revisions\/r\d+\/)?spec[-\w]*\.json$/;
 
+// Mirror the engine's slug() (src/lib/util.js): the run guard must resolve an environment exactly as
+// the engine will — a display name ("Neon City") resolves like the CLI would, and a traversal-shaped
+// value ("../foo") collapses to a harmless token that is rejected here (before any LLM spend) instead
+// of surfacing mid-plan with a half-written run.
+const toSlug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+
 const dirSize = (dir) => {
   let bytes = 0;
   const walk = (d) => {
@@ -58,7 +64,7 @@ export function registerRunRoutes(app) {
   app.get('/api/runs', async () => ({ runs: svc.list().map(serializeRun) }));
 
   app.post('/api/runs', async (req, reply) => {
-    const { idea, backend = 'kling', aspect = '9:16', durationS = null, cast = [] } = req.body ?? {};
+    const { idea, backend = 'kling', aspect = '9:16', durationS = null, cast = [], environment = null } = req.body ?? {};
     if (!idea || !String(idea).trim()) throw Object.assign(new Error('idea is required'), { statusCode: 400, hint: 'one line is enough — the engine does the rest' });
     if (!['kling', 'seedance'].includes(backend)) throw Object.assign(new Error(`unknown backend "${backend}"`), { statusCode: 400, hint: 'use kling or seedance' });
     if (!['9:16', '16:9', '1:1'].includes(aspect)) throw Object.assign(new Error(`unknown aspect "${aspect}"`), { statusCode: 400, hint: 'use 9:16, 16:9 or 1:1' });
@@ -74,7 +80,23 @@ export function registerRunRoutes(app) {
         throw Object.assign(new Error(`unknown cast member "${c}"`), { statusCode: 400, hint: 'create the character on the Cast page first' });
       }
     }
-    const r = svc.createRun({ idea: String(idea).trim(), backend, aspect, durationS, cast: cast.map((c) => c.trim()) });
+    // exactly one environment per idea (single-select) — if named it must exist NOW, before any LLM spend
+    let environmentSlug = null;
+    if (environment !== null && environment !== undefined) {
+      if (typeof environment !== 'string' || !environment.trim()) {
+        throw Object.assign(new Error('environment must be a single environment name'), { statusCode: 400, hint: 'the slug from GET /api/environments' });
+      }
+      // resolve exactly as the engine does — slug()-normalize, then slug-match against the dir's
+      // *.md files (a hand-authored "Rain_City.md" answers to "rain-city", just like loadEnvironment)
+      // — so the web guard accepts what the engine accepts and rejects traversal-shaped input up front
+      environmentSlug = toSlug(environment);
+      let envFiles = [];
+      try { envFiles = fs.readdirSync(app.ctx.environmentsDir).filter((f) => f.endsWith('.md')); } catch { /* no dir yet */ }
+      if (!environmentSlug || !envFiles.some((f) => toSlug(f.replace(/\.md$/, '')) === environmentSlug)) {
+        throw Object.assign(new Error(`unknown environment "${environment}"`), { statusCode: 400, hint: 'create the environment on the Cast page first' });
+      }
+    }
+    const r = svc.createRun({ idea: String(idea).trim(), backend, aspect, durationS, cast: cast.map((c) => c.trim()), environment: environmentSlug });
     return reply.code(201).send(r);
   });
 

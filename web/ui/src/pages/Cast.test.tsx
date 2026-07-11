@@ -57,7 +57,7 @@ describe('Cast — character grid', () => {
     expect(screen.getByText('Create a character once — name, look, voice — and star them in any video.')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'New character' })).toHaveAttribute('href', '/cast/new');
     // the subtitle sells that a cast is optional
-    expect(screen.getByText('Characters carry a profile, reference images and a voice into every plan. All of it is optional — ideas work fine without a cast.')).toBeInTheDocument();
+    expect(screen.getByText('Characters carry a profile, reference images and a voice into every plan; environments carry a world in words. All of it is optional — ideas work fine without either.')).toBeInTheDocument();
   });
 
   it('renders cards with completeness rows — warn for gaps, fully neutral when complete — linking to the editor', async () => {

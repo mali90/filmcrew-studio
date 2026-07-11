@@ -6,6 +6,7 @@ import RunPage from './pages/Run';
 import LibraryPage from './pages/Library';
 import CastPage from './pages/Cast';
 import CharacterPage from './pages/Character';
+import EnvironmentPage from './pages/Environment';
 import SettingsPage from './pages/Settings';
 import SetupPage from './pages/Setup';
 import { ToastProvider } from './components/ui/Toast';
@@ -37,6 +38,9 @@ export default function App() {
           <Route path="/cast" element={<CastPage />} />
           <Route path="/cast/new" element={<CharacterPage />} />
           <Route path="/cast/:slug" element={<CharacterPage />} />
+          {/* Environment editor lives outside the /cast/* routes so it never shadows /cast/:slug. */}
+          <Route path="/environments/new" element={<EnvironmentPage />} />
+          <Route path="/environments/:slug" element={<EnvironmentPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Route>
         <Route path="/setup" element={<SetupWhenComplete />} />

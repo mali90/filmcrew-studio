@@ -148,3 +148,66 @@ test('engine --cast with an unknown name fails BEFORE any agent runs (no LLM spe
     assert.ok(!fs.existsSync(path.join(dir, 'spec-00.json')), 'no agent output was produced');
   } finally { cleanup(); profiles.cleanup(); }
 });
+
+test('engine --environment: a SINGLE slug injects the environment bible into every agent and the spec remembers it', async () => {
+  const { dir, cleanup } = mkTmp('engine-cli-env');
+  const envs = mkTmp('engine-cli-envs');
+  const dumps = mkTmp('engine-cli-env-dumps');
+  try {
+    fs.writeFileSync(path.join(envs.dir, 'neon-city.md'),
+      '# Neon City\n\nA synth-noir night city. NEON-MARKER\n\n## Avoid\n\nDaylight.');
+    const { code, stdout } = await runCli('src/cli/engine.js',
+      // a single slug — NOT comma-split like --cast (an environment is exactly one world bible)
+      ['--brief', 'a courier races the last train', '--environment', 'neon-city', '--out', dir],
+      { env: {
+        LLM_PROVIDER: 'claude', LLM_TRANSPORT: 'cli', LLM_CLI_BIN: FAKE, LLM_MODEL: 'fake',
+        ENVIRONMENTS_DIR: envs.dir, FAKE_LLM_DUMP: dumps.dir,
+      } });
+    assert.equal(code, 0, stdout);
+    const spec = JSON.parse(fs.readFileSync(path.join(dir, 'spec.json'), 'utf8'));
+    assert.equal(spec.environment, 'neon-city', 'the spec remembers the environment (revisions re-inject it)');
+    const prompts = fs.readdirSync(dumps.dir).map((f) => fs.readFileSync(path.join(dumps.dir, f), 'utf8'));
+    assert.ok(prompts.some((p) => p.includes('NEON-MARKER')), 'the environment bible is in the agent context');
+    // it is presented as the REQUIRED world that takes precedence over a character's own world notes
+    assert.ok(prompts.some((p) => /World & style/.test(p) && /overrid|precedence|priority|wins/i.test(p)),
+      'the agents are told the environment overrides a character\'s own "## World & style"');
+  } finally { cleanup(); envs.cleanup(); dumps.cleanup(); }
+});
+
+test('engine --environment with an unknown slug fails BEFORE any agent runs (no LLM spend)', async () => {
+  const { dir, cleanup } = mkTmp('engine-cli-badenv');
+  const envs = mkTmp('engine-cli-noenv');
+  try {
+    fs.writeFileSync(path.join(envs.dir, 'neon-city.md'), '# Neon City');
+    const { code, stdout, stderr } = await runCli('src/cli/engine.js',
+      ['--brief', 'x', '--environment', 'neon-ciyt', '--out', dir],
+      { env: { LLM_PROVIDER: 'claude', LLM_TRANSPORT: 'cli', LLM_CLI_BIN: FAKE, LLM_MODEL: 'fake', ENVIRONMENTS_DIR: envs.dir } });
+    assert.notEqual(code, 0);
+    assert.match(stderr + stdout, /Unknown environment "neon-ciyt"/);
+    assert.ok(!fs.existsSync(path.join(dir, 'spec-00.json')), 'no agent output was produced');
+  } finally { cleanup(); envs.cleanup(); }
+});
+
+test('engine --environment with NO value fails before any agent runs (explicit flag never silently skipped)', async () => {
+  const { dir, cleanup } = mkTmp('engine-cli-envnoval');
+  try {
+    const { code, stdout, stderr } = await runCli('src/cli/engine.js',
+      ['--brief', 'x', '--out', dir, '--environment'],
+      { env: { LLM_PROVIDER: 'claude', LLM_TRANSPORT: 'cli', LLM_CLI_BIN: FAKE, LLM_MODEL: 'fake' } });
+    assert.notEqual(code, 0);
+    assert.match(stderr + stdout, /--environment needs a value/);
+    assert.ok(!fs.existsSync(path.join(dir, 'spec-00.json')), 'no agent output was produced — nothing was spent');
+  } finally { cleanup(); }
+});
+
+test('engine --environment "" (explicitly empty) fails the same way as a bare flag — no silent skip', async () => {
+  const { dir, cleanup } = mkTmp('engine-cli-envempty');
+  try {
+    const { code, stdout, stderr } = await runCli('src/cli/engine.js',
+      ['--brief', 'x', '--out', dir, '--environment', ''],
+      { env: { LLM_PROVIDER: 'claude', LLM_TRANSPORT: 'cli', LLM_CLI_BIN: FAKE, LLM_MODEL: 'fake' } });
+    assert.notEqual(code, 0);
+    assert.match(stderr + stdout, /--environment needs a value/);
+    assert.ok(!fs.existsSync(path.join(dir, 'spec-00.json')), 'no agent output was produced — nothing was spent');
+  } finally { cleanup(); }
+});
