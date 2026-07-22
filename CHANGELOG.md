@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- **Finalize/upscale now uses the cut you selected**, not always the newest. In review, switching to
+  an earlier cut and clicking Approve (with or without upscale) previously finalized/upscaled the
+  latest take instead — the preview selection never reached the server. The previewed cut is now
+  threaded into `POST /api/runs/:id/approve`, and the finalize points at that cut's master while the
+  upscale runs Topaz on that cut's own render (omitting the cut still finalizes the latest, unchanged).
+
 ## 1.4.0 — 2026-07-11
 
 ### Added
