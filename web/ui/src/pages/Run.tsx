@@ -56,9 +56,11 @@ export default function RunPage() {
   // The cut the reviewer previews (null ⇒ latest) is shared between the stage (preview) and the
   // approve bar (finalize/upscale target) so approving finalizes exactly the cut on screen.
   const [cutId, setCutId] = useState<string | null>(null);
-  // React Router reuses this component across /runs/A → /runs/B; drop the selection so B never
-  // opens on (or approves) a cut id carried over from A.
-  useEffect(() => { setCutId(null); }, [id]);
+  // Drop the selection back to "latest" when the run changes (React Router reuses this component
+  // across /runs/A → /runs/B) OR when a new cut arrives — so after the reviewer re-renders, the bar
+  // targets the freshly paid-for cut instead of clinging to the now-superseded one they had picked.
+  const latestCutId = run?.manifest?.cuts?.at(-1)?.id ?? null;
+  useEffect(() => { setCutId(null); }, [id, latestCutId]);
 
   if (!run) return null; // sub-400ms fetch — no skeleton flash
 

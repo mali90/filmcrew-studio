@@ -487,6 +487,10 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
   function approve(runId, { upscale = false, cut } = {}) {
     const dir = dirFor(runId);
     const run = scanRun(dir, { isAlive });
+    // Never approve while paid work runs: finalizing an older cut would mark the run complete and
+    // hide the re-render/upscale the reviewer is still paying for (this covers the plain path too,
+    // not just the upscale enqueue below).
+    assertNoSpendInFlight(runId);
     // The user finalizes the cut they previewed. `cut` is optional: omitted ⇒ latest (today's
     // behavior, byte-for-byte). Each cut's take dir holds that cut's own immutable composed
     // render.json, so upscaling `renders/<cut.take>/` reproduces exactly that cut; a plain
@@ -515,7 +519,6 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
       emitStatus(runId);
       return { final: m.approved.final, queued: null };
     }
-    assertNoSpendInFlight(runId); // one paid upscale at a time — a second would clobber pendingApprove and mis-stamp the final
     const spec = readJson(path.join(dir, 'spec.json'));
     // snapshot the cut this upscale delivers NOW: for the default (no cut) that's today's latest cut —
     // a free-lane assemble appending a newer cut mid-upscale must not relabel THIS final onto it.
