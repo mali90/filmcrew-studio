@@ -513,6 +513,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
       emitStatus(runId);
       return { final: m.approved.final, queued: null };
     }
+    assertNoSpendInFlight(runId); // one paid upscale at a time — a second would clobber pendingApprove and mis-stamp the final
     const spec = readJson(path.join(dir, 'spec.json'));
     pendingApprove.set(runId, chosen?.id ?? null); // afterDone stamps THIS cut onto approved (null ⇒ latest)
     updateManifest(dir, (m) => {

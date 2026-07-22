@@ -464,6 +464,19 @@ test('approve upscale honors the selected cut: Topaz runs on c1 and records c1',
   assert.ok(fs.existsSync(run.manifest.approved.final), 'the upscaled final exists on disk');
 });
 
+test('upscale estimate is cut-aware: prices the selected cut’s jobs and rejects a bad cut id', { skip: FF ? false : 'ffmpeg not installed' }, async () => {
+  const { runId } = await makeTwoCutRun('price the chosen cut');
+
+  const all = (await get(`/api/runs/${runId}/estimate?mode=upscale`)).json();
+  const c1 = (await get(`/api/runs/${runId}/estimate?mode=upscale&cut=c1`)).json();
+  // both cuts are full (K1+K2), so c1 prices the same jobs as the default — the plumbing carries the cut through
+  assert.equal(c1.totalUsd, all.totalUsd);
+  assert.ok(c1.perJob.length >= 1, 'the selected cut prices its jobs');
+
+  assert.equal((await get(`/api/runs/${runId}/estimate?mode=upscale&cut=../etc`)).statusCode, 400);
+  assert.equal((await get(`/api/runs/${runId}/estimate?mode=upscale&cut=c9`)).statusCode, 400);
+});
+
 test('SSE Last-Event-ID: reconnect replays only the log lines after the cursor', async () => {
   const { runId } = (await post('/api/runs', { idea: 'resume my log', backend: 'kling', aspect: '9:16', durationS: null })).json();
   await waitForStatus(runId, 'plan-ready');

@@ -89,8 +89,8 @@ export const api = {
   deleteRun: (id: string) => del<{ deleted: boolean; bytes: number }>(`/runs/${id}`),
   spec: (id: string, file?: string) => get<unknown>(`/runs/${id}/spec${file ? `?file=${encodeURIComponent(file)}` : ''}`),
   log: (id: string, cursor = 0) => get<{ lines: { cursor: number; line: string }[]; nextCursor: number }>(`/runs/${id}/log?cursor=${cursor}`),
-  estimate: (id: string, q: { mode: string; jobId?: string; cascade?: boolean }) =>
-    get<Estimate>(`/runs/${id}/estimate?mode=${q.mode}${q.jobId ? `&jobId=${q.jobId}` : ''}${q.cascade ? '&cascade=1' : ''}`),
+  estimate: (id: string, q: { mode: string; jobId?: string; cascade?: boolean; cut?: string }) =>
+    get<Estimate>(`/runs/${id}/estimate?mode=${q.mode}${q.jobId ? `&jobId=${q.jobId}` : ''}${q.cascade ? '&cascade=1' : ''}${q.cut ? `&cut=${q.cut}` : ''}`),
 
   render: (id: string, mode: 'probe' | 'full') => post<{ takeId: string; estUsd: number }>(`/runs/${id}/render`, { mode }),
   revise: (id: string, body: { feedback: string; scope?: string }) => post<{ revisionId: string }>(`/runs/${id}/revise`, body),

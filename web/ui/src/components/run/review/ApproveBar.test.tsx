@@ -82,4 +82,36 @@ describe('ApproveBar', () => {
     expect(screen.getByRole('checkbox')).toBeEnabled();
     expect(screen.queryByText(/nothing to upscale/i)).not.toBeInTheDocument();
   });
+
+  it('switching to an already-HD cut cancels a staged upscale — no paid "& upscale"', async () => {
+    const captured = captureApprove();
+    const run = makeRun('review');
+    run.manifest!.cuts = [
+      { id: 'c1', take: 't1', master: '/abs/out/sd.mp4', shortSide: 496, createdAt: '2026-07-04T09:00:00.000Z' },
+      { id: 'c2', take: 't2', master: '/abs/out/hd.mp4', shortSide: 1080, createdAt: '2026-07-04T10:00:00.000Z' },
+    ];
+    const { rerender } = renderReview(<ApproveBar run={run} cutId="c1" />);
+    fireEvent.click(screen.getByRole('checkbox', { name: /Upscale to ~1080p with Topaz/ })); // stage upscale on the SD cut
+
+    rerender(<ApproveBar run={run} cutId="c2" />); // switch preview to the already-HD cut
+    fireEvent.click(screen.getByRole('button', { name: /^Approve$/ })); // plain, free Approve — not "& upscale"
+    await waitFor(() => expect(captured.body).toEqual({ upscale: false, cut: 'c2' }));
+  });
+
+  it('prices the SELECTED cut — the estimate request carries its cut id', async () => {
+    let estimateSearch = '';
+    server.use(
+      http.get('/api/runs/:id/estimate', ({ request }) => {
+        estimateSearch = new URL(request.url).search;
+        return HttpResponse.json({ perJob: [], totalUsd: 1.5, currency: 'USD', label: 'estimate' });
+      }),
+    );
+    const run = makeRun('review');
+    run.manifest!.cuts = [
+      { id: 'c1', take: 't1', master: '/abs/out/a.mp4', shortSide: 496, createdAt: '2026-07-04T09:00:00.000Z' },
+      { id: 'c2', take: 't2', master: '/abs/out/b.mp4', shortSide: 496, createdAt: '2026-07-04T10:00:00.000Z' },
+    ];
+    renderReview(<ApproveBar run={run} cutId="c1" />);
+    await waitFor(() => expect(estimateSearch).toContain('cut=c1'));
+  });
 });

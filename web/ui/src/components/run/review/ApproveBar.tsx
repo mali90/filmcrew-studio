@@ -22,20 +22,24 @@ export function ApproveBar({ run, cutId = null }: { run: RunDetail; cutId?: stri
   // ≥1080 means Topaz has nothing to lift — offering a paid no-op would be a lie.
   const shortSide = selectedCut?.shortSide ?? run.latestRender?.masterShortSide ?? null;
   const alreadyHD = shortSide != null && shortSide >= 1080;
+  // switching to an already-HD cut disables the toggle but leaves `upscale` stale — derive the
+  // real intent so the button, label, price and payload never disagree with the checkbox.
+  const effectiveUpscale = upscale && !alreadyHD;
 
   const upscaleEstimate = useQuery({
-    queryKey: ['estimate', run.id, 'upscale'],
-    queryFn: () => api.estimate(run.id, { mode: 'upscale' }),
+    // price the actual cut being finalized (undefined ⇒ latest, matching approve's default)
+    queryKey: ['estimate', run.id, 'upscale', cutId ?? null],
+    queryFn: () => api.estimate(run.id, { mode: 'upscale', cut: cutId ?? undefined }),
     enabled: !alreadyHD,
   });
 
   const approve = useMutation({
-    mutationFn: () => api.approve(run.id, upscale, cutId ?? undefined),
-    onSuccess: () => toast({ kind: 'success', text: upscale ? 'Approved — upscaling now.' : 'Approved — finalizing now.' }),
+    mutationFn: () => api.approve(run.id, effectiveUpscale, cutId ?? undefined),
+    onSuccess: () => toast({ kind: 'success', text: effectiveUpscale ? 'Approved — upscaling now.' : 'Approved — finalizing now.' }),
     onError: (e) => toast({ kind: 'error', text: e instanceof ApiClientError ? `${e.message} — ${e.hint}` : e.message }),
   });
 
-  const label = `Approve${upscale ? ' & upscale' : ''}`;
+  const label = `Approve${effectiveUpscale ? ' & upscale' : ''}`;
 
   return (
     <section className="rounded-r3 border border-line border-t-line-strong bg-surface-1 p-4">
@@ -62,7 +66,7 @@ export function ApproveBar({ run, cutId = null }: { run: RunDetail; cutId?: stri
       </div>
 
       <div className="mt-3">
-        {upscale ? (
+        {effectiveUpscale ? (
           <PaidButton
             variant="primary"
             size="lg"
@@ -87,7 +91,7 @@ export function ApproveBar({ run, cutId = null }: { run: RunDetail; cutId?: stri
       </div>
 
       <p className="mt-2 text-caption text-ink-muted">
-        {upscale ? '' : 'Approving is free. '}Assembly already happened — approve only finalizes
+        {effectiveUpscale ? '' : 'Approving is free. '}Assembly already happened — approve only finalizes
         (and optionally upscales).
       </p>
     </section>

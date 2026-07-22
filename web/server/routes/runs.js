@@ -140,7 +140,20 @@ export function registerRunRoutes(app) {
     if (!run.spec) throw Object.assign(new Error('no plan yet'), { statusCode: 409, hint: 'estimates come from the plan — wait for planning to finish' });
     const mode = String(req.query.mode ?? 'full');
     if (mode === 'upscale') {
-      const clips = (run.spec.kling?.jobs ?? []).map((j) => ({ jobId: j.job_id, seconds: jobSeconds(run.spec, j.job_id) }));
+      // price the cut that will actually be upscaled: a specific cut upscales only the jobs in its
+      // take's render.json (a partial/probe cut has fewer), so the shown price matches Topaz's work.
+      let jobs = run.spec.kling?.jobs ?? [];
+      const cut = req.query.cut;
+      if (cut) {
+        if (!/^c\d{1,4}$/.test(String(cut))) throw Object.assign(new Error(`"${cut}" is not a cut id`), { statusCode: 400, hint: 'cut ids look like c1, c2, …' });
+        const chosen = (run.manifest?.cuts ?? []).find((c) => c.id === cut);
+        if (!chosen) throw Object.assign(new Error(`cut "${cut}" not found`), { statusCode: 400, hint: 'pick a cut shown in review' });
+        const rjPath = safeChild(runsDir, req.params.id, 'renders', String(chosen.take), 'render.json');
+        const rj = fs.existsSync(rjPath) ? JSON.parse(fs.readFileSync(rjPath, 'utf8')) : null;
+        const inCut = new Set((rj?.jobs ?? []).map((j) => j.jobId ?? j.job));
+        if (inCut.size) jobs = jobs.filter((j) => inCut.has(j.job_id));
+      }
+      const clips = jobs.map((j) => ({ jobId: j.job_id, seconds: jobSeconds(run.spec, j.job_id) }));
       return estimateUpscale(clips);
     }
     return estimateRender(run.spec, {
