@@ -35,6 +35,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
   const watchers = new Map();   // runId → watcher
   const announced = new Map();  // runId → Set<artifact rel> already sent to clients — persists across watcher restarts so a spec block is never lost to a startup race nor re-announced
   const pendingCascade = new Map(); // runId → {takeDir, takeId, jobs:[...remaining], feedback}
+  const pendingApprove = new Map(); // runId → chosen cut id for the in-flight upscale (so afterDone records THAT cut, not the latest)
   const running = new Map();    // runId → Map<queueId, {kind, pid, startedAt}> — lanes can overlap per run
 
   // manifest.activeJob is a single slot; when several lanes work one run (a free assemble beside a
@@ -137,6 +138,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
         }
       } else {
         pendingCascade.delete(runId);
+        pendingApprove.delete(runId); // a failed/cancelled upscale must not stamp its cut onto the next one
       }
       bus.emit(runId, { type: evt.type, kind: evt.kind, ...(evt.type === 'done' ? { result: summarizeResult(evt) } : { message: evt.message }) });
       emitStatus(runId);
@@ -221,8 +223,10 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     }
 
     if (kind === 'upscale') { // approve's paid tail: the upscaled re-assembly is the final
+      const chosenCut = pendingApprove.get(runId) ?? null; // the cut approve() upscaled (null ⇒ latest, the default)
+      pendingApprove.delete(runId);
       updateManifest(dir, (m) => {
-        m.approved = { cut: m.cuts.at(-1)?.id ?? null, final: result.master ?? null, upscaled: true, at: now().toISOString() };
+        m.approved = { cut: chosenCut ?? m.cuts.at(-1)?.id ?? null, final: result.master ?? null, upscaled: true, at: now().toISOString() };
         return m;
       });
       return;
@@ -478,27 +482,45 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     return { queued: enqueueAssemble(runId, takeDir) };
   }
 
-  function approve(runId, { upscale = false } = {}) {
+  function approve(runId, { upscale = false, cut } = {}) {
     const dir = dirFor(runId);
     const run = scanRun(dir, { isAlive });
-    if (!run.latestRender?.masterExists) {
+    // The user finalizes the cut they previewed. `cut` is optional: omitted ⇒ latest (today's
+    // behavior, byte-for-byte). Each cut's take dir holds that cut's own immutable composed
+    // render.json, so upscaling `renders/<cut.take>/` reproduces exactly that cut; a plain
+    // finalize points at the cut's existing master. `cut` is only ever compared in a .find() —
+    // never used to build a path (that comes from chosen.take) — so there is no traversal risk.
+    const m0 = readManifest(dir);
+    const cuts = m0?.cuts ?? [];
+    if (cut != null && !/^c\d{1,4}$/.test(String(cut))) {
+      throw Object.assign(new Error(`"${cut}" is not a cut id`), { statusCode: 400, hint: 'cut ids look like c1, c2, …' });
+    }
+    const chosen = cut ? cuts.find((c) => c.id === cut) : null;
+    if (cut && !chosen) {
+      throw Object.assign(new Error(`cut "${cut}" not found`), { statusCode: 400, hint: 'pick a cut shown in review' });
+    }
+    const fromDir = chosen?.take ? path.join(dir, 'renders', chosen.take) : run.latestRender?.dir;
+    const master = chosen?.master ?? run.latestRender?.master;
+    const masterExists = chosen ? !!(chosen.master && fs.existsSync(chosen.master)) : !!run.latestRender?.masterExists;
+    if (!master || !masterExists) {
       throw Object.assign(new Error('nothing to approve — no assembled master exists'), { statusCode: 409, hint: 'render and let the stitch finish first (assemble is free)' });
     }
     if (!upscale) {
       const m = updateManifest(dir, (mm) => {
-        mm.approved = { cut: mm.cuts.at(-1)?.id ?? null, final: run.latestRender.master, upscaled: false, at: now().toISOString() };
+        mm.approved = { cut: chosen?.id ?? mm.cuts.at(-1)?.id ?? null, final: master, upscaled: false, at: now().toISOString() };
         return mm;
       });
       emitStatus(runId);
       return { final: m.approved.final, queued: null };
     }
     const spec = readJson(path.join(dir, 'spec.json'));
+    pendingApprove.set(runId, chosen?.id ?? null); // afterDone stamps THIS cut onto approved (null ⇒ latest)
     updateManifest(dir, (m) => {
       m.costLedger.push({ ts: now().toISOString(), action: 'upscale', estUsd: null, note: 'topaz per-clip — see estimate' });
       m.lastError = null;
       return m;
     });
-    return { final: null, queued: enqueueAssemble(runId, run.latestRender.dir, { upscale: true, suffix: 'final' }), spec: !!spec };
+    return { final: null, queued: enqueueAssemble(runId, fromDir, { upscale: true, suffix: 'final' }), spec: !!spec };
   }
 
   function cancel(runId) {

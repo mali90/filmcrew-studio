@@ -3,7 +3,7 @@
 // useRunEvents invalidates it on every lifecycle edge).
 import { useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import type { RunDetail } from '../../../shared/api-types';
 import { api } from '../api/client';
 import { useRunEvents } from '../api/useRunEvents';
@@ -52,6 +52,10 @@ export default function RunPage() {
     enabled: Boolean(id),
   });
   const run = live.run ?? runQ.data?.run ?? null;
+
+  // The cut the reviewer previews (null ⇒ latest) is shared between the stage (preview) and the
+  // approve bar (finalize/upscale target) so approving finalizes exactly the cut on screen.
+  const [cutId, setCutId] = useState<string | null>(null);
 
   if (!run) return null; // sub-400ms fetch — no skeleton flash
 
@@ -132,7 +136,7 @@ export default function RunPage() {
     case 'review':
       main = (
         <>
-          <div id="section-review"><ReviewStage run={run} /></div>
+          <div id="section-review"><ReviewStage run={run} cutId={cutId} setCutId={setCutId} /></div>
           <LogViewer run={run} live={live} />
         </>
       );
@@ -140,7 +144,7 @@ export default function RunPage() {
         <>
           <ChangeRequestPanel run={run} />
           <TakesHistory run={run} />
-          <ApproveBar run={run} />
+          <ApproveBar run={run} cutId={cutId} />
         </>
       );
       break;

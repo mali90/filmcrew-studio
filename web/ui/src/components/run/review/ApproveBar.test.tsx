@@ -57,4 +57,29 @@ describe('ApproveBar', () => {
     fireEvent.click(approve);
     await waitFor(() => expect(captured.body).toEqual({ upscale: true }));
   });
+
+  it('finalizes the SELECTED cut — the previewed cut id rides the approve payload', async () => {
+    const captured = captureApprove();
+    const run = makeRun('review');
+    run.manifest!.cuts = [
+      { id: 'c1', take: 't1', master: '/abs/out/ocean-t1.mp4', shortSide: 496, createdAt: '2026-07-04T09:00:00.000Z' },
+      { id: 'c2', take: 't2', master: '/abs/out/ocean.mp4', shortSide: 496, createdAt: '2026-07-04T10:00:00.000Z' },
+    ];
+    renderReview(<ApproveBar run={run} cutId="c1" />);
+
+    fireEvent.click(screen.getByRole('button', { name: /^Approve$/ }));
+    await waitFor(() => expect(captured.body).toEqual({ upscale: false, cut: 'c1' }));
+  });
+
+  it('the already-HD guard follows the SELECTED cut, not just the latest', () => {
+    const run = makeRun('review');
+    run.manifest!.cuts = [
+      { id: 'c1', take: 't1', master: '/abs/out/ocean-t1.mp4', shortSide: 496, createdAt: '2026-07-04T09:00:00.000Z' },
+      { id: 'c2', take: 't2', master: '/abs/out/ocean.mp4', shortSide: 1080, createdAt: '2026-07-04T10:00:00.000Z' },
+    ];
+    // selecting the SD cut c1 must re-enable the upscale even though the latest cut c2 is already HD
+    renderReview(<ApproveBar run={run} cutId="c1" />);
+    expect(screen.getByRole('checkbox')).toBeEnabled();
+    expect(screen.queryByText(/nothing to upscale/i)).not.toBeInTheDocument();
+  });
 });

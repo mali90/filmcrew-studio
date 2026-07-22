@@ -97,7 +97,8 @@ export const api = {
   rerenderJob: (id: string, body: { jobId: string; cascade?: boolean; feedback?: string }) =>
     post<{ takeId: string; estUsd: number; cascadeJobs: string[] }>(`/runs/${id}/rerender-job`, body),
   assemble: (id: string, composition?: Record<string, string>) => post<unknown>(`/runs/${id}/assemble`, { composition }),
-  approve: (id: string, upscale: boolean) => post<{ final: string | null }>(`/runs/${id}/approve`, { upscale }),
+  approve: (id: string, upscale: boolean, cut?: string) =>
+    post<{ final: string | null }>(`/runs/${id}/approve`, { upscale, ...(cut ? { cut } : {}) }),
   cancel: (id: string) => post<{ cancelled: 'queued' | 'active' | 'stale' | false }>(`/runs/${id}/cancel`),
   dismissError: (id: string) => post<{ dismissed: boolean }>(`/runs/${id}/dismiss-error`),
   replan: (id: string) => post<{ queued: unknown }>(`/runs/${id}/plan`),

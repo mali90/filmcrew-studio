@@ -12,11 +12,14 @@ import { timeAgo } from '../../../lib/format';
 import { jobSeconds, outMediaUrl } from './lib';
 import { PaidButton } from './PaidButton';
 
-export function ReviewStage({ run }: { run: RunDetail }) {
+export function ReviewStage({ run, cutId, setCutId }: {
+  run: RunDetail;
+  cutId: string | null;
+  setCutId: (id: string | null) => void;
+}) {
   const { toast } = useToast();
   const videoRef = useRef<HTMLVideoElement>(null);
   const [switcherOpen, setSwitcherOpen] = useState(false);
-  const [cutId, setCutId] = useState<string | null>(null);
 
   const cuts = useMemo(() => [...(run.manifest?.cuts ?? [])].reverse(), [run.manifest?.cuts]); // newest first
   const latestCut = cuts[0] ?? null;

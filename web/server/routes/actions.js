@@ -45,7 +45,7 @@ export function registerActionRoutes(app) {
 
   app.post('/api/runs/:id/approve', async (req, reply) => {
     guard(req);
-    const r = svc.approve(req.params.id, { upscale: !!req.body?.upscale });
+    const r = svc.approve(req.params.id, { upscale: !!req.body?.upscale, cut: req.body?.cut });
     return r.queued ? reply.code(202).send(r) : r; // 202 = paid upscale queued; 200 = recorded instantly
   });
 

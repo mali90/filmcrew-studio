@@ -9,14 +9,18 @@ import { useToast } from '../../ui/Toast';
 import { usd } from '../../../lib/format';
 import { PaidButton } from './PaidButton';
 
-export function ApproveBar({ run }: { run: RunDetail }) {
+export function ApproveBar({ run, cutId = null }: { run: RunDetail; cutId?: string | null }) {
   const { toast } = useToast();
   const [upscale, setUpscale] = useState(false);
   const checkboxId = useId();
 
-  // the delivered master's short side: the current cut's record, else the take's render.json.
+  // the cut being finalized: the reviewer's selection, else the latest (manifest cuts are oldest-first)
+  const cuts = run.manifest?.cuts ?? [];
+  const selectedCut = (cutId && cuts.find((c) => c.id === cutId)) || cuts.at(-1) || null;
+
+  // the delivered master's short side: the selected cut's record, else the take's render.json.
   // ≥1080 means Topaz has nothing to lift — offering a paid no-op would be a lie.
-  const shortSide = run.manifest?.cuts?.at(-1)?.shortSide ?? run.latestRender?.masterShortSide ?? null;
+  const shortSide = selectedCut?.shortSide ?? run.latestRender?.masterShortSide ?? null;
   const alreadyHD = shortSide != null && shortSide >= 1080;
 
   const upscaleEstimate = useQuery({
@@ -26,7 +30,7 @@ export function ApproveBar({ run }: { run: RunDetail }) {
   });
 
   const approve = useMutation({
-    mutationFn: () => api.approve(run.id, upscale),
+    mutationFn: () => api.approve(run.id, upscale, cutId ?? undefined),
     onSuccess: () => toast({ kind: 'success', text: upscale ? 'Approved — upscaling now.' : 'Approved — finalizing now.' }),
     onError: (e) => toast({ kind: 'error', text: e instanceof ApiClientError ? `${e.message} — ${e.hint}` : e.message }),
   });
