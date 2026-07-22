@@ -17,12 +17,14 @@ export function ApproveBar({ run, cutId = null }: { run: RunDetail; cutId?: stri
   // the cut being finalized: the reviewer's selection, else the latest (manifest cuts are oldest-first)
   const cuts = run.manifest?.cuts ?? [];
   const selectedCut = (cutId && cuts.find((c) => c.id === cutId)) || cuts.at(-1) || null;
-  const isLatestCut = selectedCut != null && selectedCut.id === cuts.at(-1)?.id;
+  // "the latest render" when no explicit cut is chosen (incl. a recovery run with a master but no
+  // cut record yet), or the chosen cut is the newest one
+  const isLatestSelection = !cutId || selectedCut?.id === cuts.at(-1)?.id;
 
   // the delivered master's short side: the selected cut's own record. Only borrow the latest
-  // render's dimension when the selection IS that latest cut — never bleed one cut's size onto
-  // another (an HD latest must not disable upscaling an older SD cut). Unknown ⇒ offer the upscale.
-  const shortSide = selectedCut?.shortSide ?? (isLatestCut ? run.latestRender?.masterShortSide ?? null : null);
+  // render's dimension for the latest selection — never bleed one cut's size onto an older cut
+  // (an HD latest must not disable upscaling an older SD cut). Unknown ⇒ offer the upscale.
+  const shortSide = selectedCut?.shortSide ?? (isLatestSelection ? run.latestRender?.masterShortSide ?? null : null);
   const alreadyHD = shortSide != null && shortSide >= 1080;
   // switching to an already-HD cut disables the toggle but leaves `upscale` stale — derive the
   // real intent so the button, label, price and payload never disagree with the checkbox.

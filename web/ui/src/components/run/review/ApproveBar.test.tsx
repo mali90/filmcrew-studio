@@ -126,4 +126,13 @@ describe('ApproveBar', () => {
     renderReview(<ApproveBar run={run} cutId="c1" />);
     expect(screen.getByRole('checkbox')).toBeEnabled();
   });
+
+  it('a recovery run with an HD master but no cut record still disables the paid upscale', () => {
+    const run = makeRun('review');
+    run.manifest!.cuts = []; // master exists on latestRender, but afterDone never appended a cut
+    run.latestRender!.masterShortSide = 1080;
+    // no explicit cut ⇒ "latest render" selection, so the HD render metadata still guards against a paid no-op
+    renderReview(<ApproveBar run={run} />);
+    expect(screen.getByRole('checkbox')).toBeDisabled();
+  });
 });

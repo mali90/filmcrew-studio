@@ -517,7 +517,9 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     }
     assertNoSpendInFlight(runId); // one paid upscale at a time — a second would clobber pendingApprove and mis-stamp the final
     const spec = readJson(path.join(dir, 'spec.json'));
-    pendingApprove.set(runId, chosen?.id ?? null); // afterDone stamps THIS cut onto approved (null ⇒ latest)
+    // snapshot the cut this upscale delivers NOW: for the default (no cut) that's today's latest cut —
+    // a free-lane assemble appending a newer cut mid-upscale must not relabel THIS final onto it.
+    pendingApprove.set(runId, chosen?.id ?? cuts.at(-1)?.id ?? null);
     updateManifest(dir, (m) => {
       m.costLedger.push({ ts: now().toISOString(), action: 'upscale', estUsd: null, note: 'topaz per-clip — see estimate' });
       m.lastError = null;
