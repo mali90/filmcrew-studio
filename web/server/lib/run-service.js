@@ -138,7 +138,9 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
         }
       } else {
         pendingCascade.delete(runId);
-        pendingApprove.delete(runId); // a failed/cancelled upscale must not stamp its cut onto the next one
+        // only an UPSCALE failure clears its own cut slot — a sibling free-lane job erroring beside an
+        // in-flight upscale must not drop the upscale's selected-cut association (→ wrong approved.cut).
+        if (evt.kind === 'upscale') pendingApprove.delete(runId);
       }
       bus.emit(runId, { type: evt.type, kind: evt.kind, ...(evt.type === 'done' ? { result: summarizeResult(evt) } : { message: evt.message }) });
       emitStatus(runId);

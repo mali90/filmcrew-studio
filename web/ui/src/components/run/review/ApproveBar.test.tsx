@@ -114,4 +114,16 @@ describe('ApproveBar', () => {
     renderReview(<ApproveBar run={run} cutId="c1" />);
     await waitFor(() => expect(estimateSearch).toContain('cut=c1'));
   });
+
+  it('an older cut without its own shortSide does not inherit the latest render’s HD dimension', () => {
+    const run = makeRun('review');
+    run.latestRender!.masterShortSide = 1080; // the LATEST render is already HD
+    run.manifest!.cuts = [
+      { id: 'c1', take: 't1', master: '/abs/out/old.mp4', createdAt: '2026-07-04T09:00:00.000Z' }, // no shortSide recorded
+      { id: 'c2', take: 't2', master: '/abs/out/new.mp4', shortSide: 1080, createdAt: '2026-07-04T10:00:00.000Z' },
+    ];
+    // selecting the older c1 (unknown resolution) must still OFFER the upscale, not borrow c2/latest HD
+    renderReview(<ApproveBar run={run} cutId="c1" />);
+    expect(screen.getByRole('checkbox')).toBeEnabled();
+  });
 });

@@ -140,20 +140,26 @@ export function registerRunRoutes(app) {
     if (!run.spec) throw Object.assign(new Error('no plan yet'), { statusCode: 409, hint: 'estimates come from the plan — wait for planning to finish' });
     const mode = String(req.query.mode ?? 'full');
     if (mode === 'upscale') {
-      // price the cut that will actually be upscaled: a specific cut upscales only the jobs in its
-      // take's render.json (a partial/probe cut has fewer), so the shown price matches Topaz's work.
-      let jobs = run.spec.kling?.jobs ?? [];
       const cut = req.query.cut;
-      if (cut) {
-        if (!/^c\d{1,4}$/.test(String(cut))) throw Object.assign(new Error(`"${cut}" is not a cut id`), { statusCode: 400, hint: 'cut ids look like c1, c2, …' });
-        const chosen = (run.manifest?.cuts ?? []).find((c) => c.id === cut);
-        if (!chosen) throw Object.assign(new Error(`cut "${cut}" not found`), { statusCode: 400, hint: 'pick a cut shown in review' });
-        const rjPath = safeChild(runsDir, req.params.id, 'renders', String(chosen.take), 'render.json');
-        const rj = fs.existsSync(rjPath) ? JSON.parse(fs.readFileSync(rjPath, 'utf8')) : null;
-        const inCut = new Set((rj?.jobs ?? []).map((j) => j.jobId ?? j.job));
-        if (inCut.size) jobs = jobs.filter((j) => inCut.has(j.job_id));
+      // no cut ⇒ the latest render (approve's default): price every job in the current spec
+      if (!cut) {
+        const clips = (run.spec.kling?.jobs ?? []).map((j) => ({ jobId: j.job_id, seconds: jobSeconds(run.spec, j.job_id) }));
+        return estimateUpscale(clips);
       }
-      const clips = jobs.map((j) => ({ jobId: j.job_id, seconds: jobSeconds(run.spec, j.job_id) }));
+      // a specific cut upscales exactly the clips in ITS take dir, priced by THAT take's own saved
+      // spec (a pre-revision cut may rename jobs or change durations) and only jobs that actually
+      // produced a clip (finishRender skips clipless/failed jobs) — so the price matches Topaz's work.
+      if (!/^c\d{1,4}$/.test(String(cut))) throw Object.assign(new Error(`"${cut}" is not a cut id`), { statusCode: 400, hint: 'cut ids look like c1, c2, …' });
+      const chosen = (run.manifest?.cuts ?? []).find((c) => c.id === cut);
+      if (!chosen) throw Object.assign(new Error(`cut "${cut}" not found`), { statusCode: 400, hint: 'pick a cut shown in review' });
+      const readTakeJson = (name) => {
+        const p = safeChild(runsDir, req.params.id, 'renders', String(chosen.take), name);
+        return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf8')) : null;
+      };
+      const takeSpec = readTakeJson('spec.json') ?? run.spec; // the spec the take was rendered from
+      const clips = ((readTakeJson('render.json')?.jobs) ?? [])
+        .filter((j) => j.clip) // only jobs Topaz will actually process
+        .map((j) => { const jobId = j.jobId ?? j.job; return { jobId, seconds: jobSeconds(takeSpec, jobId) }; });
       return estimateUpscale(clips);
     }
     return estimateRender(run.spec, {
