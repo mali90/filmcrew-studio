@@ -57,4 +57,95 @@ describe('ApproveBar', () => {
     fireEvent.click(approve);
     await waitFor(() => expect(captured.body).toEqual({ upscale: true }));
   });
+
+  it('finalizes the SELECTED cut — the previewed cut id rides the approve payload', async () => {
+    const captured = captureApprove();
+    const run = makeRun('review');
+    run.manifest!.cuts = [
+      { id: 'c1', take: 't1', master: '/abs/out/ocean-t1.mp4', shortSide: 496, createdAt: '2026-07-04T09:00:00.000Z' },
+      { id: 'c2', take: 't2', master: '/abs/out/ocean.mp4', shortSide: 496, createdAt: '2026-07-04T10:00:00.000Z' },
+    ];
+    renderReview(<ApproveBar run={run} cutId="c1" />);
+
+    fireEvent.click(screen.getByRole('button', { name: /^Approve$/ }));
+    await waitFor(() => expect(captured.body).toEqual({ upscale: false, cut: 'c1' }));
+  });
+
+  it('the already-HD guard follows the SELECTED cut, not just the latest', () => {
+    const run = makeRun('review');
+    run.manifest!.cuts = [
+      { id: 'c1', take: 't1', master: '/abs/out/ocean-t1.mp4', shortSide: 496, createdAt: '2026-07-04T09:00:00.000Z' },
+      { id: 'c2', take: 't2', master: '/abs/out/ocean.mp4', shortSide: 1080, createdAt: '2026-07-04T10:00:00.000Z' },
+    ];
+    // selecting the SD cut c1 must re-enable the upscale even though the latest cut c2 is already HD
+    renderReview(<ApproveBar run={run} cutId="c1" />);
+    expect(screen.getByRole('checkbox')).toBeEnabled();
+    expect(screen.queryByText(/nothing to upscale/i)).not.toBeInTheDocument();
+  });
+
+  it('switching to an already-HD cut cancels a staged upscale — no paid "& upscale"', async () => {
+    const captured = captureApprove();
+    const run = makeRun('review');
+    run.manifest!.cuts = [
+      { id: 'c1', take: 't1', master: '/abs/out/sd.mp4', shortSide: 496, createdAt: '2026-07-04T09:00:00.000Z' },
+      { id: 'c2', take: 't2', master: '/abs/out/hd.mp4', shortSide: 1080, createdAt: '2026-07-04T10:00:00.000Z' },
+    ];
+    const { rerender } = renderReview(<ApproveBar run={run} cutId="c1" />);
+    fireEvent.click(screen.getByRole('checkbox', { name: /Upscale to ~1080p with Topaz/ })); // stage upscale on the SD cut
+
+    rerender(<ApproveBar run={run} cutId="c2" />); // switch preview to the already-HD cut (the latest)
+    fireEvent.click(screen.getByRole('button', { name: /^Approve$/ })); // plain, free Approve — not "& upscale"
+    // c2 is the latest cut ⇒ the implicit target (no cut id), matching what the stage previews
+    await waitFor(() => expect(captured.body).toEqual({ upscale: false }));
+  });
+
+  it('prices the SELECTED cut — the estimate request carries its cut id', async () => {
+    let estimateSearch = '';
+    server.use(
+      http.get('/api/runs/:id/estimate', ({ request }) => {
+        estimateSearch = new URL(request.url).search;
+        return HttpResponse.json({ perJob: [], totalUsd: 1.5, currency: 'USD', label: 'estimate' });
+      }),
+    );
+    const run = makeRun('review');
+    run.manifest!.cuts = [
+      { id: 'c1', take: 't1', master: '/abs/out/a.mp4', shortSide: 496, createdAt: '2026-07-04T09:00:00.000Z' },
+      { id: 'c2', take: 't2', master: '/abs/out/b.mp4', shortSide: 496, createdAt: '2026-07-04T10:00:00.000Z' },
+    ];
+    renderReview(<ApproveBar run={run} cutId="c1" />);
+    await waitFor(() => expect(estimateSearch).toContain('cut=c1'));
+  });
+
+  it('selecting the LATEST cut submits the implicit target — matches what the stage previews', async () => {
+    const captured = captureApprove();
+    const run = makeRun('review');
+    run.manifest!.cuts = [
+      { id: 'c1', take: 't1', master: '/abs/out/a.mp4', shortSide: 496, createdAt: '2026-07-04T09:00:00.000Z' },
+      { id: 'c2', take: 't2', master: '/abs/out/b.mp4', shortSide: 496, createdAt: '2026-07-04T10:00:00.000Z' },
+    ];
+    renderReview(<ApproveBar run={run} cutId="c2" />); // the newest cut, which ReviewStage previews as latestRender
+    fireEvent.click(screen.getByRole('button', { name: /^Approve$/ }));
+    await waitFor(() => expect(captured.body).toEqual({ upscale: false })); // no cut id — the implicit latest, not { cut: 'c2' }
+  });
+
+  it('an older cut without its own shortSide does not inherit the latest render’s HD dimension', () => {
+    const run = makeRun('review');
+    run.latestRender!.masterShortSide = 1080; // the LATEST render is already HD
+    run.manifest!.cuts = [
+      { id: 'c1', take: 't1', master: '/abs/out/old.mp4', createdAt: '2026-07-04T09:00:00.000Z' }, // no shortSide recorded
+      { id: 'c2', take: 't2', master: '/abs/out/new.mp4', shortSide: 1080, createdAt: '2026-07-04T10:00:00.000Z' },
+    ];
+    // selecting the older c1 (unknown resolution) must still OFFER the upscale, not borrow c2/latest HD
+    renderReview(<ApproveBar run={run} cutId="c1" />);
+    expect(screen.getByRole('checkbox')).toBeEnabled();
+  });
+
+  it('a recovery run with an HD master but no cut record still disables the paid upscale', () => {
+    const run = makeRun('review');
+    run.manifest!.cuts = []; // master exists on latestRender, but afterDone never appended a cut
+    run.latestRender!.masterShortSide = 1080;
+    // no explicit cut ⇒ "latest render" selection, so the HD render metadata still guards against a paid no-op
+    renderReview(<ApproveBar run={run} />);
+    expect(screen.getByRole('checkbox')).toBeDisabled();
+  });
 });

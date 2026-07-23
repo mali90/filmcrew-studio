@@ -9,29 +9,46 @@ import { useToast } from '../../ui/Toast';
 import { usd } from '../../../lib/format';
 import { PaidButton } from './PaidButton';
 
-export function ApproveBar({ run }: { run: RunDetail }) {
+export function ApproveBar({ run, cutId = null }: { run: RunDetail; cutId?: string | null }) {
   const { toast } = useToast();
   const [upscale, setUpscale] = useState(false);
   const checkboxId = useId();
 
-  // the delivered master's short side: the current cut's record, else the take's render.json.
-  // ≥1080 means Topaz has nothing to lift — offering a paid no-op would be a lie.
-  const shortSide = run.manifest?.cuts?.at(-1)?.shortSide ?? run.latestRender?.masterShortSide ?? null;
+  // the cut being finalized: the reviewer's selection, else the latest (manifest cuts are oldest-first)
+  const cuts = run.manifest?.cuts ?? [];
+  const selectedCut = (cutId && cuts.find((c) => c.id === cutId)) || cuts.at(-1) || null;
+  // "the latest render" when no explicit cut is chosen (incl. a recovery run with a master but no
+  // cut record yet), or the chosen cut is the newest one
+  const isLatestSelection = !cutId || selectedCut?.id === cuts.at(-1)?.id;
+
+  // the delivered master's short side: the selected cut's own record. Only borrow the latest
+  // render's dimension for the latest selection — never bleed one cut's size onto an older cut
+  // (an HD latest must not disable upscaling an older SD cut). Unknown ⇒ offer the upscale.
+  const shortSide = selectedCut?.shortSide ?? (isLatestSelection ? run.latestRender?.masterShortSide ?? null : null);
   const alreadyHD = shortSide != null && shortSide >= 1080;
+  // switching to an already-HD cut disables the toggle but leaves `upscale` stale — derive the
+  // real intent so the button, label, price and payload never disagree with the checkbox.
+  const effectiveUpscale = upscale && !alreadyHD;
+
+  // What ReviewStage previews for the latest selection is run.latestRender (which, after an
+  // interruption, may be a completed render with no cut record yet) — so target it implicitly
+  // (null) rather than a recorded cut id that a recovery render could have superseded. Preview and
+  // finalize/price then always act on the same master; an explicit OLDER cut still rides through.
+  const submitCut = isLatestSelection ? undefined : cutId ?? undefined;
 
   const upscaleEstimate = useQuery({
-    queryKey: ['estimate', run.id, 'upscale'],
-    queryFn: () => api.estimate(run.id, { mode: 'upscale' }),
+    queryKey: ['estimate', run.id, 'upscale', submitCut ?? null],
+    queryFn: () => api.estimate(run.id, { mode: 'upscale', cut: submitCut }),
     enabled: !alreadyHD,
   });
 
   const approve = useMutation({
-    mutationFn: () => api.approve(run.id, upscale),
-    onSuccess: () => toast({ kind: 'success', text: upscale ? 'Approved — upscaling now.' : 'Approved — finalizing now.' }),
+    mutationFn: () => api.approve(run.id, effectiveUpscale, submitCut),
+    onSuccess: () => toast({ kind: 'success', text: effectiveUpscale ? 'Approved — upscaling now.' : 'Approved — finalizing now.' }),
     onError: (e) => toast({ kind: 'error', text: e instanceof ApiClientError ? `${e.message} — ${e.hint}` : e.message }),
   });
 
-  const label = `Approve${upscale ? ' & upscale' : ''}`;
+  const label = `Approve${effectiveUpscale ? ' & upscale' : ''}`;
 
   return (
     <section className="rounded-r3 border border-line border-t-line-strong bg-surface-1 p-4">
@@ -58,7 +75,7 @@ export function ApproveBar({ run }: { run: RunDetail }) {
       </div>
 
       <div className="mt-3">
-        {upscale ? (
+        {effectiveUpscale ? (
           <PaidButton
             variant="primary"
             size="lg"
@@ -83,7 +100,7 @@ export function ApproveBar({ run }: { run: RunDetail }) {
       </div>
 
       <p className="mt-2 text-caption text-ink-muted">
-        {upscale ? '' : 'Approving is free. '}Assembly already happened — approve only finalizes
+        {effectiveUpscale ? '' : 'Approving is free. '}Assembly already happened — approve only finalizes
         (and optionally upscales).
       </p>
     </section>

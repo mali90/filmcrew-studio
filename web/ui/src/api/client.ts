@@ -89,15 +89,16 @@ export const api = {
   deleteRun: (id: string) => del<{ deleted: boolean; bytes: number }>(`/runs/${id}`),
   spec: (id: string, file?: string) => get<unknown>(`/runs/${id}/spec${file ? `?file=${encodeURIComponent(file)}` : ''}`),
   log: (id: string, cursor = 0) => get<{ lines: { cursor: number; line: string }[]; nextCursor: number }>(`/runs/${id}/log?cursor=${cursor}`),
-  estimate: (id: string, q: { mode: string; jobId?: string; cascade?: boolean }) =>
-    get<Estimate>(`/runs/${id}/estimate?mode=${q.mode}${q.jobId ? `&jobId=${q.jobId}` : ''}${q.cascade ? '&cascade=1' : ''}`),
+  estimate: (id: string, q: { mode: string; jobId?: string; cascade?: boolean; cut?: string }) =>
+    get<Estimate>(`/runs/${id}/estimate?mode=${q.mode}${q.jobId ? `&jobId=${q.jobId}` : ''}${q.cascade ? '&cascade=1' : ''}${q.cut ? `&cut=${q.cut}` : ''}`),
 
   render: (id: string, mode: 'probe' | 'full') => post<{ takeId: string; estUsd: number }>(`/runs/${id}/render`, { mode }),
   revise: (id: string, body: { feedback: string; scope?: string }) => post<{ revisionId: string }>(`/runs/${id}/revise`, body),
   rerenderJob: (id: string, body: { jobId: string; cascade?: boolean; feedback?: string }) =>
     post<{ takeId: string; estUsd: number; cascadeJobs: string[] }>(`/runs/${id}/rerender-job`, body),
   assemble: (id: string, composition?: Record<string, string>) => post<unknown>(`/runs/${id}/assemble`, { composition }),
-  approve: (id: string, upscale: boolean) => post<{ final: string | null }>(`/runs/${id}/approve`, { upscale }),
+  approve: (id: string, upscale: boolean, cut?: string) =>
+    post<{ final: string | null }>(`/runs/${id}/approve`, { upscale, ...(cut ? { cut } : {}) }),
   cancel: (id: string) => post<{ cancelled: 'queued' | 'active' | 'stale' | false }>(`/runs/${id}/cancel`),
   dismissError: (id: string) => post<{ dismissed: boolean }>(`/runs/${id}/dismiss-error`),
   replan: (id: string) => post<{ queued: unknown }>(`/runs/${id}/plan`),

@@ -140,7 +140,26 @@ export function registerRunRoutes(app) {
     if (!run.spec) throw Object.assign(new Error('no plan yet'), { statusCode: 409, hint: 'estimates come from the plan — wait for planning to finish' });
     const mode = String(req.query.mode ?? 'full');
     if (mode === 'upscale') {
-      const clips = (run.spec.kling?.jobs ?? []).map((j) => ({ jobId: j.job_id, seconds: jobSeconds(run.spec, j.job_id) }));
+      const cut = req.query.cut;
+      // no cut ⇒ the latest render (approve's default): price every job in the current spec
+      if (!cut) {
+        const clips = (run.spec.kling?.jobs ?? []).map((j) => ({ jobId: j.job_id, seconds: jobSeconds(run.spec, j.job_id) }));
+        return estimateUpscale(clips);
+      }
+      // a specific cut upscales exactly the clips in ITS take dir, priced by THAT take's own saved
+      // spec (a pre-revision cut may rename jobs or change durations) and only jobs that actually
+      // produced a clip (finishRender skips clipless/failed jobs) — so the price matches Topaz's work.
+      if (!/^c\d{1,4}$/.test(String(cut))) throw Object.assign(new Error(`"${cut}" is not a cut id`), { statusCode: 400, hint: 'cut ids look like c1, c2, …' });
+      const chosen = (run.manifest?.cuts ?? []).find((c) => c.id === cut);
+      if (!chosen) throw Object.assign(new Error(`cut "${cut}" not found`), { statusCode: 400, hint: 'pick a cut shown in review' });
+      const readTakeJson = (name) => {
+        const p = safeChild(runsDir, req.params.id, 'renders', String(chosen.take), name);
+        return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf8')) : null;
+      };
+      const takeSpec = readTakeJson('spec.json') ?? run.spec; // the spec the take was rendered from
+      const clips = ((readTakeJson('render.json')?.jobs) ?? [])
+        .filter((j) => j.clip) // only jobs Topaz will actually process
+        .map((j) => { const jobId = j.jobId ?? j.job; return { jobId, seconds: jobSeconds(takeSpec, jobId) }; });
       return estimateUpscale(clips);
     }
     return estimateRender(run.spec, {

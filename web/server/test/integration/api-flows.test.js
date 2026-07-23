@@ -420,6 +420,63 @@ test('approve with upscale: Topaz child runs, final recorded, run completes', { 
   assert.ok(fs.existsSync(run.manifest.approved.final), 'the upscaled final exists on disk');
 });
 
+// Regression: approving must finalize the CUT the reviewer previewed, not whichever take rendered
+// last. A run with two cuts (full → c1, K1 re-render → c2) must honor `cut:'c1'`.
+async function makeTwoCutRun(idea) {
+  const { runId } = await makeReviewedRun(idea);
+  await post(`/api/runs/${runId}/rerender-job`, { jobId: 'K1', feedback: 'warmer light' }); // → take t2 + auto-stitch → cut c2
+  const run = await waitForStatus(runId, 'review');
+  const cuts = run.manifest.cuts;
+  assert.ok(cuts.length >= 2, `expected two cuts, got ${JSON.stringify(cuts)}`);
+  assert.deepEqual([cuts[0].id, cuts[0].take], ['c1', 't1']);
+  assert.deepEqual([cuts[1].id, cuts[1].take], ['c2', 't2']);
+  return { runId, cuts };
+}
+
+test('approve honors the selected cut: finalizing c1 records c1 (not the latest c2)', { skip: FF ? false : 'ffmpeg not installed' }, async () => {
+  const { runId, cuts } = await makeTwoCutRun('finalize the first cut');
+
+  const fin = await post(`/api/runs/${runId}/approve`, { cut: 'c1' });
+  assert.equal(fin.statusCode, 200, fin.body); // plain finalize is instant
+  let m = (await get(`/api/runs/${runId}`)).json().run.manifest;
+  assert.equal(m.approved.cut, 'c1', 'the chosen cut is recorded, not the latest');
+  assert.equal(m.approved.final, cuts[0].master, 'the delivered file is c1’s exact master');
+  assert.equal(m.approved.upscaled, false);
+
+  // guards: a bad or unknown cut id is rejected 400 (never silently falls back to latest)
+  assert.equal((await post(`/api/runs/${runId}/approve`, { cut: '../etc' })).statusCode, 400);
+  assert.equal((await post(`/api/runs/${runId}/approve`, { cut: 'c9' })).statusCode, 400);
+
+  // omitting the cut still finalizes the latest — today's behavior is preserved
+  assert.equal((await post(`/api/runs/${runId}/approve`, {})).statusCode, 200);
+  m = (await get(`/api/runs/${runId}`)).json().run.manifest;
+  assert.equal(m.approved.cut, 'c2', 'default (no cut) = latest');
+});
+
+test('approve upscale honors the selected cut: Topaz runs on c1 and records c1', { skip: FF ? false : 'ffmpeg not installed' }, async () => {
+  const { runId } = await makeTwoCutRun('upscale the first cut');
+
+  const res = await post(`/api/runs/${runId}/approve`, { upscale: true, cut: 'c1' });
+  assert.equal(res.statusCode, 202, res.body);
+  const run = await waitForStatus(runId, 'complete');
+  assert.equal(run.manifest.approved.cut, 'c1', 'the upscaled+finalized cut is the chosen one, not the latest');
+  assert.equal(run.manifest.approved.upscaled, true);
+  assert.ok(fs.existsSync(run.manifest.approved.final), 'the upscaled final exists on disk');
+});
+
+test('upscale estimate is cut-aware: prices the selected cut’s jobs and rejects a bad cut id', { skip: FF ? false : 'ffmpeg not installed' }, async () => {
+  const { runId } = await makeTwoCutRun('price the chosen cut');
+
+  const all = (await get(`/api/runs/${runId}/estimate?mode=upscale`)).json();
+  const c1 = (await get(`/api/runs/${runId}/estimate?mode=upscale&cut=c1`)).json();
+  // both cuts are full (K1+K2), so c1 prices the same jobs as the default — the plumbing carries the cut through
+  assert.equal(c1.totalUsd, all.totalUsd);
+  assert.ok(c1.perJob.length >= 1, 'the selected cut prices its jobs');
+
+  assert.equal((await get(`/api/runs/${runId}/estimate?mode=upscale&cut=../etc`)).statusCode, 400);
+  assert.equal((await get(`/api/runs/${runId}/estimate?mode=upscale&cut=c9`)).statusCode, 400);
+});
+
 test('SSE Last-Event-ID: reconnect replays only the log lines after the cursor', async () => {
   const { runId } = (await post('/api/runs', { idea: 'resume my log', backend: 'kling', aspect: '9:16', durationS: null })).json();
   await waitForStatus(runId, 'plan-ready');
