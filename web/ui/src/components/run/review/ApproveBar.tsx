@@ -30,15 +30,20 @@ export function ApproveBar({ run, cutId = null }: { run: RunDetail; cutId?: stri
   // real intent so the button, label, price and payload never disagree with the checkbox.
   const effectiveUpscale = upscale && !alreadyHD;
 
+  // What ReviewStage previews for the latest selection is run.latestRender (which, after an
+  // interruption, may be a completed render with no cut record yet) — so target it implicitly
+  // (null) rather than a recorded cut id that a recovery render could have superseded. Preview and
+  // finalize/price then always act on the same master; an explicit OLDER cut still rides through.
+  const submitCut = isLatestSelection ? undefined : cutId ?? undefined;
+
   const upscaleEstimate = useQuery({
-    // price the actual cut being finalized (undefined ⇒ latest, matching approve's default)
-    queryKey: ['estimate', run.id, 'upscale', cutId ?? null],
-    queryFn: () => api.estimate(run.id, { mode: 'upscale', cut: cutId ?? undefined }),
+    queryKey: ['estimate', run.id, 'upscale', submitCut ?? null],
+    queryFn: () => api.estimate(run.id, { mode: 'upscale', cut: submitCut }),
     enabled: !alreadyHD,
   });
 
   const approve = useMutation({
-    mutationFn: () => api.approve(run.id, effectiveUpscale, cutId ?? undefined),
+    mutationFn: () => api.approve(run.id, effectiveUpscale, submitCut),
     onSuccess: () => toast({ kind: 'success', text: effectiveUpscale ? 'Approved — upscaling now.' : 'Approved — finalizing now.' }),
     onError: (e) => toast({ kind: 'error', text: e instanceof ApiClientError ? `${e.message} — ${e.hint}` : e.message }),
   });

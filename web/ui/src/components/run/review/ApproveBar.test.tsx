@@ -93,9 +93,10 @@ describe('ApproveBar', () => {
     const { rerender } = renderReview(<ApproveBar run={run} cutId="c1" />);
     fireEvent.click(screen.getByRole('checkbox', { name: /Upscale to ~1080p with Topaz/ })); // stage upscale on the SD cut
 
-    rerender(<ApproveBar run={run} cutId="c2" />); // switch preview to the already-HD cut
+    rerender(<ApproveBar run={run} cutId="c2" />); // switch preview to the already-HD cut (the latest)
     fireEvent.click(screen.getByRole('button', { name: /^Approve$/ })); // plain, free Approve — not "& upscale"
-    await waitFor(() => expect(captured.body).toEqual({ upscale: false, cut: 'c2' }));
+    // c2 is the latest cut ⇒ the implicit target (no cut id), matching what the stage previews
+    await waitFor(() => expect(captured.body).toEqual({ upscale: false }));
   });
 
   it('prices the SELECTED cut — the estimate request carries its cut id', async () => {
@@ -113,6 +114,18 @@ describe('ApproveBar', () => {
     ];
     renderReview(<ApproveBar run={run} cutId="c1" />);
     await waitFor(() => expect(estimateSearch).toContain('cut=c1'));
+  });
+
+  it('selecting the LATEST cut submits the implicit target — matches what the stage previews', async () => {
+    const captured = captureApprove();
+    const run = makeRun('review');
+    run.manifest!.cuts = [
+      { id: 'c1', take: 't1', master: '/abs/out/a.mp4', shortSide: 496, createdAt: '2026-07-04T09:00:00.000Z' },
+      { id: 'c2', take: 't2', master: '/abs/out/b.mp4', shortSide: 496, createdAt: '2026-07-04T10:00:00.000Z' },
+    ];
+    renderReview(<ApproveBar run={run} cutId="c2" />); // the newest cut, which ReviewStage previews as latestRender
+    fireEvent.click(screen.getByRole('button', { name: /^Approve$/ }));
+    await waitFor(() => expect(captured.body).toEqual({ upscale: false })); // no cut id — the implicit latest, not { cut: 'c2' }
   });
 
   it('an older cut without its own shortSide does not inherit the latest render’s HD dimension', () => {
