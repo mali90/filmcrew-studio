@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Added
+- **Seam-invisible stitching (groundwork, not yet wired).** `tools/seamstitch` — a vendored Python
+  stitcher — colour-matches each *chained* joint (where a job was rendered from the previous clip's
+  last frame), drops the duplicated boundary frame and crossfades, instead of the hard concat that
+  leaves a small lighting "pop" and a 1-frame hitch. Extended here with per-joint continuity
+  (`--joint-match`), per-joint crossfade lengths (`--joint-xfade`) and a machine-readable `--json`
+  report, so one timeline can mix chained joints and scene cuts. New Node wrappers
+  (`src/lib/seamstitch.js`, `src/lib/stitch-math.js`), a `stitch` config block (`STITCH_*` in
+  `.env.example`) and a SOFT doctor check — assembly still hard-cuts every seam until this is wired
+  in, and it stays optional: without python3 + numpy + pillow nothing changes.
+
 ### Changed
 - **Render backends are now named `<model>@<provider>`** (`kling-o3@fal`, `seedance-2.0@fal`), and a
   planned spec records that canonical id in `render_backend` whichever spelling you typed, as does

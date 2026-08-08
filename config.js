@@ -180,6 +180,28 @@ const config = {
     interpolate: boolEnv('VIDEO_INTERPOLATE', false),
   },
 
+  // ── Seam-invisible stitching (tools/seamstitch, Python + numpy/pillow) ──
+  // Chained renders (KLING_CHAIN_FRAMES) feed each job the previous clip's last frame, so adjacent
+  // clips share a boundary frame but drift slightly in exposure/white balance. A hard concat shows
+  // that as a lighting "pop" plus a 1-frame hitch. The stitcher colour-matches across each chained
+  // joint, drops the duplicated frame and crossfades. 'auto' uses it when the deps are installed and
+  // the clips qualify, and falls back to the plain concat otherwise; 'force' fails loudly instead.
+  stitch: {
+    seamless: process.env.STITCH_SEAMLESS || 'auto', // 'auto' | 'off' | 'force'
+    python: process.env.PYTHON_BIN || 'python3',
+    method: process.env.STITCH_METHOD || 'hybrid',   // 'hybrid' | 'mkl' | 'quantile' | 'none'
+    xfade: numEnv('STITCH_XFADE', 0.25),             // crossfade seconds at a CHAINED joint
+    cutXfade: numEnv('STITCH_CUT_XFADE', 0),         // ...and at a scene cut (0 → one frame)
+    ramp: numEnv('STITCH_RAMP', 2.0),                // seconds to ease the correction back to native (0 = cascade)
+    fit: process.env.STITCH_FIT || 'cover',          // AR-preserving refit: 'cover' | 'contain' | 'none'
+    desqueeze: process.env.STITCH_DESQUEEZE || 'off', // 'off' | 'auto' | <factor>
+    deflicker: boolEnv('STITCH_DEFLICKER', false),
+    verify: process.env.STITCH_VERIFY || 'warn',     // 'off' | 'warn' (log failures) | 'strict' (reject the stitch)
+    crf: numEnv('STITCH_CRF', 19),                   // matches assemble.js's own -crf
+    preset: process.env.STITCH_PRESET || 'medium',
+    timeoutMs: numEnv('STITCH_TIMEOUT_MS', 20 * 60 * 1000),
+  },
+
   // ── Optional fal Topaz upscale of the final master (endpoint/model/factor live under `fal` above) ──
   upscale: {
     enabled: boolEnv('UPSCALE_ENABLED', false), // auto-lift the master toward 1080p when it's smaller

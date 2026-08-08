@@ -7,12 +7,13 @@ import config from '../../config.js';
 import { PROVIDER_KEY_ENV, PROVIDER_CLI_BIN, PROVIDER_CLI_ONLY } from './llm.js';
 import { buildInventory } from './elements.js';
 import { loadVoices, getVoiceRefClip } from './voices.js';
+import { seamstitchAvailable } from './seamstitch.js';
 import { RENDER_BACKENDS } from './spec-schema.js';
 import { normalizeBackend, RENDER_MODELS } from './render-models.js';
 
 // Failed checks whose label starts with one of these are SOFT (a warning, not a hard blocker): you
 // may still render a hand-authored spec, or a fal spec with no dialogue, later.
-export const SOFT = ['reference images', 'character voices', 'voice ref clips'];
+export const SOFT = ['reference images', 'character voices', 'voice ref clips', 'seamless stitcher'];
 
 /** Spawn `bin -version` and resolve true iff it runs (used for ffmpeg/ffprobe presence). */
 export function whichVersion(bin) {
@@ -98,6 +99,10 @@ export async function runChecks() {
   // 3. ffmpeg / ffprobe
   add('ffmpeg', await whichVersion(config.video.ffmpeg), `ffmpeg present (${config.video.ffmpeg})`, 'install ffmpeg and/or set FFMPEG_BIN');
   add('ffprobe', await whichVersion(config.video.ffprobe), `ffprobe present (${config.video.ffprobe})`, 'install ffmpeg (ffprobe) and/or set FFPROBE_BIN');
+  // SOFT: the stitcher only improves CHAINED seams. Without it every cut still assembles, just with
+  // a hard cut (and a small lighting pop) at each seam — so this must never block a render.
+  add('seamstitch', (await seamstitchAvailable()).ok, 'seamless stitcher available (python3 + numpy + pillow)',
+    'pip3 install numpy pillow — optional; without it cuts stitch with hard cuts at every seam');
 
   // 4. elements
   const inv = buildInventory();
