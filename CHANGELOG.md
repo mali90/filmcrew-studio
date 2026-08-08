@@ -9,6 +9,11 @@
   or manifest already on disk — so nothing needs migrating. Planning is now told the *rendering
   model's own* caps (Seedance 2.0's 9 reference images instead of Kling's 7, its own 4–15s job
   window and its own aspect-ratio list) instead of one hardcoded set for every backend.
+- **Cost estimates follow the rename.** A CLI-created run now records the canonical id in its
+  `render.json`, so the web app prices `kling-o3@fal`/`seedance-2.0@fal` off the same rate rows as
+  the old one-word names — including Kling's cheaper audio-off tier, which a literal name check
+  would have quietly overcharged. A model/provider pair with no rate table (`kling-o3@segmind`)
+  still fails loudly instead of guessing a price.
 - **Seedance renders fail fast on an argument the chosen model does not accept** — an aspect ratio or
   resolution outside that model's list, more reference images than it takes, or a kind of reference
   it has no input for — instead of paying for a provider round trip to be told the same thing.
