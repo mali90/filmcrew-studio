@@ -263,7 +263,11 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     if (!spec || !m?.jobClips) return;
     const jobs = (spec.kling?.jobs ?? []).map((j) => ({ jobId: j.job_id, clip: m.jobClips[j.job_id] ?? null }));
     const existing = readJson(path.join(takeDir, 'render.json')) ?? {};
-    fs.writeFileSync(path.join(takeDir, 'render.json'), JSON.stringify({ ...existing, project: spec.project?.title, composed: true, jobs }, null, 2) + '\n');
+    // Composition BREAKS the seam lineage: these clips come from different takes, so a downstream
+    // clip was chained to the OLD take of the job before it (that is what the cascade warning is
+    // about). Inheriting `chained: true` from the take we are overwriting would tell the seamless
+    // stitcher to drop a real frame at what is now a genuine cut, so it is cleared, not spread.
+    fs.writeFileSync(path.join(takeDir, 'render.json'), JSON.stringify({ ...existing, project: spec.project?.title, composed: true, chained: false, jobs }, null, 2) + '\n');
   }
 
   // Take numbers are NEVER reused: lowest-free once resurrected a deleted t2 AFTER t3 existed,
