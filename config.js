@@ -51,7 +51,8 @@ const config = {
   //    transport below). Dispatch table: RENDERERS in src/lib/pipeline.js. Precedence at render
   //    time: --backend flag > spec.render_backend > this default. ──
   render: {
-    backend: process.env.RENDER_BACKEND || 'kling', // 'kling' | 'seedance'
+    // '<model>@<provider>' (see src/lib/render-models.js); legacy 'kling'/'seedance' stay accepted.
+    backend: process.env.RENDER_BACKEND || 'kling', // → canonicalized to 'kling-o3@fal'
   },
 
   // ── fal.ai render transport (direct HTTP; persistent voice_ids for consistent character voices) ──

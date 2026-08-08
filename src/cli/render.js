@@ -5,7 +5,8 @@
 //   node src/cli/render.js --spec runs/x/spec.json --probe          # multi-job specs only: first job, no stitch
 //   node src/cli/render.js --spec runs/x/spec.json --upscale        # also fal Topaz-upscale sub-1080p clips
 //   node src/cli/render.js --spec runs/x/spec.json --backend seedance [--take 2]
-//     --backend kling|seedance  overrides spec.render_backend / RENDER_BACKEND
+//     --backend <model>@<provider>  overrides spec.render_backend / RENDER_BACKEND
+//                               (kling-o3@fal | seedance-2.0@fal; legacy kling|seedance still accepted)
 //     --take <n>                Seedance regen knob: same spec, "Alternate take n" (it accepts no seed)
 import path from 'node:path';
 import config, { resolvePath } from '../../config.js';

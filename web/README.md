@@ -21,6 +21,8 @@ For UI development: `npm --prefix web/ui run dev` (Vite on 5173, proxying `/api`
 ```
 web/
   shared/api-types.ts   the single source of truth for API shapes (UI imports it; server mirrors it)
+  shared/render-models.ts  typed facade over src/lib/render-models.js — per-model labels, cast caps
+                        and aspect lists, so the UI never re-declares a cap in TypeScript
   server/               Fastify 5, plain ESM + JSDoc, tested with node:test
     app.js              buildApp() factory — all deps injectable (fastify.inject tests)
     lib/                run-scan (disk→status), run-service (orchestration), job-manager (CLI
@@ -44,7 +46,10 @@ web/
   Approve only finalizes (and optionally Topaz-upscales below 1080p).
 - **Children, not imports.** The host `config.js` freezes env at import, so all engine/render/doctor
   work runs as spawned CLIs with a minimal env — they re-read `.env` fresh, which is why settings
-  changes apply without restarting the server.
+  changes apply without restarting the server. The **one** sanctioned static import from `src/` is
+  `src/lib/render-models.js`: it has zero imports and reads no env, so pulling it in cannot drag
+  `config.js` (and a developer's real `.env`) into the server's graph. Leak-canary tests guard the
+  rule; anything else per-model belongs behind a spawned CLI, not an import.
 - **One SSE stream per run** (`snapshot` first, then typed events; `Last-Event-ID` resumes log
   lines) + one global stream (queue, run status). Progress is never a fake percentage.
 
@@ -61,6 +66,9 @@ cast (`/api/cast/characters|references|voices|profiles`, profile CRUD via
 environments (`GET /api/environments`, descriptive-only setting CRUD via
 `POST /api/environments` and `PUT/DELETE /api/environments/:slug`; a run's optional
 `environment` slug is validated against disk before any LLM spend).
+`POST /api/runs` takes a backend id as `<model>@<provider>` (legacy `kling`/`seedance` still
+accepted) and rejects — before any child spawns — a cast larger than that model's ceiling or an
+aspect ratio the model does not render.
 Errors are always `{error, hint}`.
 `POST /api/runs/:id/assemble` also accepts a `{composition: {jobId: takeId}}` body to stitch a
 mixed cut from existing takes without re-rendering — an API-level feature for now (the UI's
