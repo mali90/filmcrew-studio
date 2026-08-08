@@ -1,6 +1,13 @@
 // Final assembly with ffmpeg: stitch the job clips, normalize to the target frame, keep the
 // source frame rate (fabricating no frames) unless asked to convert, and handle audio.
 //
+// VIDEO — two stitch paths. CONCAT (always available) hard-cuts the clips together. SEAMLESS
+//   (tools/seamstitch, opt-in via `continuity`) colour-matches every CHAINED joint, drops the frame
+//   the two clips share and crossfades, so a >15s multi-job render reads as one continuous take
+//   instead of popping at each seam. It is pure local ffmpeg either way — no API, no cost. Every
+//   failure path falls back to concat with one warning; only STITCH_SEAMLESS=force turns those into
+//   errors. See docs/STITCHING.md.
+//
 // AUDIO — NATIVE (nativeAudio: true): the clips' own audio (Kling's generate_audio, which SPEAKS the
 //   scripted VO lines and, on the fal transport, in each character's minted voice_id) is concatenated
 //   and PRESERVED as the primary track. Internal seams get a short afade out/in so each clip's own
@@ -12,6 +19,8 @@ import path from 'node:path';
 import config from '../../config.js';
 import log from './logger.js';
 import { ensureDir } from './util.js';
+import { planSeamstitch, runSeamstitch, seamstitchAvailable } from './seamstitch.js';
+import { computeOffsets } from './stitch-math.js';
 
 const V = config.video;
 // EBU R128 loudness target so the track sits at a consistent level and nothing clips.
@@ -51,14 +60,27 @@ function parseFps(ratio) {
   return den > 0 ? num / den : 0;
 }
 
+/** Parse an ffprobe "16:15" ratio to a number; 1 when unknown ("0:1", "N/A", absent) — i.e. square. */
+function parseSar(ratio) {
+  const m = /^(\d+):(\d+)$/.exec(String(ratio ?? ''));
+  if (!m) return 1;
+  const [num, den] = [Number(m[1]), Number(m[2])];
+  return num > 0 && den > 0 ? num / den : 1;
+}
+
 export async function probeClip(file) {
-  const out = await runFfprobe(['-v', 'error', '-show_entries', 'stream=codec_type,width,height,avg_frame_rate,r_frame_rate:format=duration', '-of', 'json', file]);
+  const out = await runFfprobe(['-v', 'error', '-show_entries', 'stream=codec_type,width,height,avg_frame_rate,r_frame_rate,sample_aspect_ratio:format=duration', '-of', 'json', file]);
   const info = JSON.parse(out);
   const hasAudio = (info.streams ?? []).some((s) => s.codec_type === 'audio');
   const v = (info.streams ?? []).find((s) => s.codec_type === 'video');
   const duration = Number(info.format?.duration) || 0;
   const fps = parseFps(v?.avg_frame_rate) || parseFps(v?.r_frame_rate); // avg is truer; r_frame_rate is the fallback
-  return { hasAudio, duration, width: Number(v?.width) || 0, height: Number(v?.height) || 0, fps };
+  const width = Number(v?.width) || 0;
+  const height = Number(v?.height) || 0;
+  // Non-square pixels make WxH lie about the SHAPE of the picture. The seamless stitcher compares a
+  // clip's framing against the canvas, so it needs the DISPLAY aspect, not the storage one.
+  const sar = parseSar(v?.sample_aspect_ratio);
+  return { hasAudio, duration, width, height, fps, sar, dar: height > 0 ? (width * sar) / height : 0 };
 }
 
 /**
@@ -81,7 +103,12 @@ export async function clipsHaveNativeAudio(clipPaths) {
 }
 
 /**
- * Stitch clips into the final video.
+ * Stitch clips into the final video. Returns `{ out, stitcher, joints, matched }` — `stitcher` is
+ * 'seamless' or 'concat', and the counts say how many joints were colour-matched.
+ *
+ * VIDEO: two paths. With `continuity` (one flag per joint saying whether that clip was rendered from
+ * the previous clip's LAST frame) the seam-invisible stitcher runs first; without it — or if
+ * anything about it fails — clips are hard-cut together with the concat filter, exactly as before.
  *
  * NATIVE mode (`nativeAudio: true`): per-clip audio is normalized and concatenated (clips with no
  * audio get matching silence), so Kling's generated audio survives 1:1. `bedTrack` (optional)
@@ -91,6 +118,65 @@ export async function clipsHaveNativeAudio(clipPaths) {
  * for a SILENT cut.
  */
 const even = (n) => 2 * Math.round(n / 2); // yuv420p needs even dimensions
+
+/** The tail of the NATIVE audio chain: mix an optional quiet music bed under `natLabel`, then bring
+ *  the result to the EBU R128 target. Shared by both stitch paths so they deliver the same loudness. */
+function audioMixChain({ natLabel = '[anat]', bedIdx = -1, bedGainDb = -15 } = {}) {
+  if (bedIdx < 0) return [`${natLabel}${LOUDNORM}[aout]`];
+  return [
+    `[${bedIdx}:a]${AFORMAT},volume=${bedGainDb}dB[bed]`,
+    `${natLabel}[bed]amix=inputs=2:duration=first:normalize=0,${LOUDNORM}[aout]`,
+  ];
+}
+
+/**
+ * ffmpeg argv for the audio pass that finishes a seamless stitch. PURE — takes only decided facts.
+ *
+ * The stitcher already produced the finished VIDEO and crossfaded the clips' own audio, so this pass
+ * copies the video untouched (no second encode, no generation loss) and only rebuilds the track:
+ * native audio gets the bed + loudness treatment, a legacy `audioTrack` replaces it outright, and a
+ * silent cut keeps the video alone.
+ */
+export function audioFinishArgs({
+  stitched, outPath, hasStitchedAudio = true, nativeAudio = false,
+  audioTrack = null, loopAudio = false, bedTrack = null, bedGainDb = -15,
+} = {}) {
+  const args = ['-y', '-i', stitched];
+  const parts = [];
+  let nextInput = 1;
+
+  // `loudnorm` emits 192 kHz, so the encoder would otherwise land on a 96 kHz AAC track — pin the
+  // delivery rate instead. (The concat path has always shipped 96 kHz here; left alone deliberately,
+  // so the fallback stays byte-identical to the master this release replaces.)
+  const AAC = ['-c:a', 'aac', '-b:a', '192k', '-ar', '48000'];
+
+  if (nativeAudio && hasStitchedAudio) {
+    let bedIdx = -1;
+    if (bedTrack) { args.push('-stream_loop', '-1', '-i', bedTrack); bedIdx = nextInput++; }
+    parts.push(`[0:a]${AFORMAT},asetpts=PTS-STARTPTS[anat]`);
+    parts.push(...audioMixChain({ bedIdx, bedGainDb }));
+    args.push('-filter_complex', parts.join(';'), '-map', '0:v', '-map', '[aout]', ...AAC);
+  } else if (!nativeAudio && audioTrack) {
+    if (loopAudio) args.push('-stream_loop', '-1');
+    args.push('-i', audioTrack);
+    parts.push(`[${nextInput}:a]${LOUDNORM}[aout]`);
+    args.push('-filter_complex', parts.join(';'), '-map', '0:v', '-map', '[aout]', ...AAC, '-shortest');
+  } else {
+    args.push('-map', '0:v'); // silent cut (or native audio asked for on a stitch that carries none)
+  }
+
+  args.push('-c:v', 'copy', '-movflags', '+faststart', outPath);
+  return args;
+}
+
+/** Run the audio pass over the stitcher's output, writing the master. */
+async function finishAudio(stitched, outPath, opts) {
+  const { hasAudio } = await probeClip(stitched);
+  if (opts.nativeAudio && !hasAudio) {
+    log.warn('Seamless stitch carries no audio stream — the master will be silent.');
+  }
+  await runFfmpeg(audioFinishArgs({ ...opts, stitched, outPath, hasStitchedAudio: hasAudio }));
+}
 
 /** The stitch canvas: explicit VIDEO_WIDTH/HEIGHT wins; else the RUN'S aspect shapes it at
  *  VIDEO_SHORT_SIDE scale, CAPPED at the source clips' own short side (`srcShortSide`) — the
@@ -114,8 +200,73 @@ export function canvasFor(aspect, srcShortSide = null) {
     : { w: even(s), h: even((s * ah) / aw) };  // portrait: width is the short side
 }
 
+/**
+ * Try the seam-invisible stitch (tools/seamstitch). Returns the path of a stitched, video-only-final
+ * temp file, or null to fall back to the hard-cut concat.
+ *
+ * Every refusal path funnels through `decline`, so a fallback costs exactly ONE warning that names
+ * the reason. Under STITCH_SEAMLESS=force the same reasons throw instead — that mode exists to make
+ * a silent downgrade impossible in a pipeline that requires seamless output.
+ */
+async function trySeamlessStitch({ clipPaths, probes, continuity, canvas, targetFps, outPath }) {
+  const cfg = config.stitch;
+  const tmpOut = path.join(path.dirname(outPath), `.${path.basename(outPath, path.extname(outPath))}.seamstitch.mp4`);
+  const decline = (why) => {
+    fs.rmSync(tmpOut, { force: true });
+    if (cfg.seamless === 'force') throw new Error(`Seamless stitch required (STITCH_SEAMLESS=force) but ${why}`);
+    log.warn(`Seamless stitch skipped — ${why}. Stitching with a hard cut at every seam instead.`);
+    return null;
+  };
+
+  const plan = planSeamstitch({ probes, continuity, canvas, targetFps, cfg });
+  if (!plan.eligible) return decline(plan.reason);
+
+  const avail = await seamstitchAvailable({ python: cfg.python });
+  if (!avail.ok) return decline(`the stitcher is not runnable (${avail.reason})`);
+
+  const res = await runSeamstitch([...clipPaths, '-o', tmpOut, ...plan.args], { python: cfg.python, timeoutMs: cfg.timeoutMs });
+  const report = res.report;
+  if (!report) return decline(res.reason ?? 'the stitcher wrote no JSON report');
+  // Exit 2 means a verify gate failed. That is advisory under STITCH_VERIFY=warn (the seam is still
+  // far better than a hard cut) and disqualifying under 'strict'; any other non-zero exit is fatal.
+  const gateFailed = res.code === 2;
+  if (res.code !== 0 && !(gateFailed && cfg.verify !== 'strict')) {
+    return decline(`the stitcher exited ${res.code}${gateFailed ? ' (verify gate failed, STITCH_VERIFY=strict)' : ''}`);
+  }
+  if (!fs.existsSync(tmpOut)) return decline('the stitcher reported success but wrote no output file');
+
+  // Cross-check the result against an INDEPENDENT re-derivation of §7.5 (src/lib/stitch-math.js): the
+  // tool's own arithmetic and the file it actually wrote must both agree with it, or the timeline is
+  // not what we asked for and a plain concat is the safer master.
+  let expected;
+  try {
+    expected = computeOffsets(
+      (report.segments ?? []).map((s) => s.nframes),
+      report.fps,
+      report.xfades,
+      [false, ...(report.jointMatch ?? [])],
+    ).expectedDuration;
+  } catch (e) {
+    return decline(`the stitcher's plan did not re-derive (${e.message})`);
+  }
+  const actual = (await probeClip(tmpOut)).duration;
+  const tol = 1 / targetFps + 0.05; // one frame + AAC priming slack (spec §12.7)
+  if (Math.abs(actual - expected) > tol) {
+    return decline(`the stitch is ${actual.toFixed(2)}s but the plan expects ${expected.toFixed(2)}s`);
+  }
+
+  if (gateFailed) {
+    const seam = report.verify?.seam?.filter((j) => !j.passed).map((j) => j.joint) ?? [];
+    const geom = report.verify?.geometry?.filter((g) => g.verdict === 'FAIL').map((g) => g.joint) ?? [];
+    log.warn(`Seamless stitch verify gate failed${seam.length ? ` — seam at joint(s) ${seam.join(', ')}` : ''}${geom.length ? ` — geometry at joint(s) ${geom.join(', ')}` : ''}. Keeping it (set STITCH_VERIFY=strict to fall back instead).`);
+  }
+  for (const w of report.warnings ?? []) log.debug(`seamstitch: ${w}`);
+  return tmpOut;
+}
+
 export async function assembleVideo(clipPaths, outPath, {
   audioTrack, loopAudio = false, nativeAudio = false, bedTrack = null, bedGainDb = -15, aspect = null,
+  continuity = null,
 } = {}) {
   if (!clipPaths.length) throw new Error('No clips to assemble');
   for (const c of clipPaths) if (!fs.existsSync(c)) throw new Error(`Clip not found: ${c}`);
@@ -145,6 +296,31 @@ export async function assembleVideo(clipPaths, outPath, {
   const videoChain = (i) =>
     `[${i}:v]scale=${canvas.w}:${canvas.h}:force_original_aspect_ratio=increase,` +
     `crop=${canvas.w}:${canvas.h},setsar=1,${fpsFilter(i)},format=yuv420p,setpts=PTS-STARTPTS[v${i}]`;
+
+  // SEAMLESS PATH — only when the caller can say which joints are CHAINED (each clip rendered from
+  // the previous one's last frame). Those joints get colour-matched, their duplicated boundary frame
+  // dropped and a short crossfade; scene cuts stay cuts. Anything at all going wrong here falls back
+  // to the concat below with one warning, so this can never cost a master.
+  if (continuity) {
+    const stitched = await trySeamlessStitch({ clipPaths, probes, continuity, canvas, targetFps, outPath });
+    if (stitched) {
+      try {
+        await finishAudio(stitched, outPath, {
+          nativeAudio,
+          audioTrack: !nativeAudio && audioTrack && fs.existsSync(audioTrack) ? audioTrack : null,
+          loopAudio,
+          bedTrack: nativeAudio && bedTrack && fs.existsSync(bedTrack) ? bedTrack : null,
+          bedGainDb,
+        });
+      } finally {
+        fs.rmSync(stitched, { force: true });
+      }
+      const matched = continuity.filter(Boolean).length;
+      log.info(`Seamless stitch: ${clipPaths.length} clip(s) -> ${outPath} (${canvas.w}x${canvas.h}@${targetFps}fps, ${matched}/${continuity.length} joint(s) colour-matched)`);
+      log.info(`Video ready: ${outPath}`);
+      return { out: outPath, stitcher: 'seamless', joints: continuity.length, matched };
+    }
+  }
 
   const args = ['-y'];
   const parts = [];
@@ -186,12 +362,7 @@ export async function assembleVideo(clipPaths, outPath, {
       pairLabels.push(`[v${i}][a${i}]`);
     });
     parts.push(`${pairLabels.join('')}concat=n=${clipPaths.length}:v=1:a=1[vout][anat]`);
-    if (bedIdx >= 0) {
-      parts.push(`[${bedIdx}:a]${AFORMAT},volume=${bedGainDb}dB[bed]`);
-      parts.push(`[anat][bed]amix=inputs=2:duration=first:normalize=0,${LOUDNORM}[aout]`);
-    } else {
-      parts.push(`[anat]${LOUDNORM}[aout]`);
-    }
+    parts.push(...audioMixChain({ bedIdx, bedGainDb }));
     args.push('-filter_complex', parts.join(';'), '-map', '[vout]', '-map', '[aout]', '-c:a', 'aac', '-b:a', '192k');
   } else {
     const hasTrack = audioTrack && fs.existsSync(audioTrack);
@@ -210,7 +381,7 @@ export async function assembleVideo(clipPaths, outPath, {
   log.info(`Assembling ${clipPaths.length} clip(s) -> ${outPath} (${canvas.w}x${canvas.h}@${targetFps}fps${uniformFps && V.fps == null ? ' (matched source)' : ''}, audio: ${nativeAudio ? `native${bedTrack ? '+bed' : ''}` : (audioTrack ? 'track' : 'silent')})`);
   await runFfmpeg(args);
   log.info(`Video ready: ${outPath}`);
-  return outPath;
+  return { out: outPath, stitcher: 'concat', joints: Math.max(0, clipPaths.length - 1), matched: 0 };
 }
 
 /** Grab one still at `t` seconds for a cover image (best-effort). */
@@ -233,4 +404,4 @@ export async function lastFrameOf(video, outPng) {
   } catch { return null; }
 }
 
-export default { assembleVideo, probeClip, extractAudio, clipsHaveNativeAudio, grabFrame, lastFrameOf };
+export default { assembleVideo, probeClip, extractAudio, clipsHaveNativeAudio, grabFrame, lastFrameOf, audioFinishArgs };

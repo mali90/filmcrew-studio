@@ -61,10 +61,32 @@ function pythonPath(root) {
 }
 
 /**
+ * Which joints of a finished run are CHAINED, from what the run recorded. Returns one flag per joint,
+ * or null when the run cannot say — null is "unknown", and planSeamstitch declines on it rather than
+ * guessing (guessing wrong drops a real frame at a scene cut).
+ *
+ * TODAY a render is chained all-or-nothing: renderSpec seeds every job after the first with the
+ * previous clip's last frame, and records that as `chained` in render.json. Per-JOINT lineage — which
+ * seams actually got their frame, which clips were re-rendered since — is upcoming work; when it
+ * lands this reads it and mixed timelines start stitching correctly on their own.
+ *
+ * `STITCH_ASSUME_CONTINUOUS=1` forces all-true. It is a test/debug knob for driving the stitcher over
+ * clips whose lineage nothing recorded — never a default, because it asserts a fact about the footage.
+ */
+export function readContinuity(render, clipCount, cfg = config.stitch) {
+  const joints = Math.max(0, (clipCount ?? 0) - 1);
+  if (!joints) return null;
+  if (cfg.assumeContinuous) return Array(joints).fill(true);
+  return render?.chained === true ? Array(joints).fill(true) : null;
+}
+
+/**
  * Decide whether these clips can be stitched seamlessly, and with what flags. PURE — no I/O, no
  * spawning; it only reads the probes it is handed, so it is cheap to call and easy to test.
  *
- * @param probes      per clip, as returned by assemble.js's probeClip: { width, height, duration, fps }
+ * @param probes      per clip, as returned by assemble.js's probeClip:
+ *                    { width, height, duration, fps, sar, dar } — `dar` (display aspect) wins over
+ *                    width/height when present, so non-square pixels are judged by their real shape
  * @param continuity  one flag per JOINT (probes.length - 1): true = clip j+1 was rendered from clip
  *                    j's last frame (a chained continuation), false = scene cut. Null/undefined means
  *                    the caller does not know, which is NOT the same as "all cuts" — we decline.
@@ -86,12 +108,16 @@ export function planSeamstitch({ probes, continuity, canvas, targetFps, cfg = co
   }
   if (!continuity.some(Boolean)) return decline('no chained joint — every seam is a cut, a plain concat is equivalent');
 
-  // Geometry: refuse the clips the Python side would abort on anyway (ADDENDUM_AR §4).
+  // Geometry: refuse the clips the Python side would abort on anyway (ADDENDUM_AR §4). Compare
+  // DISPLAY aspect ratios — a clip with non-square pixels is not the shape its WxH suggests, and the
+  // canvas is always square-pixel.
   for (const [i, p] of probes.entries()) {
     if (!(p?.width > 0) || !(p?.height > 0)) return decline(`clip ${i + 1} has unknown dimensions`);
-    const d = (canvas.w * p.height) / (canvas.h * p.width);
+    const srcDar = p.dar > 0 ? p.dar : p.width / p.height;
+    const d = canvas.w / canvas.h / srcDar;
     if (Math.abs(d - 1) > MAX_FRAMING_DRIFT) {
-      return decline(`clip ${i + 1} is framed ${(Math.abs(d - 1) * 100).toFixed(1)}% off the ${canvas.w}x${canvas.h} canvas (${p.width}x${p.height}) — refitting it would crop real content`);
+      const sar = p.sar && p.sar !== 1 ? `, SAR ${p.sar.toFixed(4)}` : '';
+      return decline(`clip ${i + 1} is framed ${(Math.abs(d - 1) * 100).toFixed(1)}% off the ${canvas.w}x${canvas.h} canvas (${p.width}x${p.height}${sar}) — refitting it would crop real content`);
     }
   }
 
@@ -184,4 +210,4 @@ export function runSeamstitch(args, { python = config.stitch.python, root = conf
   });
 }
 
-export default { seamstitchAvailable, resetSeamstitchAvailability, planSeamstitch, runSeamstitch, toolsDir };
+export default { seamstitchAvailable, resetSeamstitchAvailability, readContinuity, planSeamstitch, runSeamstitch, toolsDir };
