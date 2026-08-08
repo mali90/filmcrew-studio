@@ -37,6 +37,8 @@ python3 -m seamstitch \
 |------|---------|---------|
 | `-o, --output` | (required) | output mp4 |
 | `--xfade F` | `0.25` | video+audio crossfade seconds per joint; `0` = hard cut (concat) |
+| `--joint-match L` | all `1` | per-joint continuity, N−1 comma-separated `1`/`0` (e.g. `1,0,1`); `0` = scene cut |
+| `--joint-xfade L` | `--xfade` everywhere | per-joint crossfade seconds, N−1 comma-separated (e.g. `0.25,0.04,0.25`) |
 | `--ramp F` | `2.0` | seconds to ease the colour correction back to native grade; `0` = full-clip correction with cascading |
 | `--method` | `hybrid` | `hybrid` (MKL + per-channel quantile), `mkl`, `quantile`, or `none` (baseline) |
 | `--deflicker` | off | append `deflicker=size=25` to the final video chain |
@@ -45,8 +47,26 @@ python3 -m seamstitch \
 | `--fps F` | first segment | override target fps |
 | `--verify` | off | run the §9 seam metric on the output; non-zero exit on FAIL |
 | `--dry-run` | off | print plan + ffmpeg args + filter graph; render nothing |
+| `--json` | off | write ONE JSON object to stdout (plan, offsets, verify report, warnings); logs stay on stderr |
 | `--keep-temp` | off | retain the temp dir (boundary frames, LUT PNGs) |
 | `-v, --verbose` | off | log the ffmpeg command and per-joint luma deltas |
+
+## Mixed timelines (`--joint-match` / `--joint-xfade`)
+
+A real cut is rarely chained end-to-end. `--joint-match` says, per joint, whether segment *j+1*
+actually continues from segment *j*:
+
+- **`1` (continuation)** — segment *j+1*'s first frame duplicates segment *j*'s last one, so that
+  frame is dropped (video `trim=start_frame=1`, audio `atrim=start=fd`) and the colour match runs
+  across the joint.
+- **`0` (scene cut)** — nothing is duplicated, so nothing is dropped (`L_j = nframes_j · fd`) and no
+  LUT is baked. Cascade mode (`--ramp 0`) also resets its reference there, so a grade never
+  propagates across a cut.
+
+`--joint-xfade` sets each joint's fade length independently: a long dissolve on the chained joints,
+a near-zero one at the cut. A `0` inside the chain becomes one frame, because ffmpeg's `xfade`
+rejects `duration=0` (a 1-frame dissolve reads as a hard cut). A global `--xfade 0` still takes the
+`concat` path for the whole timeline and cannot be combined with `--joint-xfade`.
 
 ## How it works (module map)
 

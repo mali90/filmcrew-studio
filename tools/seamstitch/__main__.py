@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import json
 import re
 import shutil
 import subprocess
@@ -24,8 +25,22 @@ from .probe import VideoInfo, probe
 DESQUEEZE_MAX = 1.05
 
 
+# Warnings raised during a run, kept for the --json report. Every log line still goes to stderr;
+# this only mirrors the ones a caller should surface.
+_WARNINGS: List[str] = []
+
+
 def _log(msg: str) -> None:
+    if msg.startswith("warning:") or msg.endswith("WARN"):
+        _WARNINGS.append(msg)
     print("seamstitch: %s" % msg, file=sys.stderr)
+
+
+def _emit_json(payload: dict) -> None:
+    """The one machine-readable object on stdout. Nothing else ever writes to stdout."""
+    json.dump(payload, sys.stdout)
+    sys.stdout.write("\n")
+    sys.stdout.flush()
 
 
 def _natural_key(s: str):
@@ -62,6 +77,39 @@ def _choose_target(infos: List[VideoInfo], target_res: Optional[str]) -> Tuple[i
     # Most common dims; ties break toward the first segment's dims.
     best = max(counts.items(), key=lambda kv: (kv[1], kv[0] == (infos[0].width, infos[0].height)))
     return best[0]
+
+
+def _parse_joint_flags(raw: str, n_joints: int, flag: str) -> List[bool]:
+    """Parse `--joint-match 1,0,1` into one bool per joint (True = chained continuation)."""
+    truthy = {"1": True, "0": False, "true": True, "false": False, "yes": True, "no": False}
+    parts = [t.strip().lower() for t in raw.split(",") if t.strip() != ""]
+    if len(parts) != n_joints:
+        raise SystemExit("error: %s needs %d value(s) (one per joint), got %d: %r"
+                         % (flag, n_joints, len(parts), raw))
+    out = []
+    for t in parts:
+        if t not in truthy:
+            raise SystemExit("error: %s values must be 1 or 0, got %r" % (flag, t))
+        out.append(truthy[t])
+    return out
+
+
+def _parse_joint_floats(raw: str, n_joints: int, flag: str) -> List[float]:
+    """Parse `--joint-xfade 0.25,0,0.25` into one non-negative float per joint."""
+    parts = [t.strip() for t in raw.split(",") if t.strip() != ""]
+    if len(parts) != n_joints:
+        raise SystemExit("error: %s needs %d value(s) (one per joint), got %d: %r"
+                         % (flag, n_joints, len(parts), raw))
+    out = []
+    for t in parts:
+        try:
+            v = float(t)
+        except ValueError:
+            raise SystemExit("error: %s values must be numbers, got %r" % (flag, t))
+        if v < 0:
+            raise SystemExit("error: %s values must be >= 0, got %r" % (flag, t))
+        out.append(v)
+    return out
 
 
 def _distortion(target: Tuple[int, int], src: Tuple[int, int]) -> float:
@@ -129,6 +177,25 @@ def _build_plan(infos: List[VideoInfo], args, target: Tuple[int, int], seg_desqu
     fps = float(args.fps) if args.fps else infos[0].fps
     w, h = target
     fd = 1.0 / fps
+    n_joints = len(infos) - 1
+
+    # Per-joint continuity + crossfade length. Defaults reproduce the single-value behaviour: every
+    # joint is a chained continuation, every fade is --xfade.
+    if args.joint_xfade and float(args.xfade) == 0:
+        raise SystemExit("error: --joint-xfade cannot be combined with --xfade 0, which selects the "
+                         "hard-cut concat path for every joint")
+    joint_match = (_parse_joint_flags(args.joint_match, n_joints, "--joint-match")
+                   if args.joint_match else [True] * n_joints)
+    seg_match = [False] + joint_match
+    joint_xfade = (_parse_joint_floats(args.joint_xfade, n_joints, "--joint-xfade")
+                   if args.joint_xfade else [float(args.xfade)] * n_joints)
+    # Same promotion StitchPlan applies, done here so the log line and the length budget below see
+    # the values the graph will really use.
+    xfades = list(joint_xfade) if float(args.xfade) == 0 else gr.resolve_xfades(joint_xfade, fps)
+    for k, (asked, used) in enumerate(zip(joint_xfade, xfades), start=1):
+        if asked != used:
+            _log("joint %d: xfade 0 promoted to one frame (%.6fs) — ffmpeg's xfade rejects "
+                 "duration=0, and a 1-frame dissolve reads as a hard cut" % (k, used))
 
     for i, info in enumerate(infos):
         src = (info.width, info.height)
@@ -143,9 +210,17 @@ def _build_plan(infos: List[VideoInfo], args, target: Tuple[int, int], seg_desqu
                                  % (i + 1, d))
         if abs(info.fps - fps) > 1e-6:
             _log("warning: segment %d is %.4f fps, retiming to %.4f" % (i + 1, info.fps, fps))
-        if info.nframes * fd < 2 * args.xfade + fd:
-            raise SystemExit("error: segment %d too short (%.3fs) for xfade %.3fs (needs >= 2*xfade + 1 frame)"
-                             % (i + 1, info.nframes * fd, args.xfade))
+
+    # Length budget, per segment, on its EFFECTIVE length L_j (a dropped boundary frame shortens it):
+    # it must outlast the fade on each side plus one frame.
+    lengths = gr.segment_lengths([i.nframes for i in infos], fps, seg_match)
+    for j, L in enumerate(lengths):
+        xf_prev = xfades[j - 1] if j >= 1 else 0.0
+        xf_next = xfades[j] if j < n_joints else 0.0
+        if L + 1e-9 < xf_prev + xf_next + fd:
+            raise SystemExit("error: segment %d too short (%.3fs) for its crossfades (%.3fs before + "
+                             "%.3fs after) — needs >= xfade_before + xfade_after + 1 frame"
+                             % (j + 1, L, xf_prev, xf_next))
 
     audio_rate, audio_layout = 48000, "stereo"
     for info in infos:
@@ -156,8 +231,7 @@ def _build_plan(infos: List[VideoInfo], args, target: Tuple[int, int], seg_desqu
 
     ramp = float(args.ramp)
     if ramp > 0:
-        lengths = gr.segment_lengths([i.nframes for i in infos], fps)
-        max_ramp = min(lengths[j] - args.xfade for j in range(1, len(lengths)))
+        max_ramp = min(lengths[j] - xfades[j - 1] for j in range(1, len(lengths)))
         if ramp > max_ramp:
             _log("warning: clamping ramp %.3f -> %.3f (L_j - xfade)" % (ramp, max_ramp))
             ramp = max(0.0, max_ramp)
@@ -176,6 +250,8 @@ def _build_plan(infos: List[VideoInfo], args, target: Tuple[int, int], seg_desqu
         seg_has_audio=[i.has_audio for i in infos],
         audio_rate=audio_rate,
         audio_layout=audio_layout,
+        seg_match=seg_match,
+        xfades=xfades,
     )
 
 
@@ -188,6 +264,13 @@ def _bake_luts(infos: List[VideoInfo], plan: gr.StitchPlan, boundaries: List[Tup
     lut_paths: dict = {}
     prev_f: lu.Transform = lambda frame: frame
     for j in range(1, len(infos)):
+        if not plan.seg_match[j]:
+            # Scene cut: the boundary frames are different content, so a statistical match between
+            # them is meaningless. Reset the cascade reference too, or cascade mode would carry the
+            # accumulated grade of the previous scene across the cut.
+            _log("joint %d->%d marked as a cut (--joint-match 0) — no colour match" % (j, j + 1))
+            prev_f = lambda frame: frame
+            continue
         last_prev_png, first_j_png = boundaries[j - 1]
         last_prev = fr.load_rgb(last_prev_png)
         first_j = fr.load_rgb(first_j_png)
@@ -215,6 +298,21 @@ def _probe_duration(path: Path, ffprobe: str) -> Optional[float]:
         return None
 
 
+def _segments_report(infos: List[VideoInfo], target: Tuple[int, int], plan: gr.StitchPlan,
+                     seg_desqueeze: List[float]) -> List[dict]:
+    """Per-segment facts for the --json report: what came in, and what the graph does to it."""
+    return [{
+        "path": str(info.path),
+        "w": info.width,
+        "h": info.height,
+        "sar": info.sar or "1:1",
+        "fps": info.fps,
+        "nframes": info.nframes,
+        "d": _distortion(target, (info.width, info.height)),
+        "action": _fit_action(info, target, plan.fit, seg_desqueeze[i]),
+    } for i, info in enumerate(infos)]
+
+
 def _fit_action(info: VideoInfo, target: Tuple[int, int], fit: str, wx: float) -> str:
     parts = []
     if (info.width, info.height) != target:
@@ -229,6 +327,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("segments", nargs="+", help="2+ input segments in order, or a single glob (natural-sorted)")
     p.add_argument("-o", "--output", required=True, type=Path)
     p.add_argument("--xfade", type=float, default=0.25, help="video+audio crossfade seconds per joint (0 = hard cut)")
+    p.add_argument("--joint-match", default=None, metavar="1,0,1",
+                   help="per-joint continuity: N-1 comma-separated 1/0 (default: all 1). 0 marks a "
+                        "scene cut — no duplicated boundary frame to drop, no colour match across it")
+    p.add_argument("--joint-xfade", default=None, metavar="0.25,0,0.25",
+                   help="per-joint crossfade seconds: N-1 comma-separated (default: --xfade at every "
+                        "joint). A 0 here becomes one frame — ffmpeg's xfade rejects duration=0")
     p.add_argument("--ramp", type=float, default=2.0, help="seconds to ease colour correction back to native (0 = cascade)")
     p.add_argument("--method", choices=["hybrid", "mkl", "quantile", "none"], default="hybrid")
     p.add_argument("--fit", choices=["cover", "contain", "none"], default="cover",
@@ -248,11 +352,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--keep-temp", action="store_true")
     p.add_argument("--verify", action="store_true", help="run the seam metric + geometry gate; non-zero exit on FAIL")
     p.add_argument("--dry-run", action="store_true", help="print plan + ffmpeg args + graph; render nothing")
+    p.add_argument("--json", action="store_true",
+                   help="write ONE machine-readable JSON object to stdout (logs stay on stderr). "
+                        "Emitted for --dry-run too; a single-input --loop run emits a short form")
     p.add_argument("-v", "--verbose", action="store_true")
     p.add_argument("--ffmpeg", default="ffmpeg")
     p.add_argument("--ffprobe", default="ffprobe")
     args = p.parse_args(argv)
 
+    _WARNINGS.clear()   # main() is re-entrant (tests call it in-process)
     _check_ffmpeg(args.ffmpeg, args.ffprobe)
 
     seg_paths = _resolve_segments(args.segments)
@@ -273,6 +381,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             if not args.dry_run:
                 out_dur = _probe_duration(args.output, args.ffprobe)
                 _log("wrote %s (seamless loop, %.3fs)" % (args.output, out_dur if out_dur is not None else (dur or 0.0)))
+            if args.json:
+                # Short form: a loop-wrap has no segments, joints or offsets to report.
+                _emit_json({"ok": True, "dryRun": bool(args.dry_run), "loop": True,
+                            "output": str(args.output), "warnings": list(_WARNINGS)})
             return 0
         finally:
             if not args.keep_temp and args.temp_dir is None:
@@ -304,6 +416,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.dry_run or args.verbose:
             _log("plan: fps=%s  target=%dx%d  fit=%s  method=%s  xfade=%s  ramp=%s  loop=%s  deflicker=%s"
                  % (plan.fps, target[0], target[1], plan.fit, plan.method, plan.xfade, plan.ramp, args.loop, plan.deflicker))
+            _log("  joints: match=%s  xfade=%s"
+                 % (",".join("1" if m else "0" for m in plan.seg_match[1:]),
+                    ",".join("%g" % x for x in plan.xfades)))
             for i, info in enumerate(infos):
                 _log("  segment %d: %s  %dx%d  SAR=%s  DAR=%.4f  d=%.4f  action=%s"
                      % (i + 1, info.path.name, info.width, info.height, info.sar or "1:1",
@@ -315,23 +430,53 @@ def main(argv: Optional[List[str]] = None) -> int:
             print("\n# ffmpeg command:\n" + rd.format_command(ff_args), file=sys.stderr)
             print("\n# filter_complex:\n" + graph.filtergraph.replace(";", ";\n"), file=sys.stderr)
 
+        report = {
+            "ok": True,
+            "dryRun": bool(args.dry_run),
+            "output": str(args.output),
+            "fps": plan.fps,
+            "target": [target[0], target[1]],
+            "fit": plan.fit,
+            "method": plan.method,
+            "xfades": list(plan.xfades),
+            "jointMatch": list(plan.seg_match[1:]),
+            "offsets": list(graph.offsets),
+            "expectedDuration": graph.expected_duration,
+            "segments": _segments_report(infos, target, plan, seg_desqueeze),
+        }
+
         if args.dry_run:
             if args.loop:
                 lw.make_seamless_loop(stitched, args.output, args.xfade, args.method, args.crf, args.preset,
                                       args.audio_bitrate, tmp, args.ffmpeg, args.ffprobe, args.verbose, True)
+            if args.json:
+                report["warnings"] = list(_WARNINGS)
+                _emit_json(report)
             return 0
 
         rd.render(ff_args, verbose=args.verbose)
 
         exit_code = 0
         if args.verify:
-            # Verify the internal seams on the stitched result (before any loop-wrap reorders the timeline).
-            seam = vf.verify(stitched, graph.offsets, plan.xfade, plan.fps, target[0], target[1], args.ffmpeg)
+            # Verify the internal seams on the stitched result (before any loop-wrap reorders the
+            # timeline). Per joint, with that joint's own fade length — vf.verify/vf.geometry_gate
+            # are the same loops with one shared value.
+            seam = [vf.verify_joint(stitched, k + 1, off, plan.xfades[k], plan.fps, target[0], target[1], args.ffmpeg)
+                    for k, off in enumerate(graph.offsets)]
             print("\nseam verification:\n" + vf.format_report(seam), file=sys.stderr)
-            geom = vf.geometry_gate(stitched, graph.offsets, plan.xfade, plan.fps, target[0], target[1], args.ffmpeg)
+            geom = [vf.geometry_joint(stitched, k + 1, off, plan.xfades[k], plan.fps, target[0], target[1], args.ffmpeg)
+                    for k, off in enumerate(graph.offsets)]
             print("\ngeometry gate:\n" + vf.format_geometry_report(geom), file=sys.stderr)
             seam_fail = any(not r.passed for r in seam)
             geom_fail = any(r.verdict == "FAIL" for r in geom)
+            report["verify"] = {
+                "seam": [{"joint": r.joint, "step": r.step, "baseline": r.baseline,
+                          "drift": r.drift, "passed": r.passed} for r in seam],
+                "geometry": [{"joint": r.joint, "sx": r.sx, "sy": r.sy, "residual": r.residual,
+                              "tiles": r.n_tiles, "verdict": r.verdict} for r in geom],
+                "seamPassed": not seam_fail,
+                "geometryPassed": not geom_fail,
+            }
             if seam_fail or geom_fail:
                 _log("VERIFY FAILED (%s%s%s)"
                      % ("seam" if seam_fail else "", " + " if seam_fail and geom_fail else "",
@@ -340,6 +485,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             else:
                 _log("VERIFY PASSED")
 
+        out_dur = None
         if args.loop:
             lw.make_seamless_loop(stitched, args.output, args.xfade, args.method, args.crf, args.preset,
                                   args.audio_bitrate, tmp, args.ffmpeg, args.ffprobe, args.verbose, False)
@@ -353,6 +499,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                      % (out_dur, graph.expected_duration, delta, "OK" if delta <= fd + 0.05 else "WARN"))
 
         _log("wrote %s" % args.output)
+        if args.json:
+            if out_dur is None:
+                out_dur = _probe_duration(args.output, args.ffprobe)
+            if out_dur is not None:
+                report["outputDuration"] = out_dur
+            report["ok"] = exit_code == 0
+            report["warnings"] = list(_WARNINGS)
+            _emit_json(report)
         return exit_code
     finally:
         if not args.keep_temp and args.temp_dir is None:
