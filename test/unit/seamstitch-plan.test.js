@@ -106,6 +106,17 @@ test('ineligible: a clip shorter than its own crossfades plus a frame', () => {
   assert.match(r.reason, /clip 2 is 0.50s, shorter than its crossfades need/);
 });
 
+test('length budget counts a cut joint as one frame, not zero (graph.py promotes 0 → fd)', () => {
+  // 4 clips, joints: chained, cut, cut. Clip 3 sits between two cut joints; with cutXfade=0 the
+  // tool still spends one frame per joint, so its budget is fd+fd+fd ≈ 0.125s at 24fps.
+  const probes = (midDur) => [clip(), clip(), clip(160, 96, midDur), clip()];
+  const short = planSeamstitch({ probes: probes(0.1), continuity: [true, false, false], canvas: CANVAS, targetFps: 24, cfg: CFG });
+  assert.equal(short.eligible, false);
+  assert.match(short.reason, /clip 3/);
+  const ok = planSeamstitch({ probes: probes(0.15), continuity: [true, false, false], canvas: CANVAS, targetFps: 24, cfg: CFG });
+  assert.equal(ok.eligible, true);
+});
+
 test('ineligible: framing more than 8% off the canvas (ADDENDUM_AR §4 abort)', () => {
   // 176x96 against a 160x96 canvas is 9.1% off — refitting that crops real content.
   const r = planSeamstitch({ probes: [clip(), clip(176, 96)], continuity: [true], canvas: CANVAS, targetFps: 24, cfg: CFG });
