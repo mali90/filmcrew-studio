@@ -143,6 +143,29 @@ test('$alias resolves ONE hop and still fails loudly on a genuinely unknown comp
   assert.throws(() => estimateRender(threeJobs(), { backend: 'kling-o3@segmind', mode: 'full' }), /backend/);
 });
 
+// The registry is the thing that grows: a model/provider added there with no matching price row
+// would 500 the estimate endpoint for every run on it. This is the coupling stated as an assertion,
+// so the failure lands on whoever adds the model rather than on a user opening a run page.
+test('EVERY renderable backend id in the registry prices, through whatever hop it needs', async () => {
+  const { BACKEND_IDS, ALL_BACKENDS } = await import('../../../../src/lib/render-models.js');
+  assert.ok(BACKEND_IDS.length > 0);
+  for (const id of [...BACKEND_IDS, ...ALL_BACKENDS]) {
+    const e = estimateRender(threeJobs(), { backend: id, mode: 'full', resolution: '480p' });
+    assert.ok(Number.isFinite(e.totalUsd) && e.totalUsd > 0, `${id} priced to a real number, got ${e.totalUsd}`);
+  }
+});
+
+test('a $alias row never points at another $alias row (only one hop is followed)', () => {
+  const prices = JSON.parse(fs.readFileSync(path.join(ROOT, 'web/server/lib/prices.json'), 'utf8'));
+  for (const [key, row] of Object.entries(prices)) {
+    if (!row?.$alias) continue;
+    const target = prices[row.$alias];
+    assert.ok(target, `${key} aliases "${row.$alias}", which does not exist`);
+    assert.ok(!target.$alias, `${key} → ${row.$alias} is a second hop; tableFor follows only one`);
+    assert.ok(target.perSecondUsd != null, `${key} must land on a real rate row`);
+  }
+});
+
 test('readSeedanceResolution: reads .env, tolerates quotes, defaults to 480p', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-res-'));
   try {

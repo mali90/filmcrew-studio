@@ -146,6 +146,32 @@ test('normalizeBackend: compound ids pass through, legacy:false, and the functio
   }
 });
 
+test('normalizeBackend: surrounding whitespace is trimmed (RENDER_BACKEND=... in a .env file)', () => {
+  // a value typed into .env or piped through a shell picks up spaces and a stray newline; rejecting
+  // those as "unknown backend" would be a baffling failure for a correct setting.
+  for (const v of ['  kling  ', '\tseedance\n', ' kling-o3@fal ']) {
+    assert.equal(normalizeBackend(v).id, v.trim() === 'seedance' ? 'seedance-2.0@fal' : 'kling-o3@fal', JSON.stringify(v));
+  }
+});
+
+test('normalizeBackend is CASE-SENSITIVE and takes exactly one @ — no fuzzy matching', () => {
+  // ids are looked up, never parsed loosely: a near-miss must fail loudly at the gate rather than
+  // resolve to something the user did not ask to be billed for.
+  for (const v of ['KLING', 'Seedance', 'seedance-2.0@FAL', 'kling-o3@fal@x', 'kling-o3@@fal']) {
+    assert.throws(() => normalizeBackend(v), /Unknown render backend/, v);
+  }
+});
+
+test('normalizeBackend: the optional hint is appended to the error (how to set the backend)', () => {
+  assert.throws(() => normalizeBackend('nope', { hint: 'RENDER_BACKEND in .env, or --backend' }),
+    /\(RENDER_BACKEND in \.env, or --backend\)\.$/);
+  // and with no hint the message simply ends after the list — never a dangling "()"
+  assert.throws(() => normalizeBackend('nope'), (e) => {
+    assert.ok(!e.message.includes('()'), 'no empty parenthetical');
+    return true;
+  });
+});
+
 test('normalizeBackend: anything else throws, and the message LISTS the accepted values', () => {
   const bad = [
     'runway',                 // not a model at all
@@ -227,6 +253,20 @@ test('capsFor throws for a model with no provider entry (seedance-2.5 this phase
   assert.throws(() => capsFor('seedance-2.5@fal'), /seedance-2\.5/);
 });
 
+test('capsFor on a BARE model id that DOES ship names the compound ids to use instead', () => {
+  // the other half of the bare-model branch: 'kling-o3' is a real model, but it says nothing about
+  // where the render runs, so the error has to be actionable rather than "unknown backend".
+  for (const [model, expected] of [['kling-o3', 'kling-o3@fal'], ['seedance-2.0', 'seedance-2.0@fal']]) {
+    assert.throws(() => capsFor(model), (e) => {
+      assert.match(e.message, new RegExp(`"${model.replace('.', '\\.')}" needs a provider`));
+      assert.ok(e.message.includes(expected), `it names ${expected}`);
+      return true;
+    }, model);
+  }
+  // …and the no-provider model gets the OTHER message — nothing in this build can render it
+  assert.throws(() => capsFor('seedance-2.5'), /no provider entry yet/);
+});
+
 // ── 6. castLimitFor / aspectsFor — the two helpers the UI and the server need ──
 // Both accept a backend id (compound OR legacy) AND a bare model id, so seedance-2.5's values are
 // assertable (and UI-selectable) before it has a provider entry. That is what keeps adding a
@@ -272,4 +312,15 @@ test('refLabel: compact / spaced / bracket styles for Image, Audio and Video ref
   // today's shipping renderers emit @Image1 — a caps object without refStyle must keep doing that
   assert.equal(refLabel({}, 'Image', 1), '@Image1');
   assert.equal(refLabel(capsFor('seedance-2.0@fal'), 'Image', 1), '@Image1');
+});
+
+test('refLabel degrades to the shipping style rather than emitting a broken citation', () => {
+  // a caps bundle from a newer registry entry may name a style this build does not know. Emitting
+  // "undefined1" into a paid prompt is far worse than falling back to the style that ships today.
+  for (const caps of [undefined, null, {}, { refStyle: 'nonsense' }, { refStyle: '' }]) {
+    assert.equal(refLabel(caps, 'Image', 1), '@Image1', JSON.stringify(caps));
+  }
+  // the kind is normalized, so a caller writing 'image' still gets the canonical citation
+  assert.equal(refLabel({}, 'image', 2), '@Image2');
+  assert.equal(refLabel({ refStyle: 'spaced' }, 'audio', 2), '@Audio 2');
 });
