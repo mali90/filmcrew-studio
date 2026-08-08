@@ -25,7 +25,7 @@ const SRC = path.join(ROOT, 'src/lib/render-models.js');
 
 const {
   PROVIDERS, RENDER_MODELS, BACKEND_IDS, LEGACY_BACKENDS, ALL_BACKENDS,
-  normalizeBackend, capsFor, castLimitFor, aspectsFor, refLabel,
+  normalizeBackend, capsFor, castLimitFor, aspectsFor, refLabel, demotesOpeningFrame,
 } = await import('../../src/lib/render-models.js');
 
 const ASPECT_RE = /^\d+:\d+$/;
@@ -46,12 +46,15 @@ test('render-models.js has ZERO imports and reads no env (safe for web/server\'s
 });
 
 // ── 2. Shape invariants (every entry, forever) ──────────────────────────────
-test('PROVIDERS declares fal and segmind; segmind carries no model entries this phase', () => {
+test('PROVIDERS declares fal and segmind; Segmind now carries BOTH Seedance models', () => {
   assert.deepEqual(Object.keys(PROVIDERS).sort(), ['fal', 'segmind']);
   assert.deepEqual(PROVIDERS.fal, { id: 'fal', label: 'fal' });
   assert.deepEqual(PROVIDERS.segmind, { id: 'segmind', label: 'Segmind' });
-  const segmindModels = Object.entries(RENDER_MODELS).filter(([, m]) => m.providers?.segmind);
-  assert.deepEqual(segmindModels, [], 'the provider axis exists but no Segmind model lands in this phase');
+  const segmindModels = Object.entries(RENDER_MODELS).filter(([, m]) => m.providers?.segmind).map(([id]) => id);
+  assert.deepEqual(segmindModels, ['seedance-2.0', 'seedance-2.5']);
+  // Kling stays fal-only, on purpose: Segmind has no elements/voice-capable Kling, and the picker
+  // must say so honestly rather than offering a backend nothing can render.
+  assert.ok(!RENDER_MODELS['kling-o3'].providers.segmind, 'kling-o3 is deliberately fal-only');
 });
 
 test('every RENDER_MODELS entry is well formed and every provider key is a declared provider', () => {
@@ -70,7 +73,11 @@ test('every RENDER_MODELS entry is well formed and every provider key is a decla
       assert.ok(entry.minSeconds <= entry.maxSeconds, `${id}@${pid} minSeconds ≤ maxSeconds`);
       assert.ok(Number.isInteger(entry.maxImages) && entry.maxImages >= 1, `${id}@${pid}.maxImages`);
       assert.ok(['string', 'int'].includes(entry.durationType), `${id}@${pid}.durationType`);
-      assert.equal(typeof entry.endpointKey, 'string', `${id}@${pid}.endpointKey is a CONFIG KEY NAME, resolved at call time`);
+      // The endpoint is always a CONFIG KEY NAME resolved at call time (that is what keeps this file
+      // import-free) — `endpointKey` on an endpoint-shaped provider, `slugKey` on a slug-shaped one.
+      const routeKey = entry.endpointKey ?? entry.slugKey;
+      assert.equal(typeof routeKey, 'string', `${id}@${pid} names its route by config key (endpointKey|slugKey)`);
+      assert.ok(!(entry.endpointKey && entry.slugKey), `${id}@${pid} declares ONE route key, not both`);
     }
   }
 });
@@ -107,19 +114,96 @@ test('the two shipping models carry exactly the caps the renderers rely on today
   });
 });
 
-test('seedance-2.5 is declared model-level ONLY — its provider entries land next phase', () => {
+// ── The three entries this phase adds, stated in full ───────────────────────
+// Each deepEqual is the SPEC of one (model, provider) pair — every number below was read off the
+// provider's own API page (plan "Research facts", verified 2026-08-08). A deepEqual rather than a
+// spot check on purpose: a cap silently added or dropped in the registry changes what a paid render
+// sends, so the whole entry is pinned.
+const SIX_ASPECTS = ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'];
+
+test('seedance-2.5 model level: label, family, cast cap 4, six ratios', () => {
   const sd25 = RENDER_MODELS['seedance-2.5'];
   assert.equal(sd25.label, 'Seedance 2.5');
   assert.equal(sd25.family, 'seedance');
   assert.equal(sd25.castLimit, 4);
-  assert.deepEqual(sd25.aspects, ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9']);
-  assert.deepEqual(sd25.providers, {}, 'no provider entry yet — adding one is a one-line registry change');
+  assert.deepEqual(sd25.aspects, SIX_ASPECTS);
+  assert.deepEqual(Object.keys(sd25.providers).sort(), ['fal', 'segmind']);
+});
+
+test('seedance-2.5@fal: bracket refs, STRING duration 4–30, seed on, NO frame anchors, combined-50', () => {
+  assert.deepEqual(RENDER_MODELS['seedance-2.5'].providers.fal, {
+    endpointKey: 'seedance25Endpoint', probeEndpointKey: 'seedance25ProbeEndpoint',
+    maxImages: 50, maxAudioRefs: 10, maxVideoRefs: 50, maxCombinedRefs: 50, audioBudgetS: 30,
+    minSeconds: 4, maxSeconds: 30,
+    durationType: 'string',
+    resolutions: ['480p', '720p'], defaultResolution: '720p',
+    nativeFirstFrame: false, nativeLastFrame: false,
+    supportsSeed: true, supportsReturnLastFrame: false,
+    refStyle: 'bracket', shotSyntax: 'numbered', knobsKey: 'seedance25',
+    argMap: { images: 'image_urls', audios: 'audio_urls', videos: 'video_urls', firstFrame: null, lastFrame: null },
+  });
+  // fal's 2.5 reference endpoint has no first/last-frame parameters at all, so a seam frame ALWAYS
+  // travels as a trailing image ref + a prompt pin — exactly like fal Seedance 2.0 today.
+  assert.equal(demotesOpeningFrame(capsFor('seedance-2.5@fal')), true);
+});
+
+test('seedance-2.5@segmind: spaced refs, INT duration 4–30, native frames that EXCLUDE refs', () => {
+  assert.deepEqual(RENDER_MODELS['seedance-2.5'].providers.segmind, {
+    slugKey: 'seedance25Slug',
+    maxImages: 30, maxAudioRefs: 10, maxVideoRefs: 10, audioBudgetS: 30, audioPerClipS: [2, 30],
+    minSeconds: 4, maxSeconds: 30,
+    durationType: 'int',
+    resolutions: ['480p', '720p'], defaultResolution: '720p',
+    aspects: SIX_ASPECTS,
+    nativeFirstFrame: true, nativeLastFrame: true, firstFrameExcludesRefs: true,
+    supportsSeed: true, supportsReturnLastFrame: true,
+    refStyle: 'spaced', shotSyntax: 'numbered', knobsKey: 'seedance25',
+    argMap: {
+      images: 'reference_images', audios: 'reference_audios', videos: 'reference_videos',
+      firstFrame: 'first_frame_url', lastFrame: 'last_frame_url',
+    },
+  });
+  const caps = capsFor('seedance-2.5@segmind');
+  assert.deepEqual(caps.audioPerClipS, [2, 30], 'a reference audio under 2s is a hard Segmind rejection');
+  // The native slot is MUTUALLY EXCLUSIVE with reference_images, so the moment a job carries cast
+  // refs the opening frame must be demoted — one image slot has to be reserved for it upstream.
+  assert.equal(demotesOpeningFrame(caps), true);
+});
+
+test('seedance-2.0@segmind: the same queue, a smaller model — 9 images, 3 audios, 4–15s, up to 4k', () => {
+  assert.deepEqual(RENDER_MODELS['seedance-2.0'].providers.segmind, {
+    slugKey: 'seedance20Slug',
+    maxImages: 9, maxAudioRefs: 3, maxVideoRefs: 3, audioBudgetS: 15,
+    minSeconds: 4, maxSeconds: 15,
+    durationType: 'int',
+    resolutions: ['480p', '720p', '1080p', '4k'], defaultResolution: '480p',
+    aspects: SIX_ASPECTS,
+    nativeFirstFrame: true, nativeLastFrame: true, firstFrameExcludesRefs: true,
+    supportsSeed: true, supportsReturnLastFrame: true,
+    refStyle: 'spaced', shotSyntax: 'connectors', knobsKey: 'seedance',
+    argMap: {
+      images: 'reference_images', audios: 'reference_audios', videos: 'reference_videos',
+      firstFrame: 'first_frame_url', lastFrame: 'last_frame_url',
+    },
+  });
+  // Seedance 2.0's MODEL-level ratio list stays the three fal renders — the six live on the Segmind
+  // entry, so `seedance-2.0@fal` cannot gain a ratio fal will 422 on.
+  assert.deepEqual(RENDER_MODELS['seedance-2.0'].aspects, ['16:9', '9:16', '1:1']);
+  assert.equal(demotesOpeningFrame(capsFor('seedance-2.0@segmind')), true);
+});
+
+test('demotesOpeningFrame stays FALSE only where a native slot coexists with refs (kling)', () => {
+  assert.equal(demotesOpeningFrame(capsFor('kling-o3@fal')), false);
+  assert.equal(demotesOpeningFrame(capsFor('seedance-2.0@fal')), true); // no anchor at all
 });
 
 // ── 3. Derived id lists ─────────────────────────────────────────────────────
 test('BACKEND_IDS derives ONLY from models that have at least one provider entry', () => {
-  assert.deepEqual(BACKEND_IDS, ['kling-o3@fal', 'seedance-2.0@fal']);
-  assert.ok(!BACKEND_IDS.some((id) => id.startsWith('seedance-2.5@')), 'seedance-2.5 has no provider, so no backend id');
+  assert.deepEqual(BACKEND_IDS, [
+    'kling-o3@fal',
+    'seedance-2.0@fal', 'seedance-2.0@segmind',
+    'seedance-2.5@fal', 'seedance-2.5@segmind',
+  ]);
   // and the derivation is real, not a hand-written literal
   const derived = Object.entries(RENDER_MODELS)
     .flatMap(([m, e]) => Object.keys(e.providers ?? {}).map((p) => `${m}@${p}`));
@@ -176,8 +260,7 @@ test('normalizeBackend: anything else throws, and the message LISTS the accepted
   const bad = [
     'runway',                 // not a model at all
     'seedance-2.5',           // a known model, but a bare model id is not a backend id
-    'seedance-2.5@fal',       // no provider entry yet
-    'seedance-2.0@segmind',   // declared provider, no entry for this model yet
+    'kling-o3@segmind',       // declared provider, deliberately no entry (Kling stays fal-only)
     'kling-o3@',
     '@fal',
     // Inherited object properties are NOT registry entries: these would otherwise validate at the
@@ -259,9 +342,13 @@ test('capsFor returns a FRESH object — mutating caps can never corrupt the reg
   assert.deepEqual(RENDER_MODELS['seedance-2.0'].aspects, ['16:9', '9:16', '1:1']);
 });
 
-test('capsFor throws for a model with no provider entry (seedance-2.5 this phase)', () => {
-  assert.throws(() => capsFor('seedance-2.5'), /seedance-2\.5/);
-  assert.throws(() => capsFor('seedance-2.5@fal'), /seedance-2\.5/);
+test('capsFor: a bare model id is never a backend id, however many providers it now has', () => {
+  assert.throws(() => capsFor('seedance-2.5'), (e) => {
+    assert.match(e.message, /needs a provider/);
+    assert.ok(e.message.includes('seedance-2.5@fal') && e.message.includes('seedance-2.5@segmind'), 'names both');
+    return true;
+  });
+  assert.throws(() => capsFor('kling-o3@segmind'), /Unknown render backend/);
 });
 
 test('capsFor on a BARE model id that DOES ship names the compound ids to use instead', () => {
@@ -274,8 +361,10 @@ test('capsFor on a BARE model id that DOES ship names the compound ids to use in
       return true;
     }, model);
   }
-  // …and the no-provider model gets the OTHER message — nothing in this build can render it
-  assert.throws(() => capsFor('seedance-2.5'), /no provider entry yet/);
+  // The OTHER branch — "nothing in this build can render it" — is unreachable while every declared
+  // model ships a provider, but it must stay: the next model lands model-level first, as 2.5 did.
+  const orphan = { label: 'X', family: 'seedance', castLimit: 1, aspects: ['16:9'], providers: {} };
+  assert.deepEqual(Object.keys(orphan.providers), [], 'a model may legally exist with no provider');
 });
 
 // ── 6. castLimitFor / aspectsFor — the two helpers the UI and the server need ──
@@ -295,12 +384,23 @@ test('castLimitFor: the cap table is exactly {kling-o3:1, seedance-2.0:2, seedan
   assert.throws(() => castLimitFor('runway'));
 });
 
-test('aspectsFor: per-model ratio lists, incl. seedance-2.5\'s six (no adaptive/auto anywhere)', () => {
+// Ratios are per (model, PROVIDER) now, not per model: Seedance 2.0 renders six ratios on Segmind
+// and three on fal, from ONE model entry. aspectsFor therefore follows capsFor's precedence —
+// provider entry wins, model list is the fallback — while a BARE model id still answers with the
+// model-level list (that is what lets the UI offer a model before its provider is chosen).
+test('aspectsFor is PROVIDER-aware for a backend id, model-level for a bare model id', () => {
   assert.deepEqual(aspectsFor('kling-o3'), ['16:9', '9:16', '1:1']);
   assert.deepEqual(aspectsFor('kling'), ['16:9', '9:16', '1:1']);
   assert.deepEqual(aspectsFor('kling-o3@fal'), ['16:9', '9:16', '1:1']);
-  assert.deepEqual(aspectsFor('seedance-2.0@fal'), ['16:9', '9:16', '1:1']);
-  assert.deepEqual(aspectsFor('seedance-2.5'), ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9']);
+  assert.deepEqual(aspectsFor('seedance-2.0@fal'), ['16:9', '9:16', '1:1'], 'fal 2.0 keeps its three');
+  assert.deepEqual(aspectsFor('seedance'), ['16:9', '9:16', '1:1'], 'the legacy alias IS seedance-2.0@fal');
+  assert.deepEqual(aspectsFor('seedance-2.0'), ['16:9', '9:16', '1:1'], 'the bare model reads model level');
+  assert.deepEqual(aspectsFor('seedance-2.0@segmind'), SIX_ASPECTS, 'Segmind 2.0 renders all six');
+  assert.deepEqual(aspectsFor('seedance-2.5@fal'), SIX_ASPECTS);
+  assert.deepEqual(aspectsFor('seedance-2.5@segmind'), SIX_ASPECTS);
+  assert.deepEqual(aspectsFor('seedance-2.5'), SIX_ASPECTS);
+  // and capsFor agrees, for every id — the two must never disagree about what a run may select
+  for (const id of BACKEND_IDS) assert.deepEqual(capsFor(id).aspects, aspectsFor(id), id);
   for (const m of Object.keys(RENDER_MODELS)) {
     assert.ok(!aspectsFor(m).includes('adaptive'), `${m}: adaptive is deliberately not exposed`);
     assert.ok(!aspectsFor(m).includes('auto'), `${m}: auto is deliberately not exposed`);

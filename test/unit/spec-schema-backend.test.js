@@ -14,10 +14,37 @@ import { loadGoldenSpec } from '../helpers/fixtures.js';
 neutralizeDotenv();
 const { validateSpec, SEEDANCE_CAPS, KLING_CAPS, RENDER_BACKENDS, ASPECTS } = await import('../../src/lib/spec-schema.js');
 
-test('golden spec is valid for every backend id (legacy alias and canonical compound alike)', () => {
-  for (const be of ['kling', 'seedance', 'kling-o3@fal', 'seedance-2.0@fal']) {
+test('golden spec is valid for every backend id (legacy alias and canonical compound alike)', async () => {
+  const { ALL_BACKENDS } = await import('../../src/lib/render-models.js');
+  for (const be of ALL_BACKENDS) {
     assert.equal(validateSpec(loadGoldenSpec(), { backend: be }).ok, true, be);
   }
+});
+
+// Seedance 2.5 doubles the per-job window (4–30s on BOTH providers). The schema is where that
+// becomes real for a plan: a 30s job is a legal 2.5 job and an illegal 2.0 one, and the difference
+// must come from capsFor(backend) rather than a module constant.
+test('the per-job window is caps-driven: 30s validates on 2.5 and fails on every 15s model', () => {
+  const spec = loadGoldenSpec();
+  const [s1] = spec.shots;
+  spec.shots = [s1];
+  s1.duration_s = 30;
+  spec.audio.voice.lines = spec.audio.voice.lines.filter((l) => l.shot_id === s1.shot_id);
+  spec.kling.jobs = [{ job_id: 'K1', shots: [s1.shot_id], elements: ['subject'] }];
+
+  for (const be of ['seedance-2.5@fal', 'seedance-2.5@segmind']) {
+    assert.equal(validateSpec(spec, { backend: be }).ok, true, `${be} renders a 30s job`);
+  }
+  for (const be of ['seedance-2.0@fal', 'seedance-2.0@segmind', 'kling-o3@fal']) {
+    const v = validateSpec(spec, { backend: be });
+    assert.equal(v.ok, false, be);
+    assert.match(v.errors.join('\n'), /total 30s exceeds the 15s\/job cap/, be);
+  }
+  // …and 2.5's own ceiling still bites one second later
+  s1.duration_s = 31;
+  const over = validateSpec(spec, { backend: 'seedance-2.5@fal' });
+  assert.equal(over.ok, false);
+  assert.match(over.errors.join('\n'), /total 31s exceeds the 30s\/job cap/);
 });
 
 test('a 3s job passes kling but fails Seedance\'s 4s/job floor (caps-driven, model named)', () => {
@@ -34,20 +61,28 @@ test('a 3s job passes kling but fails Seedance\'s 4s/job floor (caps-driven, mod
   assert.deepEqual(validateSpec(spec, { backend: 'seedance-2.0@fal' }).errors, v.errors);
 });
 
-test('optional spec.render_backend: every valid id passes, unknown fails with the full list', () => {
+test('optional spec.render_backend: every valid id passes, unknown fails with the full list', async () => {
+  const { ALL_BACKENDS } = await import('../../src/lib/render-models.js');
   const spec = loadGoldenSpec();
-  for (const be of ['kling', 'seedance', 'kling-o3@fal', 'seedance-2.0@fal']) {
+  for (const be of ALL_BACKENDS) {
     spec.render_backend = be;
     assert.equal(validateSpec(spec).ok, true, be);
   }
   spec.render_backend = 'runway';
   const v = validateSpec(spec);
   assert.equal(v.ok, false);
-  assert.match(v.errors.join('\n'), /render_backend "runway" is not one of: kling-o3@fal, seedance-2\.0@fal, kling, seedance/);
+  const errs = v.errors.join('\n');
+  assert.match(errs, /render_backend "runway" is not one of: /);
+  for (const be of ALL_BACKENDS) assert.ok(errs.includes(be), `the message lists ${be}`);
 });
 
 test('caps exports: the registry-derived backends list + caps objects unchanged in shape', () => {
-  assert.deepEqual(RENDER_BACKENDS, ['kling-o3@fal', 'seedance-2.0@fal', 'kling', 'seedance']);
+  assert.deepEqual(RENDER_BACKENDS, [
+    'kling-o3@fal',
+    'seedance-2.0@fal', 'seedance-2.0@segmind',
+    'seedance-2.5@fal', 'seedance-2.5@segmind',
+    'kling', 'seedance',
+  ]);
   // ↓↓↓ these two must NOT need touching — they prove the registry reproduces the old constants ↓↓↓
   assert.deepEqual(SEEDANCE_CAPS, { MIN_JOB_SECONDS: 4, MAX_JOB_SECONDS: 15, MAX_IMAGE_REFS: 9, MAX_AUDIO_REFS: 3 });
   assert.deepEqual(KLING_CAPS, { MAX_STORYBOARDS: 6, MAX_JOB_SECONDS: 15, MAX_SEG_CHARS: 512, MAX_REF_IMAGES: 7 });
@@ -265,6 +300,17 @@ test("'21:9' clears the backend-less schema but FAILS validation once kling is n
   assert.match(v.errors.join('\n'), /not renderable on Kling 3\.0 Omni/);
   assert.ok(ASPECTS.includes('21:9'));
   assert.ok(!aspectsFor('kling').includes('21:9'), 'kling-o3 renders 16:9/9:16/1:1 only');
-  assert.ok(!aspectsFor('seedance-2.0@fal').includes('21:9'), 'seedance 2.0 the same three');
-  assert.ok(aspectsFor('seedance-2.5').includes('21:9'), 'only seedance-2.5 offers it this phase');
+  assert.ok(!aspectsFor('seedance-2.0@fal').includes('21:9'), 'seedance 2.0 ON FAL the same three');
+  // …but the SAME model on Segmind does offer it, so the ratio list is a (model, provider) fact
+  for (const be of ['seedance-2.0@segmind', 'seedance-2.5@fal', 'seedance-2.5@segmind']) {
+    assert.ok(aspectsFor(be).includes('21:9'), be);
+    const wide = loadGoldenSpec();
+    wide.project.aspect_ratio = '21:9';
+    wide.kling.aspect_ratio = '21:9';
+    assert.equal(validateSpec(wide, { backend: be }).ok, true, `${be} accepts a 21:9 spec`);
+  }
+  const narrow = loadGoldenSpec();
+  narrow.project.aspect_ratio = '21:9';
+  narrow.kling.aspect_ratio = '21:9';
+  assert.equal(validateSpec(narrow, { backend: 'seedance-2.0@fal' }).ok, false, 'the same spec fails on fal 2.0');
 });
