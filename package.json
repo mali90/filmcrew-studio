@@ -9,6 +9,7 @@
     "src",
     "engine",
     "tools",
+    "!tools/**/__pycache__",
     "config.js",
     ".env.example",
     "README.md",
