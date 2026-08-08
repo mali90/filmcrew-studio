@@ -30,3 +30,31 @@ test('the canvas never upscales past the source clips (srcShortSide cap)', () =>
   // unknown source dims → the configured scale, unchanged
   assert.deepEqual(canvasFor('16:9', null), { w: 228, h: 128 });
 });
+
+// ── Per-model aspect ratios: seedance-2.5 offers 4:3, 3:4 and 21:9 as well ──
+// The stitch canvas must shape itself for those too — a 21:9 render center-cropped into 16:9 loses
+// the frame edges the plan was written for.
+test('the new per-model ratios get their own canvas, still even and still capped', () => {
+  assert.deepEqual(canvasFor('4:3'), { w: 170, h: 128 });   // landscape: height is the short side
+  assert.deepEqual(canvasFor('3:4'), { w: 128, h: 170 });   // portrait: width is the short side
+  assert.deepEqual(canvasFor('21:9'), { w: 298, h: 128 });  // ultrawide
+  for (const a of ['4:3', '3:4', '21:9']) {
+    const { w, h } = canvasFor(a);
+    assert.equal(w % 2, 0, `${a} width is even (yuv420p)`);
+    assert.equal(h % 2, 0, `${a} height is even (yuv420p)`);
+  }
+});
+
+test('the never-upscale cap holds for the new ratios too', () => {
+  assert.deepEqual(canvasFor('4:3', 96), { w: 128, h: 96 });
+  assert.deepEqual(canvasFor('3:4', 96), { w: 96, h: 128 });
+  assert.deepEqual(canvasFor('21:9', 96), { w: 224, h: 96 });
+  // a sharper source never RAISES the scale past VIDEO_SHORT_SIDE
+  assert.deepEqual(canvasFor('21:9', 4096), { w: 298, h: 128 });
+});
+
+test('adaptive/auto are deliberately NOT canvas shapes — they fall back to legacy portrait', () => {
+  // the stitch pipeline needs a deterministic ratio; the registry never offers these two.
+  assert.deepEqual(canvasFor('adaptive'), { w: 128, h: 228 });
+  assert.deepEqual(canvasFor('auto'), { w: 128, h: 228 });
+});

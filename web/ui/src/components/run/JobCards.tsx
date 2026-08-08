@@ -13,7 +13,12 @@ import { jobSeconds } from './SpecInspector';
 
 type JobUiState = 'queued' | 'rendering' | 'done' | 'failed';
 
-const THUMB_WIDTH: Record<Aspect, string> = { '9:16': 'w-[54px]', '16:9': 'w-[171px]', '1:1': 'w-24' };
+// Thumbnail well is h-24 (96px) tall, so each width is 96 × the ratio — one entry per Aspect the
+// registry can hand us, the wide ones included.
+const THUMB_WIDTH: Record<Aspect, string> = {
+  '9:16': 'w-[54px]', '16:9': 'w-[171px]', '1:1': 'w-24',
+  '4:3': 'w-[128px]', '3:4': 'w-[72px]', '21:9': 'w-[224px]',
+};
 
 function Pill({ state }: { state: JobUiState }) {
   const cls: Record<JobUiState, string> = {

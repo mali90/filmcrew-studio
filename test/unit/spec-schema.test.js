@@ -30,7 +30,9 @@ test('non-object / wrong spec_version', () => {
 test('project: duration and aspect_ratio bounds', () => {
   let s = loadGoldenSpec(); s.project.duration_target_s = 999;
   assert.match(errStr(validateSpec(s, { upTo: 0 })), /duration_target_s/);
-  s = loadGoldenSpec(); s.project.aspect_ratio = '4:3';
+  // '4:3' USED to be the out-of-range example; it is a real seedance-2.5 ratio now, so the
+  // shape check needs a ratio no model offers.
+  s = loadGoldenSpec(); s.project.aspect_ratio = '5:4';
   assert.match(errStr(validateSpec(s, { upTo: 0 })), /aspect_ratio/);
 });
 

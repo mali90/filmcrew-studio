@@ -2,8 +2,14 @@
 // are the reference implementation (web/server/routes/*). Keep field names in lockstep with
 // serializeRun in routes/runs.js and the event emitters in lib/run-service.js.
 
-export type Backend = 'kling' | 'seedance';
-export type Aspect = '9:16' | '16:9' | '1:1';
+/** Render backend ids: the canonical `<model>@<provider>` form the server now returns, plus the two
+ *  legacy one-word aliases that stay valid forever (old manifests are never migrated on disk).
+ *  Mirrors ALL_BACKENDS in src/lib/render-models.js. */
+export type Backend = 'kling' | 'seedance' | 'kling-o3@fal' | 'seedance-2.0@fal';
+/** Every aspect ratio SOME model can render — which ones a given run may pick is per-model
+ *  (aspectsFor(backend)). 'adaptive'/'auto' are deliberately absent: the stitch canvas needs a
+ *  deterministic ratio. */
+export type Aspect = '9:16' | '16:9' | '1:1' | '4:3' | '3:4' | '21:9';
 export type RunStatus = 'planning' | 'plan-ready' | 'rendering' | 'attention' | 'review' | 'complete';
 export type Phase = 'plan' | 'render' | 'review' | 'deliver';
 export type ActionKind = 'plan' | 'revise' | 'render' | 'probe' | 'render-job' | 'assemble' | 'upscale' | 'mint-voice';

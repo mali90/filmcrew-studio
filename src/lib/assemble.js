@@ -97,7 +97,12 @@ const even = (n) => 2 * Math.round(n / 2); // yuv420p needs even dimensions
  *  stitch must never upscale. A ~496p Kling standard render must deliver a ~496p master: blowing
  *  it up to 1080 here made the delivered size lie, which disabled the approve-time Topaz upscale
  *  (the one REAL upscaler) as "already 1080p". A fixed portrait canvas also once center-cropped
- *  16:9 masters into 9:16. */
+ *  16:9 masters into 9:16.
+ *
+ *  The `n:m` math is generic on purpose, so it already covers every ratio the model registry
+ *  exposes — 16:9, 9:16, 1:1 plus Seedance 2.5's 4:3, 3:4 and 21:9 — with the short side always on
+ *  the correct axis. Anything unparseable (including 'adaptive'/'auto', which the registry never
+ *  offers) falls back to the legacy portrait canvas. */
 export function canvasFor(aspect, srcShortSide = null) {
   if (V.width && V.height) return { w: V.width, h: V.height };
   const s = srcShortSide ? Math.min(V.shortSide, srcShortSide) : V.shortSide;

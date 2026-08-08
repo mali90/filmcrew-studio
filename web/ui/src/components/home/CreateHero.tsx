@@ -10,9 +10,15 @@ import { api, ApiClientError } from '../../api/client';
 import { Button } from '../ui/Button';
 import { SegmentedControl } from '../ui/SegmentedControl';
 
+// One hint per MODEL, listed under both its legacy alias and its canonical `<model>@<provider>` id —
+// the record stays exhaustive so a new backend id cannot ship without its own copy.
+const KLING_HINT = 'Kling renders the richest motion at roughly $0.11 per second (~720p — approving can upscale the final to 1080p).';
+const SEEDANCE_HINT = 'Seedance lip-syncs to your voice clips and renders at 480p for roughly $0.14 per second — approving can upscale the final to 1080p.';
 const BACKEND_HINT: Record<Backend, string> = {
-  kling: 'Kling renders the richest motion at roughly $0.11 per second (~720p — approving can upscale the final to 1080p).',
-  seedance: 'Seedance lip-syncs to your voice clips and renders at 480p for roughly $0.14 per second — approving can upscale the final to 1080p.',
+  kling: KLING_HINT,
+  'kling-o3@fal': KLING_HINT,
+  seedance: SEEDANCE_HINT,
+  'seedance-2.0@fal': SEEDANCE_HINT,
 };
 
 const ASPECT_TILES: { value: Aspect; shape: string }[] = [

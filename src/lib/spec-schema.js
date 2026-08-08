@@ -7,20 +7,30 @@
 //   3 Cinematographer=shots[].kling.{shot_size,perspective,camera_move} · 4 Casting=kling.elements ·
 //   5 Sound=audio · 6 Job Planner=kling.jobs + top-level kling settings · 7 QC=qc
 //
-// Kling 3.0 Omni HARD caps (object_info-verified): ≤6 storyboard segments/job, ≤15s/job,
-// ≤512 chars/segment, ≤7 reference images/job.
+// Job-level caps come from the render-models registry (capsFor(backend)), NOT from constants here:
+// each model states its own storyboard/second/reference window, so a spec is judged against the
+// model that will actually render it. The constants below survive only as SHARED FALLBACKS for the
+// caps a model leaves undeclared (Seedance names no segment caps, and the check must not vanish).
+import { ALL_BACKENDS, capsFor } from './render-models.js';
 
-export const ASPECTS = ['16:9', '9:16', '1:1'];
+/**
+ * The SUPERSET of aspect ratios any registered model can render — a shape check for
+ * project.aspect_ratio / kling.aspect_ratio, nothing more. A spec planned for a six-ratio model is
+ * a valid spec.json even when read back by a validator that was given no backend, so this list must
+ * not narrow to the caller's model. Which ratios a PARTICULAR run may use is caps-driven and
+ * enforced where the backend is actually known: engine buildCtx (CLI) and POST /api/runs (web),
+ * both against capsFor(backend).aspects. 'adaptive'/'auto' stay out — canvasFor() needs a
+ * deterministic ratio to shape the stitch canvas.
+ */
+export const ASPECTS = ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'];
 const KLING_MODELS = ['kling-v3-omni', 'kling-video-o1'];
 const KLING_RES = ['4k', '1080p', '720p'];
 const SHOT_SIZES = ['extreme_close_up', 'close_up', 'medium_close_up', 'medium', 'medium_wide', 'wide', 'extreme_wide'];
 const QC_STATUS = ['pending', 'pass', 'fail'];
-const MAX_STORYBOARDS = 6;
-const MAX_JOB_SECONDS = 15;
-const MAX_SEG_CHARS = 512;
-const MAX_REF_IMAGES = 7; // the Kling cap — kept for BOTH backends (safe intersection; Seedance takes ≤9, leaving room for the seam frame)
-const BACKENDS = ['kling', 'seedance'];
-const SEEDANCE_MIN_JOB_SECONDS = 4; // Seedance hard floor: duration '4'..'15'
+const MAX_STORYBOARDS = 6;   // fallback: no shipping endpoint takes more than 6 storyboard segments
+const MAX_JOB_SECONDS = 15;  // also the per-SHOT duration_s bound, which is backend-independent
+const MAX_SEG_CHARS = 512;   // fallback: the tightest per-segment prompt budget we have measured
+const MAX_REF_IMAGES = 7;    // fallback only — Kling states 7 and Seedance 9 in the registry
 
 const isStr = (v) => typeof v === 'string';
 const nonEmpty = (v, n = 1) => isStr(v) && v.trim().length >= n;
@@ -91,7 +101,15 @@ function validateAudio(spec, P) {
   }
 }
 
-function validateJobs(spec, P, elementIds, backend) {
+function validateJobs(spec, P, elementIds, caps) {
+  // Every number below is the RENDERING MODEL's, with the shared fallback used when the registry
+  // entry stays silent about a cap (never "no cap declared" → "no check").
+  const maxSegments = caps.maxSegments ?? MAX_STORYBOARDS;
+  const maxSegChars = caps.maxSegmentChars ?? MAX_SEG_CHARS;
+  const maxSeconds = caps.maxSeconds ?? MAX_JOB_SECONDS;
+  const minSeconds = caps.minSeconds ?? 1;
+  const maxRefs = caps.maxImages ?? MAX_REF_IMAGES;
+
   const k = spec.kling;
   if (!k || typeof k !== 'object') { P.push('kling: missing'); return; }
   if (!oneOf(k.model_name, KLING_MODELS)) P.push(`kling.model_name "${k.model_name}" not in ${KLING_MODELS.join('|')}`);
@@ -107,19 +125,21 @@ function validateJobs(spec, P, elementIds, backend) {
     const at = `kling.jobs[${j}]`;
     if (!nonEmpty(job?.job_id)) P.push(`${at}.job_id missing`);
     if (!isArr(job?.shots) || job.shots.length < 1) { P.push(`${at}.shots must be a non-empty array`); return; }
-    if (job.shots.length > MAX_STORYBOARDS) P.push(`${at}: ${job.shots.length} shots exceeds the ${MAX_STORYBOARDS}-storyboard cap`);
+    if (job.shots.length > maxSegments) P.push(`${at}: ${job.shots.length} shots exceeds the ${maxSegments}-storyboard cap`);
     let total = 0;
     job.shots.forEach((id) => {
       if (!shotIds.has(id)) { P.push(`${at}.shots: "${id}" is not a shot_id`); return; }
       const sk = shotById[id]?.kling;
       if (!sk || !nonEmpty(sk.content_prompt, 5)) P.push(`${at}: shot ${id} is missing kling.content_prompt`);
-      else if (sk.content_prompt.length > MAX_SEG_CHARS) P.push(`${at}: shot ${id} content_prompt exceeds ${MAX_SEG_CHARS} chars`);
+      else if (sk.content_prompt.length > maxSegChars) P.push(`${at}: shot ${id} content_prompt exceeds ${maxSegChars} chars`);
       total += Math.max(1, Math.round(Number(sk?.duration) || Number(shotById[id]?.duration_s) || 4));
     });
-    if (total > MAX_JOB_SECONDS) P.push(`${at}: total ${total}s exceeds the ${MAX_JOB_SECONDS}s/job cap (move a shot to another job)`);
-    if (backend === 'seedance' && total < SEEDANCE_MIN_JOB_SECONDS) P.push(`${at}: total ${total}s is under Seedance's ${SEEDANCE_MIN_JOB_SECONDS}s/job minimum (merge a shot into this job)`);
+    if (total > maxSeconds) P.push(`${at}: total ${total}s exceeds the ${maxSeconds}s/job cap (move a shot to another job)`);
+    // Naming the model matters here: the floor is 4s on Seedance 2.0 and 1s (i.e. never fires) on
+    // Kling, so "under Seedance 2.0's 4s/job minimum" tells the planner which window it missed.
+    if (total < minSeconds) P.push(`${at}: total ${total}s is under ${caps.label}'s ${minSeconds}s/job minimum (merge a shot into this job)`);
     const refs = job.elements ?? [];
-    if (refs.length > MAX_REF_IMAGES) P.push(`${at}: ${refs.length} elements exceeds the ${MAX_REF_IMAGES}-reference cap`);
+    if (refs.length > maxRefs) P.push(`${at}: ${refs.length} elements exceeds the ${maxRefs}-reference cap`);
     refs.forEach((id) => { if (!elementIds.has(id)) P.push(`${at}.elements: "${id}" not in kling.elements`); });
     if (job.first_frame !== undefined && !nonEmpty(job.first_frame)) P.push(`${at}.first_frame must be a non-empty path when present`);
     if (job.last_frame !== undefined && !nonEmpty(job.last_frame)) P.push(`${at}.last_frame must be a non-empty path when present`);
@@ -136,15 +156,20 @@ function validateQc(qc, P) {
 /**
  * Validate a spec up to agent index `upTo` (0..7). Returns { ok, errors }.
  * upTo=7 (default) is a full validation suitable as the render precondition.
- * `backend` adds the render backend's own job rules (today: Seedance's 4s/job floor); the shared
- * caps are the safe intersection of both backends, so a valid spec renders on either.
+ * `backend` names the model that will render this spec (legacy alias or compound `<model>@<provider>`
+ * id): its registry caps drive the job rules, so a job legal on Seedance 2.0's 9-reference endpoint
+ * is judged against 9 rather than the old both-backends intersection. An unknown backend THROWS —
+ * silently validating against nothing would hand a bad spec to the renderer.
  */
 export function validateSpec(spec, { upTo = 7, backend = 'kling' } = {}) {
+  const caps = capsFor(backend);
   const P = [];
   if (!spec || typeof spec !== 'object') return { ok: false, errors: ['spec: not an object'] };
   if (spec.spec_version !== '1.0') P.push('spec_version must be "1.0"');
-  if (spec.render_backend !== undefined && !BACKENDS.includes(spec.render_backend)) {
-    P.push(`render_backend "${spec.render_backend}" is not one of: ${BACKENDS.join(', ')}`);
+  // Legacy one-word ids stay in ALL_BACKENDS forever, so a spec.json written before compound ids
+  // existed keeps validating with no migration on disk.
+  if (spec.render_backend !== undefined && !ALL_BACKENDS.includes(spec.render_backend)) {
+    P.push(`render_backend "${spec.render_backend}" is not one of: ${ALL_BACKENDS.join(', ')}`);
   }
 
   const shots = isArr(spec.shots) ? spec.shots : [];
@@ -160,7 +185,7 @@ export function validateSpec(spec, { upTo = 7, backend = 'kling' } = {}) {
   if (upTo >= 4) validateElements(spec, P, elementIds);
   else if (upTo >= 6) validateElements(spec, P, elementIds); // jobs cross-ref needs element ids
   if (upTo >= 5) validateAudio(spec, P);
-  if (upTo >= 6) validateJobs(spec, P, elementIds, backend);
+  if (upTo >= 6) validateJobs(spec, P, elementIds, caps);
   if (upTo >= 7) validateQc(spec.qc, P);
 
   return { ok: P.length === 0, errors: P };
@@ -169,11 +194,29 @@ export function validateSpec(spec, { upTo = 7, backend = 'kling' } = {}) {
 /** Which agent index owns each spec block — used by the engine to route QC failures. */
 export const BLOCK_OWNER = { project: 0, shots: 1, content: 2, camera: 3, elements: 4, audio: 5, jobs: 6, qc: 7 };
 
-export const KLING_CAPS = { MAX_STORYBOARDS, MAX_JOB_SECONDS, MAX_SEG_CHARS, MAX_REF_IMAGES };
+// The two published caps bundles are DERIVED from the registry so there is one source of truth for
+// every number; their shape is frozen because prompts and the web estimator read these key names.
+const KLING_O3 = capsFor('kling-o3@fal');
+const SEEDANCE_20 = capsFor('seedance-2.0@fal');
 
-/** The render backends a spec/CLI may name (RENDERERS table in pipeline.js dispatches on these). */
-export const RENDER_BACKENDS = BACKENDS;
+export const KLING_CAPS = {
+  MAX_STORYBOARDS: KLING_O3.maxSegments,
+  MAX_JOB_SECONDS: KLING_O3.maxSeconds,
+  MAX_SEG_CHARS: KLING_O3.maxSegmentChars,
+  MAX_REF_IMAGES: KLING_O3.maxImages,
+};
 
-export const SEEDANCE_CAPS = { MIN_JOB_SECONDS: SEEDANCE_MIN_JOB_SECONDS, MAX_JOB_SECONDS, MAX_IMAGE_REFS: 9, MAX_AUDIO_REFS: 3 };
+/**
+ * The render backends a spec/CLI may name (RENDERERS table in pipeline.js dispatches on these):
+ * the canonical `<model>@<provider>` ids first, then the legacy one-word aliases.
+ */
+export const RENDER_BACKENDS = ALL_BACKENDS;
+
+export const SEEDANCE_CAPS = {
+  MIN_JOB_SECONDS: SEEDANCE_20.minSeconds,
+  MAX_JOB_SECONDS: SEEDANCE_20.maxSeconds,
+  MAX_IMAGE_REFS: SEEDANCE_20.maxImages,
+  MAX_AUDIO_REFS: SEEDANCE_20.maxAudioRefs,
+};
 
 export default { validateSpec, BLOCK_OWNER, KLING_CAPS, SEEDANCE_CAPS, RENDER_BACKENDS };
