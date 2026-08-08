@@ -47,3 +47,7 @@ FAL_SEEDANCE_WORKFLOW_CONTEXT.md
 # OS / editor
 .DS_Store
 *.log
+
+# cross-model review transcripts can quote ANY local file (including ignored proprietary ones) —
+# they must never be tracked in this public repo
+.claude/reviews/
