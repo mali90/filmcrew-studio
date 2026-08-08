@@ -29,7 +29,7 @@ import fs from 'node:fs';
 import config from '../../config.js';
 import log from './logger.js';
 import { refLabel } from './render-models.js';
-import { buildSeedanceArgs, firstFrameIsRef, nameOf } from './seedance-args.js';
+import { buildSeedanceArgs, firstFrameIsRef, fitAudioRef, audioWindowFor, nameOf } from './seedance-args.js';
 import { buildSeedanceJobPrompt, seedanceConfigFor } from './seedance.js';
 import { characterGroups, jobSpeakers } from './cast-groups.js';
 import { resolveImage } from './elements.js';
@@ -52,9 +52,10 @@ function endpointFor(caps, key) {
 
 /**
  * Voice refs for the job's speakers: [{ speaker, clip }] from the registry's mint-time clips,
- * re-cut to the model's budget (MP3/WAV, combined ≤ caps.audioBudgetS) when needed. Speakers
- * without a clip are warned once and voiced natively by the model; more voiced speakers than the
- * model's audio cap is a hard error (mirrors Kling's voice-cap error).
+ * fitted to the model's per-clip window (MP3/WAV, combined ≤ caps.audioBudgetS): too long is re-cut,
+ * too short for a model that states a minimum is DROPPED with a warning (sending it would 422 the
+ * whole paid job). Speakers without a clip are warned once and voiced natively by the model; more
+ * voiced speakers than the model's audio cap is a hard error (mirrors Kling's voice-cap error).
  */
 async function audioRefsFor(job, spec, dir, caps) {
   const budgetS = caps.audioBudgetS ?? 15;
@@ -68,21 +69,33 @@ async function audioRefsFor(job, spec, dir, caps) {
   if (refs.length > caps.maxAudioRefs) {
     throw new Error(`job ${job.job_id}: ${refs.length} voiced speakers exceeds ${nameOf(caps)}'s ${caps.maxAudioRefs}-audio-ref cap — split the dialogue across jobs.`);
   }
-  const perClipS = Math.floor(budgetS / (refs.length || 1));
+  // The model's per-clip window, sized for how many refs share the combined budget. `maxS` is
+  // today's budget/N for a model with no declared window; `minS` is 0 unless the model states one
+  // (Segmind's Seedance 2.5 422s on a clip under 2s — a dropped ref costs a voice, a rejected
+  // submit costs the whole paid job).
+  const fitCaps = { ...caps, audioBudgetS: budgetS };
+  const { minS, maxS } = audioWindowFor(fitCaps, refs.length || 1);
+  const kept = [];
   for (const r of refs) {
     // Best-effort fit: over-budget or non-MP3/WAV clips are re-cut via ffmpeg; on any
     // probe/ffmpeg failure the original is sent as-is (fal rejects it loudly if unusable).
     try {
       const isRefAudio = /\.(mp3|wav)$/i.test(r.clip);
       const dur = (await probeClip(r.clip)).duration;
-      if (!isRefAudio || dur > perClipS) {
-        r.clip = await extractAudio(r.clip, path.join(dir, `${slug(r.speaker)}_ref.mp3`), { seconds: dur > perClipS ? perClipS : undefined });
+      const fit = fitAudioRef(dur, fitCaps, { refCount: refs.length || 1 });
+      if (fit === 'drop') {
+        log.warn(`[${job.job_id}] the "${r.speaker}" voice ref is ${Number(dur).toFixed(1)}s — under ${nameOf(caps)}'s ${minS}s minimum per reference clip; dropping it (${caps.label} voices the line natively). Re-mint a longer clip with: npm run mint-voice -- "${r.speaker}" <clip>`);
+        continue;
+      }
+      if (!isRefAudio || fit === 'cut') {
+        r.clip = await extractAudio(r.clip, path.join(dir, `${slug(r.speaker)}_ref.mp3`), { seconds: fit === 'cut' ? maxS : undefined });
       }
     } catch (e) {
       log.warn(`[${job.job_id}] could not fit the "${r.speaker}" voice clip to ${nameOf(caps)}'s ${budgetS}s audio budget (${e.message}) — sending it as-is.`);
     }
+    kept.push(r);
   }
-  return refs;
+  return kept;
 }
 
 /**
@@ -175,6 +188,7 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
     textClause: knobs.textRule,
     feedback, // per-take director note ("Director note: …" in the prompt front matter)
     nonce,
+    shotSyntax: caps.shotSyntax, // how THIS model wants its shots joined (undefined ⇒ connectors)
     maxBytes: knobs.promptMaxBytes,
   });
 
