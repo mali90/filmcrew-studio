@@ -459,6 +459,17 @@ export async function reviseSpec({ spec, runDir, feedback, scope, owners, brief,
       throw new Error(`This plan stars ${effCast.length} characters (${effCast.join(', ')}) but ${capsFor(normalizeBackend(target).id).label} takes at most ${limit} — pass --cast <names> to choose who stays (e.g. --cast ${effCast.slice(0, limit).join(',')}).`);
     }
   }
+  // Cast identity is SLUG-based (profiles are looked up by slug), so a stored "wren" and
+  // `--cast Wren` are the SAME character — compare normalized rosters, or a case difference
+  // re-plans the whole story for nothing. Computed — and the scope conflict rejected — BEFORE
+  // buildCtx and the LLM owner-routing call: an invalid command must not spend a routing prompt.
+  const rosterOf = (a) => JSON.stringify([...a].map((n) => slug(String(n))).sort());
+  const castSwitched = Boolean(cast) && rosterOf(cast) !== rosterOf(Array.isArray(spec?.cast) ? spec.cast : []);
+  if (castSwitched && scope && scope !== 'whole') {
+    // A cast switch re-plans the whole story; a narrowing scope would tell every agent to touch
+    // only one block while the removed character lives everywhere else. Contradictory — refuse.
+    throw new Error(`Changing the starred cast re-plans the whole story — drop --scope "${scope}" (or keep the cast unchanged for a scoped revision).`);
+  }
   const ctx = await buildCtx({
     brief: brief ?? `${spec.project?.title ?? ''} — ${spec.project?.logline ?? ''}`.trim(),
     backend: backend ?? spec?.render_backend,
@@ -485,13 +496,6 @@ export async function reviseSpec({ spec, runDir, feedback, scope, owners, brief,
   // (6), and a cast switch forces Sound (5) as well — whatever the router chose.
   const revTarget = ctx.backend; // buildCtx already canonicalized the effective target
   const revSource = (() => { try { return normalizeBackend(spec?.render_backend).id; } catch { return revTarget; } })();
-  const castSwitched = Boolean(cast)
-    && JSON.stringify([...cast].sort()) !== JSON.stringify([...(Array.isArray(spec?.cast) ? spec.cast : [])].sort());
-  if (castSwitched && scope && scope !== 'whole') {
-    // A cast switch re-plans the whole story; a narrowing scope would tell every agent to touch
-    // only one block while the removed character lives everywhere else. Contradictory — refuse.
-    throw new Error(`Changing the starred cast re-plans the whole story — drop --scope "${scope}" (or keep the cast unchanged for a scoped revision).`);
-  }
   if (revTarget !== revSource || castSwitched) {
     // A cast switch rewrites the STORY, not just the references: project.cast, the shot list and
     // every content_prompt speak about who is on screen, and agents 4–6 are told to preserve those

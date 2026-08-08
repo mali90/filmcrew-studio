@@ -100,6 +100,17 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
   const knobs = config.seedance; // user-tunable settings, never model caps
   const mode = knobs.uploadMode;
 
+  // Fail fast on deterministic config errors BEFORE any asset leaves the machine: with storage
+  // uploads, a bad SEEDANCE_RESOLUTION or aspect would otherwise cost a full round of reference
+  // uploads before the arg builder reports it. Same error text as the builder's own validators.
+  const effResolution = lowRes ? knobs.probeResolution : sdCfg.resolution;
+  if (caps.resolutions?.length && !caps.resolutions.includes(effResolution)) {
+    throw new Error(`Unknown resolution "${effResolution}" for ${nameOf(caps)} — use one of: ${caps.resolutions.join(', ')}.`);
+  }
+  if (caps.aspects?.length && !caps.aspects.includes(sdCfg.aspectRatio)) {
+    throw new Error(`Unknown aspect ratio "${sdCfg.aspectRatio}" for ${nameOf(caps)} — use one of: ${caps.aspects.join(', ')}.`);
+  }
+
   // 1. Image refs: each character group's images become flat @ImageN refs, in prompt order.
   //    An opening frame (authored first_frame wins over the chained seam frame) takes the LAST
   //    slot on models that demote it to a ref, so one slot is held back from the model's cap.
