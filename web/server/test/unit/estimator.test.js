@@ -139,19 +139,24 @@ test('$alias hop preserves the kling audio-off rate (a literal backend check wou
 });
 
 test('$alias resolves ONE hop and still fails loudly on a genuinely unknown compound id', () => {
-  assert.throws(() => estimateRender(threeJobs(), { backend: 'seedance-2.5@segmind', mode: 'full' }), /backend/);
+  // NB: 'seedance-2.5@segmind' USED to belong here. It is now a real (unpriced) row — see
+  // estimator-providers.test.js for the difference between "no rate on file" and "no such backend".
   assert.throws(() => estimateRender(threeJobs(), { backend: 'kling-o3@segmind', mode: 'full' }), /backend/);
+  assert.throws(() => estimateRender(threeJobs(), { backend: 'seedance-3.0@fal', mode: 'full' }), /backend/);
 });
 
 // The registry is the thing that grows: a model/provider added there with no matching price row
 // would 500 the estimate endpoint for every run on it. This is the coupling stated as an assertion,
 // so the failure lands on whoever adds the model rather than on a user opening a run page.
-test('EVERY renderable backend id in the registry prices, through whatever hop it needs', async () => {
+test('EVERY renderable backend id in the registry has a ROW — priced or explicitly unknown', async () => {
   const { BACKEND_IDS, ALL_BACKENDS } = await import('../../../../src/lib/render-models.js');
   assert.ok(BACKEND_IDS.length > 0);
   for (const id of [...BACKEND_IDS, ...ALL_BACKENDS]) {
     const e = estimateRender(threeJobs(), { backend: id, mode: 'full', resolution: '480p' });
-    assert.ok(Number.isFinite(e.totalUsd) && e.totalUsd > 0, `${id} priced to a real number, got ${e.totalUsd}`);
+    // A provider whose prices are unpublished (Segmind) answers null + a hint rather than throwing;
+    // anything with a rate must still price to a real, positive number.
+    if (e.totalUsd === null) assert.ok(e.unknownPrice?.hint, `${id}: unknown price must carry a hint`);
+    else assert.ok(Number.isFinite(e.totalUsd) && e.totalUsd > 0, `${id} priced to a real number, got ${e.totalUsd}`);
   }
 });
 

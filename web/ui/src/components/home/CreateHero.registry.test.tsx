@@ -73,7 +73,7 @@ describe('CreateHero — the registry is the only cap table', () => {
     server.use(http.get('/api/cast/characters', () => HttpResponse.json(CAST_ONE)));
     renderHome();
     await screen.findByRole('group', { name: 'Starring' });
-    for (const [segment, backend] of [['Kling', 'kling'], ['Seedance', 'seedance']] as const) {
+    for (const [segment, backend] of [['Kling', 'kling'], ['Seedance 2.0', 'seedance'], ['Seedance 2.5', 'seedance-2.5']] as const) {
       await userEvent.click(screen.getByRole('radio', { name: segment }));
       expect(screen.getByText(`Starring — up to ${castLimitFor(backend)} for ${labelOf(backend)}`)).toBeInTheDocument();
     }
