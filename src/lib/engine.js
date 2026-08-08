@@ -12,7 +12,7 @@ import log from './logger.js';
 import { ensureDir, writeJson, slug } from './util.js';
 import { complete, extractJson } from './llm.js';
 import { validateSpec } from './spec-schema.js';
-import { RENDER_MODELS, capsFor, normalizeBackend } from './render-models.js';
+import { RENDER_MODELS, capsFor, castLimitFor, normalizeBackend } from './render-models.js';
 import { buildInventory, inventoryText } from './elements.js';
 import { voicesInventoryText } from './voices.js';
 import { SEEDANCE_TTV_GUIDANCE } from './seedance.js';
@@ -265,7 +265,7 @@ async function loadEnvironment(environment) {
   return fsp.readFile(path.join(dir, hit), 'utf8');
 }
 
-/** Validate backend + aspect up-front (BEFORE any LLM spend) and build the shared agent context. */
+/** Validate backend + aspect + cast size up-front (BEFORE any LLM spend) and build the shared agent context. */
 export async function buildCtx({ brief, backend, aspectRatio, durationTargetS, cast, environment }) {
   // Canonicalize FIRST: everything below is per-model (which ratios are legal, which caps the agents
   // are told, which id the spec is stamped with), and a typo'd backend must cost nothing. A legacy
@@ -274,6 +274,16 @@ export async function buildCtx({ brief, backend, aspectRatio, durationTargetS, c
   const caps = capsFor(be);
   if (aspectRatio !== undefined && !caps.aspects.includes(aspectRatio)) {
     throw new Error(`Unknown aspect ratio "${aspectRatio}" — use one of: ${caps.aspects.join(', ')}.`);
+  }
+  // Cast cap, layer 1 of 3 (engine / server / UI). Every starred character burns reference-image
+  // slots, so each model has a hard ceiling. This has to fire HERE — before loadProfiles and before
+  // the first agent prompt — because an over-starred run can never render: planning it would be
+  // eight agents of spend for a spec that dies at the renderer. Ordering also means an over-cap list
+  // of unknown names reports the real problem ("too many") instead of "unknown cast member".
+  const castLimit = castLimitFor(be);
+  if (cast?.length > castLimit) {
+    const over = cast.length - castLimit;
+    throw new Error(`${caps.label} supports at most ${castLimit} starred character${castLimit === 1 ? '' : 's'} — you selected ${cast.length} (${cast.join(', ')}). Drop ${over === 1 ? 'one' : over}, or switch to a model with a higher cast limit.`);
   }
   const inv = buildInventory();
   // The environment carries NO reference image, so it is loaded AFTER (and independently of) the
@@ -314,7 +324,8 @@ function stampAspect(spec, aspectRatio) {
  *   `aspectRatio` (one of the model's own ratios): overrides
  *   the config default in the agents' context and is stamped onto the final spec. `cast` (character
  *   names with profiles/<name>.md): narrows the injected profiles to those characters and directs
- *   the agents to star them; unknown names throw before any LLM spend. `environment` (a single
+ *   the agents to star them; an over-cap list (more than the model's `castLimit`) or an unknown name
+ *   throws before any LLM spend. `environment` (a single
  *   environments/<slug>.md): injects that world/mood/style bible with precedence over character
  *   world notes and is stamped onto the spec; an unknown slug throws before any LLM spend.
  * @returns {Promise<{spec:object, passed:boolean}>}

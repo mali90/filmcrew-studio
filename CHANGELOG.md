@@ -12,6 +12,11 @@
 - **Seedance renders fail fast on an argument the chosen model does not accept** — an aspect ratio or
   resolution outside that model's list, more reference images than it takes, or a kind of reference
   it has no input for — instead of paying for a provider round trip to be told the same thing.
+- **Starring more characters than the chosen model can carry is now rejected before any LLM spend.**
+  Each model has its own cast ceiling (Kling 3.0 Omni 1, Seedance 2.0 2) because every starred
+  character costs reference-image slots. Over-starring used to plan a full 8-agent spec that could
+  only ever fail at the renderer; the engine now stops at the flag with a message naming the model,
+  its limit and the characters you picked.
 
 ### Fixed
 - **Finalize/upscale now uses the cut you selected**, not always the newest. In review, switching to
