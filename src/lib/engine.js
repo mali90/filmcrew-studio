@@ -487,12 +487,19 @@ export async function reviseSpec({ spec, runDir, feedback, scope, owners, brief,
   const revSource = (() => { try { return normalizeBackend(spec?.render_backend).id; } catch { return revTarget; } })();
   const castSwitched = Boolean(cast)
     && JSON.stringify([...cast].sort()) !== JSON.stringify([...(Array.isArray(spec?.cast) ? spec.cast : [])].sort());
+  if (castSwitched && scope && scope !== 'whole') {
+    // A cast switch re-plans the whole story; a narrowing scope would tell every agent to touch
+    // only one block while the removed character lives everywhere else. Contradictory — refuse.
+    throw new Error(`Changing the starred cast re-plans the whole story — drop --scope "${scope}" (or keep the cast unchanged for a scoped revision).`);
+  }
   if (revTarget !== revSource || castSwitched) {
     // A cast switch rewrites the STORY, not just the references: project.cast, the shot list and
     // every content_prompt speak about who is on screen, and agents 4–6 are told to preserve those
     // blocks — so switching cast re-runs every owner (it is a re-plan with the new cast). A
-    // backend-only switch needs just the cap owners: Casting and the Job Planner.
-    const forced = castSwitched ? [0, 1, 2, 3, 4, 5, 6] : [4, 6];
+    // backend-only switch needs the cap owners (Casting + Job Planner) — plus the Scene Director
+    // when the switch lands in Seedance TEXT-TO-VIDEO mode, whose guidance (concrete subject
+    // descriptions, no reference images) the existing content_prompt prose was never written for.
+    const forced = castSwitched ? [0, 1, 2, 3, 4, 5, 6] : (ctx.textToVideo ? [2, 4, 6] : [4, 6]);
     ownerList = [...new Set([...ownerList, ...forced])].sort((a, b) => a - b);
     log.info(castSwitched
       ? `Revision changes the starred cast${revTarget !== revSource ? ` (and the backend to ${revTarget})` : ''} — every planning agent re-runs: the story itself is being re-planned around the new cast.`

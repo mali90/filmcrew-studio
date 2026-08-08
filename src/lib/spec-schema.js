@@ -116,15 +116,14 @@ function validateJobs(spec, P, elementIds, caps, enforceModelAspects = false, ch
   if (k.aspect_ratio !== undefined && !oneOf(k.aspect_ratio, ASPECTS)) P.push(`kling.aspect_ratio "${k.aspect_ratio}" not in ${ASPECTS.join('|')}`);
   if (k.resolution !== undefined && !oneOf(k.resolution, KLING_RES)) P.push(`kling.resolution "${k.resolution}" not in ${KLING_RES.join('|')}`);
   if (k.generate_audio !== undefined && typeof k.generate_audio !== 'boolean') P.push('kling.generate_audio must be boolean');
-  // Caps gate ON TOP of the structural superset, applied only when the caller NAMED the backend
-  // (the render/engine paths always do): the widened ASPECTS accepts any registered model's ratio,
-  // so a spec authored with a six-ratio model's aspect must still be rejected when the EFFECTIVE
-  // backend cannot render it — this is the render path's only aspect guard.
+  // Caps gate ON TOP of the structural superset, applied only when the backend is known (explicit
+  // or persisted): the widened ASPECTS accepts any registered model's ratio, so a kling-block ratio
+  // the EFFECTIVE backend cannot render must still be rejected here. (project.aspect_ratio gets the
+  // same gate at stage 0 in validateSpec — where its owning agent can be re-run for it.)
   if (enforceModelAspects) {
-    for (const [where, v] of [['project.aspect_ratio', spec.project?.aspect_ratio], ['kling.aspect_ratio', k.aspect_ratio]]) {
-      if (v !== undefined && oneOf(v, ASPECTS) && Array.isArray(caps.aspects) && !caps.aspects.includes(v)) {
-        P.push(`${where} "${v}" is not renderable on ${caps.label} (its ratios: ${caps.aspects.join('|')})`);
-      }
+    const v = k.aspect_ratio;
+    if (v !== undefined && oneOf(v, ASPECTS) && Array.isArray(caps.aspects) && !caps.aspects.includes(v)) {
+      P.push(`kling.aspect_ratio "${v}" is not renderable on ${caps.label} (its ratios: ${caps.aspects.join('|')})`);
     }
   }
 
@@ -234,6 +233,15 @@ export function validateSpec(spec, { upTo = 7, backend, chainFrames = true } = {
   const elementIds = new Set();
 
   if (upTo >= 0) validateProject(spec.project, P);
+  // The model-aspect gate for the PROJECT block fires at stage 0, where the field is authored: the
+  // Showrunner owns project.aspect_ratio, and catching a ratio the model can't render only at the
+  // jobs stage would let agents 1–5 spend before an error nobody downstream can fix.
+  if (enforceModelAspects && upTo >= 0) {
+    const pa = spec.project?.aspect_ratio;
+    if (pa !== undefined && oneOf(pa, ASPECTS) && Array.isArray(caps.aspects) && !caps.aspects.includes(pa)) {
+      P.push(`project.aspect_ratio "${pa}" is not renderable on ${caps.label} (its ratios: ${caps.aspects.join('|')})`);
+    }
+  }
   if (upTo >= 1) {
     if (!isArr(spec.shots) || spec.shots.length < 1) P.push('shots must be a non-empty array');
     shots.forEach((s, i) => validateShotScript(s, i, P));
