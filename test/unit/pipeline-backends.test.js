@@ -71,11 +71,11 @@ test('a legacy alias key IS the canonical entry — same object, so labels can n
 test('each entry is bound to ITS OWN caps — never a family-shared shim', async () => {
   const { renderKlingJobFal } = await import('../../src/lib/fal-kling.js');
   const { renderSeedanceJobFal } = await import('../../src/lib/fal-seedance.js');
-  // Kling is genuinely fal-only, so its entry may be the fal renderer itself…
-  assert.equal(RENDERERS['kling-o3@fal'].render, renderKlingJobFal);
-  // …but a seedance entry must NOT route through the 2.0@fal-pinned shim: a sibling model or
-  // provider added to the registry has to render with its own caps and its own transport, so the
-  // table binds a per-entry closure over capsFor(id) + that provider's adapter.
-  assert.equal(typeof RENDERERS['seedance-2.0@fal'].render, 'function');
-  assert.notEqual(RENDERERS['seedance-2.0@fal'].render, renderSeedanceJobFal);
+  // EVERY entry is a per-entry closure carrying its canonical id: seedance so a sibling model or
+  // provider renders with its own caps + transport, kling so its prompts.json sidecar records the
+  // backend identity. Neither may be the bare family fn — that is how caps/identity drift starts.
+  for (const [id, bare] of [['kling-o3@fal', renderKlingJobFal], ['seedance-2.0@fal', renderSeedanceJobFal]]) {
+    assert.equal(typeof RENDERERS[id].render, 'function', id);
+    assert.notEqual(RENDERERS[id].render, bare, `${id} must not be the family-shared renderer`);
+  }
 });

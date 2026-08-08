@@ -188,6 +188,17 @@ test('Seedance reserves one image slot for the opening/seam frame; Kling does no
   spec.kling.jobs = spec.kling.jobs.map((j) => ({ ...j, elements: ids.slice(0, max - 1) }));
   assert.equal(validateSpec(spec, { backend: 'seedance' }).ok, true);
 
+  // An OMITTED job.elements inherits the whole roster at render time (characterGroups), so a
+  // 9-entry roster with empty per-job lists is nine uploads per job — the budget must see them.
+  spec.kling.elements = Array.from({ length: max }, (_, i) => ({ ...tpl, id: `ref-${i}` }));
+  spec.kling.jobs = [
+    { job_id: 'K1', shots: [s1.shot_id] },
+    { job_id: 'K2', shots: [s2.shot_id] },
+  ];
+  const vr = validateSpec(spec, { backend: 'seedance' });
+  assert.equal(vr.ok, false);
+  assert.match(vr.errors.join('\n'), /kling\.jobs\[1\]: 9 roster refs .*exceeds the 8-reference budget/);
+
   // With seam chaining DISABLED (KLING_CHAIN_FRAMES=false, threaded by every render/engine caller),
   // later jobs receive no seam frame, so the full cap is legal again — but an authored first_frame
   // still consumes its slot.

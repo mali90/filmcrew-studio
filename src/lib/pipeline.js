@@ -32,8 +32,10 @@ export const RENDERERS = (() => {
     const caps = capsFor(id);
     let render = null;
     if (caps.family === 'kling' && caps.provider === 'fal') {
-      // Kling's renderer is fal-specific (elements + bound voice_id have no equivalent elsewhere).
-      render = renderKlingJobFal;
+      // Kling's renderer is fal-specific (elements + bound voice_id have no equivalent elsewhere),
+      // but it still stamps THIS entry's canonical id into its prompts.json sidecar — model/provider
+      // traceability must not be a Seedance-only property.
+      render = (a) => renderKlingJobFal({ ...a, backend: id });
     } else if (caps.family === 'seedance' && SEEDANCE_ADAPTERS[caps.provider]) {
       const adapter = SEEDANCE_ADAPTERS[caps.provider];
       render = (a) => renderSeedanceJob(a, { caps, adapter });
@@ -92,7 +94,9 @@ export function uniqueOutPath(dir, base) {
  */
 export async function renderSpec(spec, { runDir, probe = false, upscale = false, backend, take, outName } = {}) {
   const be = resolveBackend(spec, backend);
-  const v = validateSpec(spec, { upTo: 7, backend: be, chainFrames: Boolean(config.kling.chainFrames) });
+  // A probe renders only the first job and never chains (see `chain` below), so no downstream job
+  // holds a seam slot in that mode — reserving one would reject a legal max-ref later job.
+  const v = validateSpec(spec, { upTo: 7, backend: be, chainFrames: Boolean(config.kling.chainFrames) && !probe });
   if (!v.ok) throw new Error(`Spec failed validation:\n - ${v.errors.join('\n - ')}`);
   ensureDir(runDir);
   await writeJson(path.join(runDir, 'spec.json'), spec);
@@ -176,7 +180,8 @@ export async function renderJob(spec, jobId, { runDir, backend, take = 0, feedba
   // invocation — a whole-spec re-validation would reject them for seams nobody is supplying).
   const caps = capsFor(be);
   if (startFrame && !job.first_frame && caps.family === 'seedance' && demotesOpeningFrame(caps)) {
-    const refs = (job.elements ?? []).length;
+    // An omitted/empty job.elements inherits the WHOLE roster (characterGroups), so count that.
+    const refs = job.elements?.length ? job.elements.length : (spec.kling.elements?.length ?? 0);
     if (refs > caps.maxImages - 1) {
       throw new Error(`${jobId} carries ${refs} element refs, but the seam frame from --seam-from takes 1 of ${caps.label}'s ${caps.maxImages} image slots — drop a reference or render without --seam-from (a visible cut).`);
     }

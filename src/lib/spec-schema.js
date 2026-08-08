@@ -155,12 +155,17 @@ function validateJobs(spec, P, elementIds, caps, enforceModelAspects = false, ch
     // demote it to a reference (fal Seedance has no native slot; Segmind's native slot excludes
     // refs). Validating against the full cap would pass a max-ref job here and then silently drop
     // one paid identity reference at render time, so the slot is reserved up front.
+    // An omitted/empty job.elements INHERITS the whole roster at render time (characterGroups()
+    // expands it to every kling.elements entry), so the budget judges what will actually be sent —
+    // a literal zero here with a nine-entry roster is nine paid uploads, not none.
+    const effRefs = refs.length || elementIds.size;
     const holdsOpeningFrame = caps.family === 'seedance' && (nonEmpty(job.first_frame) || (j > 0 && chainFrames));
     const refBudget = maxRefs - (holdsOpeningFrame && demotesOpeningFrame(caps) ? 1 : 0);
-    if (refs.length > refBudget) {
+    if (effRefs > refBudget) {
+      const what = refs.length ? `${effRefs} elements` : `${effRefs} roster refs (job.elements omitted — the whole kling.elements roster rides along)`;
       P.push(refBudget < maxRefs
-        ? `${at}: ${refs.length} elements exceeds the ${refBudget}-reference budget (${caps.label} caps at ${maxRefs} images and 1 slot is reserved for this job's opening/seam frame)`
-        : `${at}: ${refs.length} elements exceeds the ${maxRefs}-reference cap`);
+        ? `${at}: ${what} exceeds the ${refBudget}-reference budget (${caps.label} caps at ${maxRefs} images and 1 slot is reserved for this job's opening/seam frame)`
+        : `${at}: ${what} exceeds the ${maxRefs}-reference cap`);
     }
     refs.forEach((id) => { if (!elementIds.has(id)) P.push(`${at}.elements: "${id}" not in kling.elements`); });
     if (job.first_frame !== undefined && !nonEmpty(job.first_frame)) P.push(`${at}.first_frame must be a non-empty path when present`);

@@ -45,7 +45,7 @@ const falRefFor = (absPath) => falRef(absPath, config.fal.uploadMode);
 // endpoint takes no seed input (every render is naturally a fresh take), and director feedback
 // reaches Kling through an engine revision (which rewrites the content prompts) instead of a
 // prompt suffix — the 512-char segment budget leaves no room for a reliable note.
-export async function renderKlingJobFal({ job, spec, runDir, seed, lowRes = false, startFrame = null, nonce = 0, feedback = '' }) {
+export async function renderKlingJobFal({ job, spec, runDir, seed, lowRes = false, startFrame = null, nonce = 0, feedback = '', backend = 'kling-o3@fal' }) {
   if (feedback) {
     log.warn(`[${job.job_id}] Kling ignores per-render director notes (its 512-char segment budget leaves no room) — route feedback through a revision (revise) so the engine rewrites the prompts instead.`);
   }
@@ -121,7 +121,7 @@ export async function renderKlingJobFal({ job, spec, runDir, seed, lowRes = fals
   // Effective prompts/elements → sidecar for review (mirrors the cloud renderer).
   try {
     fs.writeFileSync(path.join(dir, 'prompts.json'), JSON.stringify({
-      job_id: job.job_id, transport: 'fal', endpoint,
+      job_id: job.job_id, backend, transport: 'fal', endpoint,
       aspect_ratio: klingCfg.aspectRatio, generate_audio: !!klingCfg.generateAudio, total_duration_s: totalDuration,
       start_frame: textToVideo ? null : (job.first_frame ?? (startFrame ? `seam:${path.basename(startFrame)}` : null)),
       elements: textToVideo ? [] : groups.map((g, i) => ({ ref: `@Element${i + 1}`, character: g.name, images: g.els.map((e) => e.id), voice_id: getVoiceId(g.name) ?? null })),
