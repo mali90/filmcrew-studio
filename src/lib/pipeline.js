@@ -13,6 +13,7 @@ import { renderKlingJobFal } from './fal-kling.js';
 import { falAdapter } from './fal-seedance.js';
 import { renderSeedanceJob } from './render-seedance.js';
 import { assembleVideo, grabFrame, lastFrameOf } from './assemble.js';
+import { readContinuity } from './seamstitch.js';
 import { upscaleVideoTopaz, probeDims } from './upscale.js';
 
 // Seedance transports by PROVIDER id — a new provider is a binding module exporting an adapter
@@ -130,7 +131,9 @@ export async function renderSpec(spec, { runDir, probe = false, upscale = false,
       else log.warn(`[${job.job_id}] could not extract last frame for seam continuity; the next job starts fresh.`);
     }
   }
-  await writeJson(path.join(runDir, 'render.json'), { project: spec.project.title, backend: be, jobs: results });
+  // `chained` is the seam lineage the assembler needs: with it, adjacent clips share a boundary frame
+  // and can be stitched seamlessly instead of hard-cut (src/lib/seamstitch.js readContinuity).
+  await writeJson(path.join(runDir, 'render.json'), { project: spec.project.title, backend: be, jobs: results, chained: chain });
 
   if (probe) {
     const clip = results.find((r) => r.clip)?.clip ?? null;
@@ -139,7 +142,7 @@ export async function renderSpec(spec, { runDir, probe = false, upscale = false,
     return { runDir, probe: true, backend: be, jobs: results, clip };
   }
 
-  return finishRender(spec, results, { runDir, upscale, backend: be, outName });
+  return finishRender(spec, results, { runDir, upscale, backend: be, outName, chained: chain });
 }
 
 /**
@@ -220,7 +223,7 @@ export async function renderJob(spec, jobId, { runDir, backend, take = 0, feedba
  * spec (job) order → optional Topaz upscale → cover frame, writing out/<project>.mp4. Re-renders
  * nothing; `results` is the per-job list ([{ jobId, clip, error }]).
  */
-export async function finishRender(spec, results, { runDir, upscale = false, backend, outName } = {}) {
+export async function finishRender(spec, results, { runDir, upscale = false, backend, outName, chained = false, continuity } = {}) {
   const jobs = spec.kling.jobs;
   let clipPaths = jobs.map((j) => results.find((r) => r.jobId === j.job_id)?.clip).filter(Boolean);
   if (!clipPaths.length) {
@@ -251,18 +254,23 @@ export async function finishRender(spec, results, { runDir, upscale = false, bac
   // Dialogue is spoken NATIVELY by the render backend: each spec.audio.voice.lines[] line is folded
   // into the shot prompt, voiced by the character's minted voice_id (Kling elements) or lip-synced
   // to its mint-time ref clip (Seedance @Audio refs) — so no separate post-dub pass is needed.
+  // Seam lineage → a seamless stitch when the clips really do chain (assembleVideo falls back to a
+  // hard-cut concat by itself if they don't, or if the stitcher is unavailable).
+  const seams = continuity !== undefined ? continuity : readContinuity({ chained }, clipPaths.length);
   const master = uniqueOutPath(outDir, name); // repeat renders of one title get -2, -3, … (never overwrite)
-  await assembleVideo(clipPaths, master, { nativeAudio, aspect: spec.kling?.aspect_ratio ?? spec.project?.aspect_ratio ?? null });
+  const stitch = await assembleVideo(clipPaths, master, { nativeAudio, aspect: spec.kling?.aspect_ratio ?? spec.project?.aspect_ratio ?? null, continuity: seams });
 
   const cover = await grabFrame(master, spec.project?.cover_frame_s ?? 2, path.join(runDir, 'cover.png'));
   // record the delivered size: the UI disables the paid upscale when the master is already ≥1080p
   // (fal's Kling outputs a fixed native resolution — no request knob exists)
   let masterShortSide = null;
   try { const d = await probeDims(master); masterShortSide = Math.min(d.width, d.height); } catch { /* estimate-only field */ }
-  const summary = { runDir, project: spec.project.title, backend: backend ?? null, master, cover, masterShortSide, jobs: results.map((r) => ({ job: r.jobId, clip: r.clip, error: r.error })) };
+  // `chained` must survive this rewrite of render.json, or re-finishing the run later (assembleRun)
+  // would forget the seam lineage and silently downgrade to a hard-cut stitch.
+  const summary = { runDir, project: spec.project.title, backend: backend ?? null, master, cover, masterShortSide, chained, stitch, jobs: results.map((r) => ({ job: r.jobId, clip: r.clip, error: r.error })) };
   await writeJson(path.join(runDir, 'render.json'), summary);
-  log.info(`\n✅ Master: ${master}  (${clipPaths.length} job clip(s))`);
-  return { runDir, master, cover, masterShortSide, jobs: results };
+  log.info(`\n✅ Master: ${master}  (${clipPaths.length} job clip(s), ${stitch.stitcher === 'seamless' ? `seamless stitch, ${stitch.matched}/${stitch.joints} joint(s) colour-matched` : 'hard-cut stitch'})`);
+  return { runDir, master, cover, masterShortSide, stitch, jobs: results };
 }
 
 /**
@@ -270,7 +278,7 @@ export async function finishRender(spec, results, { runDir, upscale = false, bac
  * clips already on disk (stitch → optional VO → optional upscale → cover). Accepts a `render`-CLI run
  * dir, or an engine run dir (descends into ./render). Use it to promote a --probe clip into out/.
  */
-export async function assembleRun(runDir, { upscale = false, outName } = {}) {
+export async function assembleRun(runDir, { upscale = false, outName, continuity } = {}) {
   const base = resolvePath(runDir);
   const found = (await readRun(base)) ?? (await readRun(path.join(base, 'render')));
   if (!found) {
@@ -280,7 +288,7 @@ export async function assembleRun(runDir, { upscale = false, outName } = {}) {
   const results = (render.jobs ?? []).map((j) => ({ jobId: j.jobId ?? j.job, clip: j.clip, error: j.error }));
   if (!results.some((r) => r.clip)) throw new Error(`No clip paths recorded in ${path.join(dir, 'render.json')} — nothing to assemble.`);
   log.step(`Assemble — "${spec.project?.title ?? 'video'}" from ${dir} (no re-render)`);
-  return finishRender(spec, results, { runDir: dir, upscale, backend: render.backend ?? spec.render_backend ?? null, outName });
+  return finishRender(spec, results, { runDir: dir, upscale, backend: render.backend ?? spec.render_backend ?? null, outName, chained: render.chained === true, continuity });
 }
 
 /** Read a run's spec.json + render.json from `dir`, or null if either is missing/unreadable. */

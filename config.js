@@ -197,6 +197,9 @@ const config = {
     desqueeze: process.env.STITCH_DESQUEEZE || 'off', // 'off' | 'auto' | <factor>
     deflicker: boolEnv('STITCH_DEFLICKER', false),
     verify: process.env.STITCH_VERIFY || 'warn',     // 'off' | 'warn' (log failures) | 'strict' (reject the stitch)
+    // TEST/DEBUG ONLY: treat every seam as chained even when nothing recorded the lineage. It asserts
+    // a fact about the footage — wrong, it drops a real frame at a scene cut — so it is never a default.
+    assumeContinuous: boolEnv('STITCH_ASSUME_CONTINUOUS', false),
     crf: numEnv('STITCH_CRF', 19),                   // matches assemble.js's own -crf
     preset: process.env.STITCH_PRESET || 'medium',
     timeoutMs: numEnv('STITCH_TIMEOUT_MS', 20 * 60 * 1000),

@@ -188,7 +188,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
       updateManifest(dir, (m) => {
         mergeJobClips(m, result.jobs);
         const takeId = path.basename(result.runDir ?? '');
-        m.cuts.push({ id: `c${m.cuts.length + 1}`, take: takeId, master: result.master ?? null, shortSide: result.masterShortSide ?? null, createdAt: now().toISOString() });
+        m.cuts.push({ id: `c${m.cuts.length + 1}`, take: takeId, master: result.master ?? null, shortSide: result.masterShortSide ?? null, ...stitchFields(result), createdAt: now().toISOString() });
         return m;
       });
       return;
@@ -218,7 +218,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     if (kind === 'assemble') {
       updateManifest(dir, (m) => {
         const takeId = path.basename(result.runDir ?? '');
-        m.cuts.push({ id: `c${m.cuts.length + 1}`, take: takeId, master: result.master ?? null, shortSide: result.masterShortSide ?? null, createdAt: now().toISOString() });
+        m.cuts.push({ id: `c${m.cuts.length + 1}`, take: takeId, master: result.master ?? null, shortSide: result.masterShortSide ?? null, ...stitchFields(result), createdAt: now().toISOString() });
         return m;
       });
       return;
@@ -228,11 +228,22 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
       const chosenCut = pendingApprove.get(runId) ?? null; // the cut approve() upscaled (null ⇒ latest, the default)
       pendingApprove.delete(runId);
       updateManifest(dir, (m) => {
-        m.approved = { cut: chosenCut ?? m.cuts.at(-1)?.id ?? null, final: result.master ?? null, upscaled: true, at: now().toISOString() };
+        m.approved = { cut: chosenCut ?? m.cuts.at(-1)?.id ?? null, final: result.master ?? null, upscaled: true, ...stitchFields(result), at: now().toISOString() };
         return m;
       });
       return;
     }
+  }
+
+  /**
+   * How this master's seams were joined, for the cut/approved records: 'seamless' (colour-matched
+   * chained joints) or 'concat' (a hard cut at every seam). Omitted entirely when the pipeline did
+   * not report it, so a manifest written before this existed keeps reading exactly as it did.
+   */
+  function stitchFields(result) {
+    const s = result?.stitch;
+    if (!s?.stitcher) return {};
+    return { stitcher: s.stitcher, joints: s.joints ?? 0, matched: s.matched ?? 0 };
   }
 
   /** Track the newest clip per job id — the composition source for mixed cuts. */

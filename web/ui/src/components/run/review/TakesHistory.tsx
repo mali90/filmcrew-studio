@@ -8,6 +8,18 @@ import { truncate } from './lib';
 
 interface HistoryItem { key: string; text: string; at: string }
 
+type Cut = NonNullable<RunDetail['manifest']>['cuts'][number];
+
+/** How a cut's seams were joined. "(local, free)" is literal: both paths are pure local ffmpeg, no
+ *  API call and no spend. Cuts recorded before the stitcher existed say plain "stitched". */
+function stitchLabel(cut: Cut) {
+  if (cut.stitcher === 'seamless') {
+    return `Seamless stitch — colour-matched, ${cut.matched ?? 0}/${cut.joints ?? 0} joints (local, free)`;
+  }
+  if (cut.stitcher === 'concat') return 'stitched — hard cut at each seam (local, free)';
+  return 'stitched';
+}
+
 export function TakesHistory({ run }: { run: RunDetail }) {
   const items = useMemo<HistoryItem[]>(() => {
     const m = run.manifest;
@@ -25,7 +37,7 @@ export function TakesHistory({ run }: { run: RunDetail }) {
       })),
       ...m.cuts.map((c) => ({
         key: `cut-${c.id}`,
-        text: `${c.id} · stitched`,
+        text: `${c.id} · ${stitchLabel(c)}`,
         at: c.createdAt,
       })),
     ];

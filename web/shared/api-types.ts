@@ -48,7 +48,9 @@ export interface Manifest {
   createdAt: string;
   revisions: { id: string; feedback: string | null; scope: string; owners: number[]; createdAt: string }[];
   takes: { id: string; mode: 'probe' | 'full' | 'job'; jobId?: string; cascade?: boolean; revision: string | null; createdAt: string; estUsd?: number; feedback?: string | null }[];
-  cuts: { id: string; take: string; master: string | null; shortSide?: number | null; createdAt: string }[];
+  // `stitcher`/`joints`/`matched` describe how the seams were joined ('seamless' = colour-matched
+  // chained joints, 'concat' = a hard cut at every seam). Absent on cuts made before that existed.
+  cuts: { id: string; take: string; master: string | null; shortSide?: number | null; stitcher?: 'seamless' | 'concat'; joints?: number; matched?: number; createdAt: string }[];
   costLedger: { ts: string; action: string; estUsd: number | null; note: string }[];
   approved: { cut: string | null; final: string; upscaled: boolean; at: string } | null;
   lastError: RunError | null;
