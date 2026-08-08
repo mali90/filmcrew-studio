@@ -488,8 +488,15 @@ export async function reviseSpec({ spec, runDir, feedback, scope, owners, brief,
   const castSwitched = Boolean(cast)
     && JSON.stringify([...cast].sort()) !== JSON.stringify([...(Array.isArray(spec?.cast) ? spec.cast : [])].sort());
   if (revTarget !== revSource || castSwitched) {
-    ownerList = [...new Set([...ownerList, 4, ...(castSwitched ? [5] : []), 6])].sort((a, b) => a - b);
-    log.info(`Revision switches ${revTarget !== revSource ? `backend to ${revTarget}` : ''}${revTarget !== revSource && castSwitched ? ' and ' : ''}${castSwitched ? 'the starred cast' : ''} — ${castSwitched ? 'Casting, Sound and the Job Planner' : 'Casting and the Job Planner'} re-run to adapt the plan.`);
+    // A cast switch rewrites the STORY, not just the references: project.cast, the shot list and
+    // every content_prompt speak about who is on screen, and agents 4–6 are told to preserve those
+    // blocks — so switching cast re-runs every owner (it is a re-plan with the new cast). A
+    // backend-only switch needs just the cap owners: Casting and the Job Planner.
+    const forced = castSwitched ? [0, 1, 2, 3, 4, 5, 6] : [4, 6];
+    ownerList = [...new Set([...ownerList, ...forced])].sort((a, b) => a - b);
+    log.info(castSwitched
+      ? `Revision changes the starred cast${revTarget !== revSource ? ` (and the backend to ${revTarget})` : ''} — every planning agent re-runs: the story itself is being re-planned around the new cast.`
+      : `Revision switches the backend to ${revTarget} — Casting and the Job Planner re-run to adapt the plan to its caps.`);
   }
 
   const jobShots = scopeShots(spec, scope);
