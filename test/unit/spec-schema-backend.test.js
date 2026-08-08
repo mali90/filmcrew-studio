@@ -224,6 +224,17 @@ test('backend-less validation infers caps from spec.render_backend, else the sup
   assert.equal(validateSpec(spec).ok, true, 'no backend anywhere — the widest registered window judges');
   spec.render_backend = 'kling';
   assert.equal(validateSpec(spec).ok, false, 'a persisted kling spec still gets kling\'s 7');
+
+  // The persisted backend enforces its ASPECT list too — a stored Kling spec carrying 21:9 is
+  // broken however it is read; only a spec with no backend at all gets the superset reading.
+  const aspectSpec = loadGoldenSpec();
+  aspectSpec.project.aspect_ratio = '21:9';
+  aspectSpec.kling.aspect_ratio = '21:9';
+  assert.equal(validateSpec(aspectSpec).ok, true, 'no backend anywhere — superset');
+  aspectSpec.render_backend = 'kling';
+  const va = validateSpec(aspectSpec);
+  assert.equal(va.ok, false, 'a persisted kling spec cannot carry 21:9');
+  assert.match(va.errors.join('\n'), /not renderable on Kling 3\.0 Omni/);
 });
 
 // The other half of that split, stated as an assertion rather than a comment: with NO backend the

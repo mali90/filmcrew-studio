@@ -207,11 +207,14 @@ export function validateSpec(spec, { upTo = 7, backend, chainFrames = true } = {
   // the true structural SUPERSET (a spec naming no backend must round-trip anything any registered
   // model accepts). `chainFrames` mirrors config.kling.chainFrames (callers thread it; this module
   // stays config-free): with chaining OFF, later jobs receive no seam frame, so no slot is reserved.
-  const enforceModelAspects = backend !== undefined;
+  let enforceModelAspects = backend !== undefined;
   let caps = SUPERSET_CAPS;
   if (backend !== undefined) caps = capsFor(backend);
   else if (typeof spec?.render_backend === 'string') {
-    try { caps = capsFor(spec.render_backend); } catch { /* unknown value — reported as a problem below */ }
+    // A successfully resolved PERSISTED backend enforces its aspect list too — a stored Kling spec
+    // carrying 21:9 is broken however it is read. Only a spec with no backend at all gets the
+    // superset reading.
+    try { caps = capsFor(spec.render_backend); enforceModelAspects = true; } catch { /* unknown value — reported as a problem below */ }
   }
   const P = [];
   if (!spec || typeof spec !== 'object') return { ok: false, errors: ['spec: not an object'] };
