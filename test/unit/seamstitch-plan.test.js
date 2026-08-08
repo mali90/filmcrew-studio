@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { neutralizeDotenv, withEnv } from '../helpers/env.js';
 neutralizeDotenv();
-const { planSeamstitch } = await import('../../src/lib/seamstitch.js');
+const { planSeamstitch, readContinuity } = await import('../../src/lib/seamstitch.js');
 const config = (await import('../../config.js')).default;
 
 const CFG = config.stitch;
@@ -126,6 +126,39 @@ test('ineligible: framing more than 8% off the canvas (ADDENDUM_AR §4 abort)', 
   // A real bucket mismatch (1.5%) is fine — that is what --fit cover exists for.
   const ok = planSeamstitch({ probes: [clip(), clip(176, 104)], continuity: [true], canvas: CANVAS, targetFps: 24, cfg: CFG });
   assert.equal(ok.eligible, true);
+});
+
+test('framing is judged by DISPLAY aspect, so non-square pixels are not mistaken for a reframe', () => {
+  // 128x96 stored, but SAR 4:3 → it DISPLAYS as 170.7x96, i.e. the 16:9-ish shape of the canvas.
+  // Storage dimensions alone would read as 33% off and decline a perfectly stitchable clip.
+  const anamorphic = { width: 128, height: 96, duration: 2, fps: 24, sar: 4 / 3, dar: (128 * (4 / 3)) / 96 };
+  const canvas = { w: 170, h: 96 };
+  const ok = planSeamstitch({ probes: [clip(170, 96), anamorphic], continuity: [true], canvas, targetFps: 24, cfg: CFG });
+  assert.equal(ok.eligible, true, ok.reason);
+
+  // The same storage size with SQUARE pixels really is a different shape, and is refused.
+  const square = { width: 128, height: 96, duration: 2, fps: 24, sar: 1, dar: 128 / 96 };
+  const no = planSeamstitch({ probes: [clip(170, 96), square], continuity: [true], canvas, targetFps: 24, cfg: CFG });
+  assert.equal(no.eligible, false);
+  assert.match(no.reason, /clip 2 is framed 32\.8% off/);
+});
+
+test('readContinuity: only a run that RECORDED chaining gets a continuity map', () => {
+  const cfg = { ...CFG, assumeContinuous: false };
+  assert.deepEqual(readContinuity({ chained: true }, 3, cfg), [true, true]);
+  assert.equal(readContinuity({ chained: false }, 3, cfg), null, 'an unchained run is not stitchable');
+  assert.equal(readContinuity({}, 3, cfg), null, 'a manifest that never recorded it means UNKNOWN');
+  assert.equal(readContinuity(null, 3, cfg), null);
+  assert.equal(readContinuity({ chained: true }, 1, cfg), null, 'one clip has no joints');
+  assert.equal(readContinuity({ chained: true }, 0, cfg), null);
+});
+
+test('readContinuity: STITCH_ASSUME_CONTINUOUS forces all-true (test/debug knob)', () => {
+  const cfg = { ...CFG, assumeContinuous: true };
+  assert.deepEqual(readContinuity({}, 3, cfg), [true, true]);
+  assert.deepEqual(readContinuity({ chained: false }, 2, cfg), [true]);
+  assert.equal(readContinuity({}, 1, cfg), null, 'even forced, one clip has no joints');
+  assert.equal(CFG.assumeContinuous, false, 'and it is OFF by default');
 });
 
 test('ineligible: unusable probes (no dimensions, no duration, no fps)', () => {

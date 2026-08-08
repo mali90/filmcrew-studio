@@ -103,6 +103,7 @@ Two video models: **Kling 3.0** (default) and **Seedance 2.0** — pick per run 
 - **Two render backends** behind one spec, each planned to **its own model's caps** — job window, reference-image budget, starred-cast ceiling (Kling 1, Seedance 2) and aspect-ratio list. Over-cap choices are refused before any paid step.
 - **Characters that persist**: reference images, subject bibles and minted voices, managed on the Cast page and starrable per idea. A sample character, **Wren**, ships in the box — open the Cast page or add `--cast wren` to any idea to try it (activate his voice with `npm run mint-voice -- "Wren" voices/wren.mp3`).
 - **Environments that persist**: a purely descriptive world/mood/palette bible (`environments/<slug>.md`, no images or voice), managed on the Cast page and set per idea to steer every shot's look. A sample environment, **Neon City**, ships in the box — open the Cast page or add `--environment neon-city` to any idea to try it.
+- **Seam-invisible stitching**: a video over the model's window renders as several chained jobs, and the local stitch colour-matches each chained joint, drops the frame the two clips share and crossfades — so a long cut reads as one take instead of popping at every seam. Pure local ffmpeg, no API and no spend; optional (`pip3 install numpy pillow`), and without it the plain hard-cut stitch still runs. [docs/STITCHING.md](docs/STITCHING.md)
 - **Honest money UX**: a price on every render button, first-job probes on multi-job plans, free re-assembly, upscale only when you choose it.
 - **Review like an editor**: per-clip strip with take history, scoped re-renders with seam-cascade warnings, change requests that re-run the engine.
 - **A fully mocked test suite** — every test runs without keys, network, or spend.
@@ -124,7 +125,7 @@ New films go up regularly — subscribe on [YouTube](https://www.youtube.com/@Jo
           │  8 small AI "agents" plan the movie (story, shots, camera, cast, sound, QC)
           ▼
    ENGINE ──▶ RENDER ──▶ STITCH ──▶  out/your-video.mp4  🎬
-              (fal.ai)   (ffmpeg — clips over 15s are chained + seam-faded automatically)
+              (fal.ai)   (ffmpeg — clips over 15s are chained, then seam-matched automatically)
 ```
 
 | # | Agent | What it decides |
@@ -161,6 +162,7 @@ Rendering is **paid, pay-as-you-go** on fal.ai — every render spends money. Th
 - [docs/SETUP.md](docs/SETUP.md) — manual setup, custom characters, config reference
 - [docs/PROVIDERS.md](docs/PROVIDERS.md) — video models, planners, `.env` options
 - [docs/COST.md](docs/COST.md) — model limits and current prices
+- [docs/STITCHING.md](docs/STITCHING.md) — how the clips become one video (seamless vs hard-cut seams)
 - [web/README.md](web/README.md) — web app architecture (for contributors)
 - [CHANGELOG.md](CHANGELOG.md)
 
