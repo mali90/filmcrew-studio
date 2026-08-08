@@ -52,7 +52,7 @@ export interface Manifest {
   // chained joints, 'concat' = a hard cut at every seam). Absent on cuts made before that existed.
   cuts: { id: string; take: string; master: string | null; shortSide?: number | null; stitcher?: 'seamless' | 'concat'; joints?: number; matched?: number; createdAt: string }[];
   costLedger: { ts: string; action: string; estUsd: number | null; note: string }[];
-  approved: { cut: string | null; final: string; upscaled: boolean; at: string } | null;
+  approved: { cut: string | null; final: string; upscaled: boolean; stitcher?: 'seamless' | 'concat'; joints?: number; matched?: number; at: string } | null;
   lastError: RunError | null;
   activeJob: { kind: ActionKind; pid: number; startedAt: string; queueId?: string } | null;
   jobClips?: Record<string, string>;
