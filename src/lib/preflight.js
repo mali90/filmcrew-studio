@@ -57,15 +57,17 @@ export async function runChecks() {
 
   // 1. fal.ai render credentials, backend choice + character voices.
   add('fal-key', !!config.fal.apiKey, 'FAL_KEY set', 'Get a key at fal.ai/dashboard/keys and put it in .env');
-  add('backend', RENDER_BACKENDS.includes(config.render.backend), `render backend valid (${config.render.backend})`,
+  // Normalize ONCE and reuse: the runtime accepts every spelling normalizeBackend accepts (padded,
+  // legacy, canonical), so the doctor must judge validity — and the Seedance family below — by the
+  // same rule, or Setup blocks a backend that renders fine.
+  const beNorm = (() => { try { return normalizeBackend(config.render.backend); } catch { return null; } })();
+  add('backend', beNorm !== null, `render backend valid (${config.render.backend})`,
     `set RENDER_BACKEND to one of: ${RENDER_BACKENDS.join(', ')} in .env`);
   const voices = loadVoices();
   const n = Object.keys(voices).length;
   add('voices', n > 0, `character voices registered (${n})`, 'mint at least one: npm run mint-voice -- <name> <clip>');
-  // Family check, not a literal compare: RENDER_BACKEND may say 'seedance', 'seedance-2.0@fal' or a
-  // future sibling — every Seedance model lip-syncs from the mint-time clips. An invalid value is
-  // already its own failed 'backend' check above, so it reads as "not seedance" here.
-  const renderFamily = (() => { try { return RENDER_MODELS[normalizeBackend(config.render.backend).model].family; } catch { return null; } })();
+  // Family, not a literal compare: every Seedance model lip-syncs from the mint-time clips.
+  const renderFamily = beNorm ? RENDER_MODELS[beNorm.model].family : null;
   if (renderFamily === 'seedance' && n > 0) {
     // Seedance lip-syncs to the mint-time CLIP, not the voice_id — the file must exist on disk.
     const withClip = Object.keys(voices).filter((name) => getVoiceRefClip(name)).length;

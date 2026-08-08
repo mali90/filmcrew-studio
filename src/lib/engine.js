@@ -436,7 +436,11 @@ async function routeFeedback(feedback) {
  */
 export async function reviseSpec({ spec, runDir, feedback, scope, owners, brief, backend, aspectRatio, maxFix = config.engine.maxFix, maxQc = config.engine.maxQc }) {
   if (!feedback || !String(feedback).trim()) throw new Error('reviseSpec needs non-empty feedback (what should change?).');
-  const v0 = validateSpec(spec, { upTo: 7, backend: backend ?? spec?.render_backend ?? config.render.backend, chainFrames: Boolean(config.kling.chainFrames) });
+  // Judge the STARTING spec by the backend it was planned for — `backend` is the revision's TARGET
+  // (the switch-and-revise workflow), and judging the old spec by the new model's caps would reject
+  // exactly the specs the revision exists to adapt (e.g. a 9-ref Seedance plan moving to Kling).
+  // The target still governs the revision itself: buildCtx below and the final validation.
+  const v0 = validateSpec(spec, { upTo: 7, backend: spec?.render_backend ?? backend ?? config.render.backend, chainFrames: Boolean(config.kling.chainFrames) });
   if (!v0.ok) throw new Error(`reviseSpec needs a valid spec to start from:\n - ${v0.errors.join('\n - ')}`);
   // a typo'd scope must fail loudly — silently widening 'K9' or 'contnet' to a whole-spec revision
   // sends the feedback to the wrong agents and re-runs more than the caller asked to pay attention to

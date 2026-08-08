@@ -111,12 +111,17 @@ export const ALL_BACKENDS = [...BACKEND_IDS, ...LEGACY_BACKENDS];
 export function normalizeBackend(value, { hint = '' } = {}) {
   if (typeof value === 'string') {
     const raw = value.trim();
-    const alias = LEGACY_ALIASES[raw];
+    const alias = Object.hasOwn(LEGACY_ALIASES, raw) ? LEGACY_ALIASES[raw] : undefined;
     const id = alias ?? raw;
     const parts = id.split('@');
     if (parts.length === 2) {
       const [model, provider] = parts;
-      if (RENDER_MODELS[model]?.providers?.[provider]) return { id, model, provider, legacy: Boolean(alias) };
+      // Own-property lookups ONLY: 'kling-o3@__proto__' or 'seedance-2.0@constructor' would match
+      // inherited object properties, validate as a backend, and queue paid planning for an entry
+      // no renderer can ever serve.
+      if (Object.hasOwn(RENDER_MODELS, model) && Object.hasOwn(RENDER_MODELS[model].providers ?? {}, provider)) {
+        return { id, model, provider, legacy: Boolean(alias) };
+      }
     }
   }
   throw new Error(`Unknown render backend "${String(value)}" — use one of: ${ALL_BACKENDS.join(', ')}${hint ? ` (${hint})` : ''}.`);
@@ -129,7 +134,7 @@ export function normalizeBackend(value, { hint = '' } = {}) {
  * @param {string} id  a backend id (compound or legacy alias)
  */
 export function capsFor(id) {
-  if (typeof id === 'string' && RENDER_MODELS[id]) {
+  if (typeof id === 'string' && Object.hasOwn(RENDER_MODELS, id)) {
     // A bare model id is not a backend id: it says nothing about where the render runs.
     const ids = Object.keys(RENDER_MODELS[id].providers ?? {}).map((p) => `${id}@${p}`);
     throw new Error(ids.length
@@ -155,7 +160,7 @@ export function capsFor(id) {
 // whose provider entries have not landed yet still answers "how many cast members?" and "which
 // ratios?" — that is what keeps adding a provider a one-line registry change.
 function modelFor(value) {
-  if (typeof value === 'string' && RENDER_MODELS[value]) return RENDER_MODELS[value];
+  if (typeof value === 'string' && Object.hasOwn(RENDER_MODELS, value)) return RENDER_MODELS[value];
   return RENDER_MODELS[normalizeBackend(value).model];
 }
 

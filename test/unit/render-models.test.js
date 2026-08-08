@@ -180,6 +180,13 @@ test('normalizeBackend: anything else throws, and the message LISTS the accepted
     'seedance-2.0@segmind',   // declared provider, no entry for this model yet
     'kling-o3@',
     '@fal',
+    // Inherited object properties are NOT registry entries: these would otherwise validate at the
+    // gate, queue paid planning, and only fail later when no renderer exists (codex P1).
+    'kling-o3@__proto__',
+    'kling-o3@constructor',
+    'seedance-2.0@toString',
+    'constructor@fal',
+    '__proto__@fal',
     '',
     null,
     undefined,
@@ -194,6 +201,10 @@ test('normalizeBackend: anything else throws, and the message LISTS the accepted
       return true;
     }, `normalizeBackend(${JSON.stringify(v)}) must throw`);
   }
+  // The bare-model helpers must not treat inherited properties as models either.
+  assert.throws(() => castLimitFor('constructor'), /Unknown render backend/);
+  assert.throws(() => aspectsFor('__proto__'), /Unknown render backend/);
+  assert.throws(() => capsFor('kling-o3@__proto__'), /Unknown render backend/);
 });
 
 // ── 5. capsFor ──────────────────────────────────────────────────────────────
