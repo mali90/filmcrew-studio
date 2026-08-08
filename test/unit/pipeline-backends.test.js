@@ -46,14 +46,32 @@ test('the unknown-backend message lists every accepted value and names the two w
   });
 });
 
-test('RENDERERS carries both canonical ids plus the legacy alias keys, with today\'s exact labels', () => {
-  assert.deepEqual(Object.keys(RENDERERS).sort(), ['kling', 'kling-o3@fal', 'seedance', 'seedance-2.0@fal']);
+test('RENDERERS carries every canonical id plus the legacy alias keys, with today\'s exact labels', () => {
+  assert.deepEqual(Object.keys(RENDERERS).sort(), [
+    'kling', 'kling-o3@fal',
+    'seedance', 'seedance-2.0@fal', 'seedance-2.0@segmind',
+    'seedance-2.5@fal', 'seedance-2.5@segmind',
+  ]);
   assert.equal(RENDERERS['kling-o3@fal'].label, 'Kling 3.0 Omni (fal)');
   assert.equal(RENDERERS['seedance-2.0@fal'].label, 'Seedance 2.0 (fal)');
+  assert.equal(RENDERERS['seedance-2.0@segmind'].label, 'Seedance 2.0 (Segmind)');
+  assert.equal(RENDERERS['seedance-2.5@fal'].label, 'Seedance 2.5 (fal)');
+  assert.equal(RENDERERS['seedance-2.5@segmind'].label, 'Seedance 2.5 (Segmind)');
   for (const r of Object.values(RENDERERS)) {
     assert.equal(typeof r.render, 'function');
     assert.equal(typeof r.label, 'string');
   }
+});
+
+// A provider is a BINDING plus one line in the adapter map — never a renderer fork. If a registry
+// entry ever lands without its adapter, BACKEND_IDS and RENDERERS drift and the failure surfaces as
+// "has no renderer in this build" at render time, after planning has already been paid for.
+test('every registry backend id has a renderer — the adapter map keeps pace with the registry', () => {
+  for (const id of BACKEND_IDS) {
+    assert.ok(RENDERERS[id], `${id} is renderable in this build`);
+    assert.equal(typeof RENDERERS[id].render, 'function', id);
+  }
+  assert.equal(Object.keys(RENDERERS).length, BACKEND_IDS.length + LEGACY_BACKENDS.length);
 });
 
 test('the label is derived (`<model label> (<provider label>)`), not hand-written per backend', () => {
@@ -78,4 +96,31 @@ test('each entry is bound to ITS OWN caps — never a family-shared shim', async
     assert.equal(typeof RENDERERS[id].render, 'function', id);
     assert.notEqual(RENDERERS[id].render, bare, `${id} must not be the family-shared renderer`);
   }
+  // …and no two entries share a render function: four Seedance entries built from one generalized
+  // renderer must still be four distinct closures over their own caps + provider adapter.
+  const fns = BACKEND_IDS.map((id) => RENDERERS[id].render);
+  assert.equal(new Set(fns).size, fns.length, 'each backend id closes over its OWN caps/adapter');
+});
+
+// The Segmind transport must not be dragged into a fal-only render's import graph, and vice versa —
+// each binding module owns exactly one provider's transport.
+test('the segmind binding imports segmind, never fal (and the fal binding never segmind)', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+  const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
+  const staticSpecs = (src) => [...src.matchAll(/^\s*import\b[^;]*?from\s+['"]([^'"]+)['"]/gm)].map((m) => m[1]);
+
+  const segmindBinding = staticSpecs(read('src/lib/segmind-seedance.js'));
+  assert.ok(segmindBinding.includes('./segmind.js'), 'it binds the segmind transport');
+  assert.ok(!segmindBinding.some((s) => s.includes('fal')), `no fal import in the segmind binding: ${segmindBinding.join(', ')}`);
+
+  const falBinding = staticSpecs(read('src/lib/fal-seedance.js'));
+  assert.ok(!falBinding.some((s) => s.includes('segmind')), 'no segmind import in the fal binding');
+
+  // segmind.js itself must not statically import fal.js: a Segmind-only setup (SEGMIND_UPLOAD_MODE
+  // =data-uri, no FAL_KEY at all) has to work, so the fal-storage upload path is a LAZY import.
+  const segmind = read('src/lib/segmind.js');
+  assert.ok(!staticSpecs(segmind).some((s) => s.includes('fal')), 'segmind.js never statically imports fal.js');
 });
