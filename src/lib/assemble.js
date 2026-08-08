@@ -249,7 +249,12 @@ async function trySeamlessStitch({ clipPaths, probes, continuity, canvas, target
   } catch (e) {
     return decline(`the stitcher's plan did not re-derive (${e.message})`);
   }
-  const actual = (await probeClip(tmpOut)).duration;
+  let actual;
+  try {
+    actual = (await probeClip(tmpOut)).duration; // an unreadable stitch must fall back, not throw
+  } catch (e) {
+    return decline(`the stitch could not be probed (${e.message})`);
+  }
   const tol = 1 / targetFps + 0.05; // one frame + AAC priming slack (spec §12.7)
   if (Math.abs(actual - expected) > tol) {
     return decline(`the stitch is ${actual.toFixed(2)}s but the plan expects ${expected.toFixed(2)}s`);
