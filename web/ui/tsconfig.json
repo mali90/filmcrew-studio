@@ -11,10 +11,13 @@
     "noFallthroughCasesInSwitch": true,
     "skipLibCheck": true,
     "isolatedModules": true,
+    // the provider/model registry (src/lib/render-models.js) is plain JS and is imported through
+    // web/shared/render-models.ts — the UI reads its caps rather than restating them
+    "allowJs": true,
     "resolveJsonModule": true,
     "allowImportingTsExtensions": false,
     "noEmit": true,
     "types": ["vitest/globals", "@testing-library/jest-dom"]
   },
-  "include": ["src", "../shared/api-types.ts", "vite.config.ts", "e2e", "playwright.config.ts"]
+  "include": ["src", "../shared/api-types.ts", "../shared/render-models.ts", "vite.config.ts", "e2e", "playwright.config.ts"]
 }

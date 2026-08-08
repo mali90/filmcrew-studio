@@ -6,26 +6,52 @@ import { useNavigate } from 'react-router-dom';
 import clsx from 'clsx';
 import { Mountain } from 'lucide-react';
 import type { Aspect, Backend } from '../../../../shared/api-types';
+import { ALL_BACKENDS, aspectsFor, castLimitFor, modelIdFor, modelLabelFor } from '../../../../shared/render-models';
 import { api, ApiClientError } from '../../api/client';
 import { Button } from '../ui/Button';
 import { SegmentedControl } from '../ui/SegmentedControl';
 
-// One hint per MODEL, listed under both its legacy alias and its canonical `<model>@<provider>` id —
-// the record stays exhaustive so a new backend id cannot ship without its own copy.
-const KLING_HINT = 'Kling renders the richest motion at roughly $0.11 per second (~720p — approving can upscale the final to 1080p).';
-const SEEDANCE_HINT = 'Seedance lip-syncs to your voice clips and renders at 480p for roughly $0.14 per second — approving can upscale the final to 1080p.';
-const BACKEND_HINT: Record<Backend, string> = {
-  kling: KLING_HINT,
-  'kling-o3@fal': KLING_HINT,
-  seedance: SEEDANCE_HINT,
-  'seedance-2.0@fal': SEEDANCE_HINT,
+// One hint per MODEL id, so a backend id and its legacy alias share one line of copy and a model
+// without bespoke copy still renders something true (never an exhaustive Record — the Backend union
+// grows every time a provider or model is added to the registry).
+const BACKEND_HINT: Record<string, string> = {
+  'kling-o3': 'Kling renders the richest motion at roughly $0.11 per second (~720p — approving can upscale the final to 1080p).',
+  'seedance-2.0': 'Seedance lip-syncs to your voice clips and renders at 480p for roughly $0.14 per second — approving can upscale the final to 1080p.',
+};
+const hintFor = (backend: Backend) =>
+  BACKEND_HINT[modelIdFor(backend)] ?? `${modelLabelFor(backend)} — you’ll see its render price on the run page, before anything spends.`;
+
+// Backends the picker offers, by their legacy one-word ids: the shortest thing to send and what every
+// manifest already on disk says. The registry decides what each one *means* (caps, ratios, label).
+const BACKEND_SEGMENTS: { value: Backend; label: string; hint: string }[] = [
+  { value: 'kling', label: 'Kling', hint: '≈ $0.11 per second' },
+  { value: 'seedance', label: 'Seedance', hint: '≈ $0.14 per second at 480p' },
+];
+
+// Tile silhouette per ratio — a lookup, not a list: which ratios are *offered* is per model
+// (aspectsFor(backend)), this only says what each one looks like.
+const ASPECT_SHAPE: Record<Aspect, string> = {
+  '9:16': 'h-8 w-[18px]',
+  '16:9': 'h-[18px] w-8',
+  '1:1': 'h-6 w-6',
+  '4:3': 'h-6 w-8',
+  '3:4': 'h-8 w-6',
+  '21:9': 'h-[15px] w-[35px]',
 };
 
-const ASPECT_TILES: { value: Aspect; shape: string }[] = [
-  { value: '9:16', shape: 'h-8 w-[18px]' },
-  { value: '16:9', shape: 'h-[18px] w-8' },
-  { value: '1:1', shape: 'h-6 w-6' },
-];
+// ── per-model rules, all sourced from the registry (never restated here) ──────────────────────────
+/** How many characters this backend's model can star. */
+export const castCapFor = (backend: string): number => castLimitFor(backend);
+/** The ratios this backend's model renders, in menu order. */
+export const aspectsForBackend = (backend: string): Aspect[] => aspectsFor(backend);
+export { modelLabelFor };
+/** Keeps the FIRST N starred slugs — a trim is predictable, and the earliest pick is the deliberate one. */
+export const trimCast = (slugs: string[], backend: string): string[] => slugs.slice(0, castCapFor(backend));
+/** Keeps a ratio the model can render, else falls back to its first (its default). */
+export const trimAspect = (aspect: string, backend: string): Aspect => {
+  const offered = aspectsForBackend(backend);
+  return offered.includes(aspect as Aspect) ? (aspect as Aspect) : offered[0]!;
+};
 
 const initials = (name: string) =>
   name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join('');
@@ -42,27 +68,69 @@ export function CreateHero({ idea, onIdeaChange, ideaRef }: {
   const [aspect, setAspect] = useState<Aspect>('9:16');
   const [durationMode, setDurationMode] = useState<'auto' | 'custom'>('auto');
   const [customS, setCustomS] = useState(12);
+  const [trimNote, setTrimNote] = useState<string | null>(null); // what a model switch had to drop
   const touched = useRef(false);
   const hydrated = useRef(false);
 
-  // Server-side defaults seed the controls once — never overriding a choice already made.
+  const castCap = castCapFor(backend);
+  const modelLabel = modelLabelFor(backend);
+  const offeredAspects = aspectsForBackend(backend);
+
+  // Server-side defaults seed the controls once — never overriding a choice already made. Both values
+  // are validated against the registry rather than a hardcoded list, so a default of 'seedance-2.0@fal'
+  // or (once a model offers it) '4:3' hydrates, and a ratio that model cannot render is trimmed.
   const defaults = useQuery({ queryKey: ['defaults'], queryFn: api.defaults });
   useEffect(() => {
     const d = defaults.data;
     if (!d || hydrated.current || touched.current) return;
     hydrated.current = true;
-    if (d.backend === 'kling' || d.backend === 'seedance') setBackend(d.backend);
-    if (d.aspect === '9:16' || d.aspect === '16:9' || d.aspect === '1:1') setAspect(d.aspect);
+    const nextBackend = ALL_BACKENDS.includes(d.backend as Backend) ? (d.backend as Backend) : backend;
+    const nextAspect = aspectsForBackend(nextBackend).includes(d.aspect as Aspect)
+      ? (d.aspect as Aspect)
+      : trimAspect(aspect, nextBackend);
+    if (nextBackend !== backend) setBackend(nextBackend);
+    if (nextAspect !== aspect) setAspect(nextAspect);
   }, [defaults.data]);
 
-  // Cast picker — starring is free (no cost tags). Zero profiles renders nothing at all.
+  // Cast picker — starring is free (no cost tags). Zero profiles renders nothing at all. Every model
+  // has its own ceiling (reference-image slots are finite), enforced here so the pick can never be
+  // one the engine and POST /api/runs would refuse.
   const charactersQuery = useQuery({ queryKey: ['cast-characters'], queryFn: api.characters });
   const [castSlugs, setCastSlugs] = useState<string[]>([]);
   const characters = charactersQuery.data?.characters ?? [];
   const selectedCast = characters.filter((c) => castSlugs.includes(c.slug));
   const selectedNoRefs = selectedCast.filter((c) => c.refs.length === 0);
-  const toggleCast = (slug: string) =>
-    setCastSlugs((prev) => (prev.includes(slug) ? prev.filter((s) => s !== slug) : [...prev, slug]));
+  const nameOf = (slug: string) => characters.find((c) => c.slug === slug)?.name ?? slug;
+  const atCastCap = castSlugs.length >= castCap;
+  const capTitle = `${modelLabel} renders up to ${castCap} starring character${castCap > 1 ? 's' : ''} — unstar one to swap.`;
+  const toggleCast = (slug: string) => {
+    setTrimNote(null); // the note reports the last switch — a fresh pick supersedes it
+    setCastSlugs((prev) => {
+      if (prev.includes(slug)) return prev.filter((s) => s !== slug);
+      return prev.length >= castCap ? prev : [...prev, slug]; // at the cap the pill is disabled too
+    });
+  };
+
+  // Switching model re-applies its own limits to what is already picked, and says what it dropped —
+  // one status line for both trims, so the user never submits something the server will 400.
+  const chooseBackend = (next: Backend) => {
+    touched.current = true;
+    setBackend(next);
+    const keptCast = trimCast(castSlugs, next);
+    const dropped = castSlugs.slice(keptCast.length);
+    const nextAspect = trimAspect(aspect, next);
+    const label = modelLabelFor(next);
+    const cap = castCapFor(next);
+    const notes = [
+      dropped.length
+        ? `${label} stars up to ${cap} character${cap > 1 ? 's' : ''} — unstarred ${dropped.map(nameOf).join(' & ')}.`
+        : '',
+      nextAspect !== aspect ? `${label} does not render ${aspect} — switched the aspect to ${nextAspect}.` : '',
+    ].filter(Boolean);
+    if (dropped.length) setCastSlugs(keptCast);
+    if (nextAspect !== aspect) setAspect(nextAspect);
+    setTrimNote(notes.join(' ') || null);
+  };
 
   // "Set in" picker — a single environment anchors the plan's look. Zero environments renders nothing.
   const environmentsQuery = useQuery({ queryKey: ['environments'], queryFn: api.environments });
@@ -125,22 +193,26 @@ export function CreateHero({ idea, onIdeaChange, ideaRef }: {
 
         {characters.length > 0 && (
           <div className="flex flex-col gap-1.5">
-            <span className="text-caption font-medium text-ink-muted">Starring</span>
+            <span className="text-caption font-medium text-ink-muted">{`Starring — up to ${castCap} for ${modelLabel}`}</span>
             <div role="group" aria-label="Starring" className="flex flex-wrap items-center gap-1.5">
               {characters.map((c) => {
                 const selected = castSlugs.includes(c.slug);
+                const capped = !selected && atCastCap; // selected pills stay clickable — swapping must work
                 const refUrl = c.refs.find((r) => r.url)?.url;
                 return (
                   <button
                     key={c.slug}
                     type="button"
                     aria-pressed={selected}
+                    disabled={capped}
+                    title={capped ? capTitle : undefined}
                     onClick={() => toggleCast(c.slug)}
                     className={clsx(
                       'inline-flex h-8 items-center gap-1.5 rounded-full border py-0 pl-1 pr-2.5 text-label transition-colors duration-[120ms]',
                       selected
                         ? 'border-accent bg-[var(--accent-soft)] text-ink'
                         : 'border-line bg-surface-1 text-ink-secondary hover:border-line-strong',
+                      capped && 'cursor-not-allowed opacity-45 hover:border-line',
                     )}
                   >
                     {refUrl ? (
@@ -212,29 +284,30 @@ export function CreateHero({ idea, onIdeaChange, ideaRef }: {
             <span className="text-caption font-medium text-ink-muted">Backend</span>
             <SegmentedControl
               label="Render backend"
-              value={backend}
-              onChange={(v) => { touched.current = true; setBackend(v); }}
-              segments={[
-                { value: 'kling', label: 'Kling', hint: '≈ $0.11 per second' },
-                { value: 'seedance', label: 'Seedance', hint: '≈ $0.14 per second at 480p' },
-              ]}
+              // a backend hydrated as `<model>@<provider>` still lights up its own segment
+              value={BACKEND_SEGMENTS.find((s) => modelIdFor(s.value) === modelIdFor(backend))?.value ?? backend}
+              onChange={chooseBackend}
+              segments={BACKEND_SEGMENTS}
             />
-            <span className="tnum max-w-[260px] text-caption text-ink-muted">{BACKEND_HINT[backend]}</span>
+            <span className="tnum max-w-[260px] text-caption text-ink-muted">{hintFor(backend)}</span>
+            {trimNote && (
+              <span role="status" className="max-w-[260px] text-caption text-status-warn">{trimNote}</span>
+            )}
           </div>
 
           <div className="flex flex-col gap-1.5">
             <span className="text-caption font-medium text-ink-muted">Aspect</span>
             <div role="radiogroup" aria-label="Aspect ratio" className="flex items-stretch gap-1">
-              {ASPECT_TILES.map((t) => {
-                const selected = aspect === t.value;
+              {offeredAspects.map((ratio) => {
+                const selected = aspect === ratio;
                 return (
                   <button
-                    key={t.value}
+                    key={ratio}
                     type="button"
                     role="radio"
                     aria-checked={selected}
-                    aria-label={t.value}
-                    onClick={() => { touched.current = true; setAspect(t.value); }}
+                    aria-label={ratio}
+                    onClick={() => { touched.current = true; setTrimNote(null); setAspect(ratio); }}
                     className={clsx(
                       'flex h-16 w-14 flex-col items-center justify-center gap-1.5 rounded-r2 transition-colors duration-[120ms]',
                       selected ? 'bg-surface-2' : 'hover:bg-surface-2',
@@ -244,11 +317,11 @@ export function CreateHero({ idea, onIdeaChange, ideaRef }: {
                       aria-hidden
                       className={clsx(
                         'rounded-[3px] border',
-                        t.shape,
+                        ASPECT_SHAPE[ratio],
                         selected ? 'border-accent bg-[var(--accent-soft)] ring-2 ring-accent' : 'border-line-strong bg-surface-3',
                       )}
                     />
-                    <span className={clsx('tnum text-caption', selected ? 'text-ink' : 'text-ink-muted')}>{t.value}</span>
+                    <span className={clsx('tnum text-caption', selected ? 'text-ink' : 'text-ink-muted')}>{ratio}</span>
                   </button>
                 );
               })}

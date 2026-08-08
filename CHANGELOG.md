@@ -17,12 +17,15 @@
   character costs reference-image slots. Over-starring used to plan a full 8-agent spec that could
   only ever fail at the renderer; the engine now stops at the flag with a message naming the model,
   its limit and the characters you picked, and `POST /api/runs` refuses the same request before it
-  queues anything.
+  queues anything. On Home, the **Starring** row states the cap ("up to 1 for Kling 3.0 Omni"),
+  greys out the pills you have no room for, and switching model unstars whoever no longer fits and
+  says so — the cap is now unhittable rather than explained after the fact.
 - **Aspect ratios are per model.** The app now understands six numeric ratios — `16:9`, `9:16`,
   `1:1`, `4:3`, `3:4` and `21:9` — and each run may only pick from the ones its own model renders
-  (Kling 3.0 Omni and Seedance 2.0 keep today's three). The stitch canvas shapes itself for all six,
-  never upscaling past the source clips. `adaptive`/`auto` are deliberately not offered: the stitcher
-  needs a deterministic ratio.
+  (Kling 3.0 Omni and Seedance 2.0 keep today's three). Home's **Aspect** control offers exactly the
+  selected model's ratios and re-picks for you if a switch invalidates your choice. The stitch canvas
+  shapes itself for all six, never upscaling past the source clips. `adaptive`/`auto` are deliberately
+  not offered: the stitcher needs a deterministic ratio.
 
 ### Fixed
 - **Finalize/upscale now uses the cut you selected**, not always the newest. In review, switching to
