@@ -11,7 +11,8 @@ import config, { resolvePath } from '../../config.js';
 import log from './logger.js';
 import { ensureDir, writeJson, slug } from './util.js';
 import { complete, extractJson } from './llm.js';
-import { validateSpec, RENDER_BACKENDS, ASPECTS } from './spec-schema.js';
+import { validateSpec } from './spec-schema.js';
+import { RENDER_MODELS, capsFor, normalizeBackend } from './render-models.js';
 import { buildInventory, inventoryText } from './elements.js';
 import { voicesInventoryText } from './voices.js';
 import { SEEDANCE_TTV_GUIDANCE } from './seedance.js';
@@ -50,26 +51,44 @@ async function loadSkills(idx) {
   return out.join('\n\n---\n\n');
 }
 
+/**
+ * The model FAMILY behind any accepted backend spelling — a compound `<model>@<provider>` id, a
+ * legacy alias, or a bare model id whose provider entries have not landed yet. null when the name
+ * is unknown, so the callers below can key off the family instead of a literal backend string.
+ */
+function familyOf(value) {
+  if (typeof value === 'string' && Object.hasOwn(RENDER_MODELS, value)) return RENDER_MODELS[value].family;
+  try { return capsFor(value).family; } catch { return null; }
+}
+
 /** A Seedance render with NO cast AND NO reference image available is guaranteed text-to-video (the
  *  Casting agent has nothing to attach) — the only case where injecting the text-to-video prompt style
  *  + identity override is safe. A no-cast render whose folder holds a relevant image becomes
- *  image-to-video (Casting attaches by relevance), whose planning must stay unchanged. */
+ *  image-to-video (Casting attaches by relevance), whose planning must stay unchanged. Keyed off the
+ *  model FAMILY, so every Seedance model (2.0, 2.5, on any provider) takes this path. */
 export function isTextToVideoPlan({ backend, cast, refCount }) {
-  return backend === 'seedance' && !(cast?.length) && refCount === 0;
+  return familyOf(backend) === 'seedance' && !(cast?.length) && refCount === 0;
 }
 
 /** The shared project context every agent sees (brief, config defaults + caps, elements, profiles). */
 export function contextBlock(ctx) {
   const k = config.kling;
+  // Per-model caps ride on the ctx buildCtx built; a hand-assembled ctx (unit tests, callers that
+  // only hold a backend name) gets them derived from the backend it names, so the Job Planner is
+  // never told Kling's numbers for a Seedance plan.
+  const caps = ctx.caps ?? capsFor(ctx.backend);
   return [
     '## Project context',
     `- Brief: ${ctx.brief}`,
     `- Defaults: model=${k.model}, aspect_ratio=${ctx.aspectRatio ?? k.aspectRatio}, resolution=${k.resolution}, ` +
       `multi_shot=${k.multiShot}, native_audio=${k.nativeAudio}, target_duration≈${ctx.durationTargetS}s`,
-    `- Render backend: ${ctx.backend}`,
-    `- Hard caps: ≤${k.maxStoryboards} shots/job, ≤${k.maxJobSeconds}s/job, ≤512 chars/segment, ≤${k.maxRefImages} reference images/job`,
-    ...(ctx.backend === 'seedance'
-      ? [`- Seedance packing rule: every job must total ${config.seedance.minJobSeconds}–${config.seedance.maxJobSeconds}s (a job under ${config.seedance.minJobSeconds}s fails validation — merge short shots); other caps are identical.`]
+    `- Render backend: ${caps.id}`,
+    // Every number here is the RENDERING MODEL's own (registry caps), with the shared fallbacks for
+    // the caps a model leaves undeclared — the same pair spec-schema's validateJobs applies, so the
+    // planner is never told a window the validator will then reject.
+    `- Hard caps: ≤${caps.maxSegments ?? 6} shots/job, ≤${caps.maxSeconds}s/job, ≤${caps.maxSegmentChars ?? 512} chars/segment, ≤${caps.maxImages} reference images/job`,
+    ...(caps.family === 'seedance'
+      ? [`- Seedance packing rule: every job must total ${caps.minSeconds}–${caps.maxSeconds}s (a job under ${caps.minSeconds}s fails validation — merge short shots); the caps above are this model's own.`]
       : []),
     // Guaranteed text-to-video (Seedance, no cast, AND no reference image the Casting agent could
     // attach): steer the shot prose with the Seedance 2.0 guidelines from the start. Absent for
@@ -81,8 +100,10 @@ export function contextBlock(ctx) {
          SEEDANCE_TTV_GUIDANCE,
          '- IDENTITY: overriding the scene-director\'s usual "never describe the subject\'s appearance" rule — since no reference image pins identity here, DO describe each subject\'s look concretely (build, clothing, colours, distinctive features) and keep it consistent across every shot.']
       : []),
+    // aspect_ratio is the MODEL's list (identical to the historic three for both shipping models),
+    // so a model with wider ratios never has them talked out of the plan by a hardcoded enum.
     '- Valid enums: shot_size ∈ {extreme_close_up, close_up, medium_close_up, medium, medium_wide, wide, extreme_wide}; ' +
-      'aspect_ratio ∈ {16:9, 9:16, 1:1}; kling.model_name ∈ {kling-v3-omni, kling-video-o1}; ' +
+      `aspect_ratio ∈ {${caps.aspects.join(', ')}}; kling.model_name ∈ {kling-v3-omni, kling-video-o1}; ` +
       'kling.resolution ∈ {4k, 1080p, 720p}',
     '',
     '## Available elements (the Casting agent must pick `image` paths from THIS list)',
@@ -246,12 +267,13 @@ async function loadEnvironment(environment) {
 
 /** Validate backend + aspect up-front (BEFORE any LLM spend) and build the shared agent context. */
 export async function buildCtx({ brief, backend, aspectRatio, durationTargetS, cast, environment }) {
-  const be = backend ?? config.render.backend;
-  if (!RENDER_BACKENDS.includes(be)) {
-    throw new Error(`Unknown render backend "${be}" — use one of: ${RENDER_BACKENDS.join(', ')} (RENDER_BACKEND in .env, or --backend).`);
-  }
-  if (aspectRatio !== undefined && !ASPECTS.includes(aspectRatio)) {
-    throw new Error(`Unknown aspect ratio "${aspectRatio}" — use one of: ${ASPECTS.join(', ')}.`);
+  // Canonicalize FIRST: everything below is per-model (which ratios are legal, which caps the agents
+  // are told, which id the spec is stamped with), and a typo'd backend must cost nothing. A legacy
+  // 'kling'/'seedance' converges here on the same compound id as its `<model>@<provider>` spelling.
+  const { id: be } = normalizeBackend(backend ?? config.render.backend, { hint: 'RENDER_BACKEND in .env, or --backend' });
+  const caps = capsFor(be);
+  if (aspectRatio !== undefined && !caps.aspects.includes(aspectRatio)) {
+    throw new Error(`Unknown aspect ratio "${aspectRatio}" — use one of: ${caps.aspects.join(', ')}.`);
   }
   const inv = buildInventory();
   // The environment carries NO reference image, so it is loaded AFTER (and independently of) the
@@ -260,7 +282,8 @@ export async function buildCtx({ brief, backend, aspectRatio, durationTargetS, c
   const environmentText = await loadEnvironment(environment);
   return {
     brief,
-    backend: be,
+    backend: be, // the CANONICAL `<model>@<provider>` id — what gets stamped onto the spec
+    caps, // the rendering model's own caps: contextBlock's hard-caps lines read them
     aspectRatio, // undefined = config default (contextBlock falls back to config.kling.aspectRatio)
     durationTargetS: durationTargetS ?? config.kling.defaultShotSeconds * 3,
     // Guaranteed text-to-video? (no cast AND no reference image to attach — see isTextToVideoPlan)
@@ -285,8 +308,10 @@ function stampAspect(spec, aspectRatio) {
 /**
  * Run the full engine for one brief.
  * @param {{brief:string, runDir:string, durationTargetS?:number, backend?:string, aspectRatio?:string, cast?:string[], maxFix?:number, maxQc?:number}} p
- *   `backend`: render backend the spec is planned for ('kling' default) — the job planner packs to
- *   its caps and the incremental validation enforces them. `aspectRatio` (16:9|9:16|1:1): overrides
+ *   `backend`: render backend the spec is planned for (a `<model>@<provider>` id or a legacy
+ *   'kling'/'seedance' alias; config default when omitted) — the job planner packs to that model's
+ *   caps, the incremental validation enforces them, and the spec is stamped with the CANONICAL id.
+ *   `aspectRatio` (one of the model's own ratios): overrides
  *   the config default in the agents' context and is stamped onto the final spec. `cast` (character
  *   names with profiles/<name>.md): narrows the injected profiles to those characters and directs
  *   the agents to star them; unknown names throw before any LLM spend. `environment` (a single
@@ -313,7 +338,7 @@ export async function runEngine({ brief, runDir, durationTargetS, backend, aspec
   spec = await qcLoop(spec, ctx, { runDir, maxFix, maxQc });
 
   stampAspect(spec, ctx.aspectRatio);
-  spec.render_backend = ctx.backend; // the spec is planned FOR this backend — renders must not silently fall back to the config default
+  spec.render_backend = ctx.backend; // the CANONICAL id this spec was planned FOR — renders must not silently fall back to the config default
   if (ctx.castNames) spec.cast = ctx.castNames; // revisions re-inject the same starred profiles
   if (ctx.environmentSlug) spec.environment = ctx.environmentSlug; // revisions re-inject the same world bible
   const final = validateSpec(spec, { upTo: 7, backend: ctx.backend });
@@ -438,7 +463,9 @@ export async function reviseSpec({ spec, runDir, feedback, scope, owners, brief,
   cur = await qcLoop(cur, ctx, { runDir, maxFix, maxQc, filePrefix: 'spec-r07-qc', seedNote: note });
 
   stampAspect(cur, ctx.aspectRatio);
-  cur.render_backend = ctx.backend; // a revision keeps (or deliberately changes) the planned backend — never loses it
+  // A revision keeps (or deliberately changes) the planned backend — never loses it — and re-stamps
+  // it canonically, so revising a spec written before compound ids existed upgrades it in place.
+  cur.render_backend = ctx.backend;
   if (ctx.castNames) cur.cast = ctx.castNames;
   if (ctx.environmentSlug) cur.environment = ctx.environmentSlug; // the revision re-stamps the same world bible
   const final = validateSpec(cur, { upTo: 7, backend: ctx.backend });

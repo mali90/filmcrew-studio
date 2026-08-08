@@ -32,8 +32,10 @@ test('backend: a seedance run plans and validates cleanly with the fake LLM', as
     const { passed, spec } = await runEngine({ brief: 'a lighthouse keeper at dusk', runDir: dir, backend: 'seedance', maxFix: 2, maxQc: 2 });
     assert.equal(passed, true); // the golden jobs (13s) satisfy Seedance's 4s/job floor
     // the spec must remember which backend it was planned FOR — otherwise a later render
-    // silently falls back to the config default and renders a seedance plan on kling
-    assert.equal(spec.render_backend, 'seedance');
+    // silently falls back to the config default and renders a seedance plan on kling. It is
+    // stamped CANONICALLY (`<model>@<provider>`) whichever alias the caller used, so the record
+    // stays unambiguous once more than one provider can serve the same model.
+    assert.equal(spec.render_backend, 'seedance-2.0@fal');
   } finally { cleanup(); }
 });
 
