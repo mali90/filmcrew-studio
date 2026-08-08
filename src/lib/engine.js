@@ -88,7 +88,8 @@ export function contextBlock(ctx) {
     // planner is never told a window the validator will then reject.
     `- Hard caps: ≤${caps.maxSegments ?? 6} shots/job, ≤${caps.maxSeconds}s/job, ≤${caps.maxSegmentChars ?? 512} chars/segment, ≤${caps.maxImages} reference images/job`,
     ...(caps.family === 'seedance'
-      ? [`- Seedance packing rule: every job must total ${caps.minSeconds}–${caps.maxSeconds}s (a job under ${caps.minSeconds}s fails validation — merge short shots); the caps above are this model's own.`]
+      ? [`- Seedance packing rule: every job must total ${caps.minSeconds}–${caps.maxSeconds}s (a job under ${caps.minSeconds}s fails validation — merge short shots); the caps above are this model's own.`,
+         `- Reference budget: 1 of the ${caps.maxImages} image slots is reserved for the opening/seam frame on every job after the first (and on any job with an authored first_frame) — give those jobs at most ${caps.maxImages - 1} element refs.`]
       : []),
     // Guaranteed text-to-video (Seedance, no cast, AND no reference image the Casting agent could
     // attach): steer the shot prose with the Seedance 2.0 guidelines from the start. Absent for
@@ -272,8 +273,12 @@ export async function buildCtx({ brief, backend, aspectRatio, durationTargetS, c
   // 'kling'/'seedance' converges here on the same compound id as its `<model>@<provider>` spelling.
   const { id: be } = normalizeBackend(backend ?? config.render.backend, { hint: 'RENDER_BACKEND in .env, or --backend' });
   const caps = capsFor(be);
-  if (aspectRatio !== undefined && !caps.aspects.includes(aspectRatio)) {
-    throw new Error(`Unknown aspect ratio "${aspectRatio}" — use one of: ${caps.aspects.join(', ')}.`);
+  // Judge the EFFECTIVE ratio — the flag when given, else the config default the plan would
+  // inherit (KLING_ASPECT): a 4:3 default on a three-ratio model must not spend a whole planning
+  // pass on a spec the renderer will then reject.
+  const effAspect = aspectRatio ?? config.kling.aspectRatio;
+  if (effAspect !== undefined && !caps.aspects.includes(effAspect)) {
+    throw new Error(`Unknown aspect ratio "${effAspect}"${aspectRatio === undefined ? ' (the KLING_ASPECT config default)' : ''} — use one of: ${caps.aspects.join(', ')}.`);
   }
   // Cast cap, layer 1 of 3 (engine / server / UI). Every starred character burns reference-image
   // slots, so each model has a hard ceiling. This has to fire HERE — before loadProfiles and before

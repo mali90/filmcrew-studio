@@ -8,6 +8,7 @@ import { PROVIDER_KEY_ENV, PROVIDER_CLI_BIN, PROVIDER_CLI_ONLY } from './llm.js'
 import { buildInventory } from './elements.js';
 import { loadVoices, getVoiceRefClip } from './voices.js';
 import { RENDER_BACKENDS } from './spec-schema.js';
+import { normalizeBackend, RENDER_MODELS } from './render-models.js';
 
 // Failed checks whose label starts with one of these are SOFT (a warning, not a hard blocker): you
 // may still render a hand-authored spec, or a fal spec with no dialogue, later.
@@ -61,7 +62,11 @@ export async function runChecks() {
   const voices = loadVoices();
   const n = Object.keys(voices).length;
   add('voices', n > 0, `character voices registered (${n})`, 'mint at least one: npm run mint-voice -- <name> <clip>');
-  if (config.render.backend === 'seedance' && n > 0) {
+  // Family check, not a literal compare: RENDER_BACKEND may say 'seedance', 'seedance-2.0@fal' or a
+  // future sibling — every Seedance model lip-syncs from the mint-time clips. An invalid value is
+  // already its own failed 'backend' check above, so it reads as "not seedance" here.
+  const renderFamily = (() => { try { return RENDER_MODELS[normalizeBackend(config.render.backend).model].family; } catch { return null; } })();
+  if (renderFamily === 'seedance' && n > 0) {
     // Seedance lip-syncs to the mint-time CLIP, not the voice_id — the file must exist on disk.
     const withClip = Object.keys(voices).filter((name) => getVoiceRefClip(name)).length;
     add('voice-clips', withClip === n, `voice ref clips on disk (${withClip}/${n})`,

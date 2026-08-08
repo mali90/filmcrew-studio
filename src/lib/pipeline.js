@@ -10,24 +10,35 @@ import { ensureDir, writeJson, readJson, slug } from './util.js';
 import { validateSpec } from './spec-schema.js';
 import { BACKEND_IDS, LEGACY_BACKENDS, capsFor, normalizeBackend } from './render-models.js';
 import { renderKlingJobFal } from './fal-kling.js';
-import { renderSeedanceJobFal } from './fal-seedance.js';
+import { falAdapter } from './fal-seedance.js';
+import { renderSeedanceJob } from './render-seedance.js';
 import { assembleVideo, grabFrame, lastFrameOf } from './assemble.js';
 import { upscaleVideoTopaz, probeDims } from './upscale.js';
 
-// One render fn per model FAMILY — the wire protocol is a property of the family, not of the
-// model or the provider, so a new model in a known family needs no code here at all.
-const FAMILY_RENDER = { kling: renderKlingJobFal, seedance: renderSeedanceJobFal };
+// Seedance transports by PROVIDER id — a new provider is a binding module exporting an adapter
+// plus one line here. The generalized renderer then runs with EACH ENTRY'S OWN caps, so a sibling
+// model (seedance-2.5@fal) or a sibling provider (seedance-2.0@segmind) can never silently render
+// through another entry's limits or transport.
+const SEEDANCE_ADAPTERS = { fal: falAdapter };
 
 // Render backends — one entry per renderable `<model>@<provider>`, all honoring the same per-job
 // contract ({ job, spec, runDir, seed, lowRes, startFrame, nonce }) → { jobId, clip, totalDuration,
-// segments }. DERIVED from the render-models registry (BACKEND_IDS × FAMILY_RENDER), so adding a
-// model/provider is a registry entry and labels can never drift from the registry's own names.
+// segments }. DERIVED from the render-models registry, and each entry is bound to ITS id's caps —
+// so adding a model/provider is a registry entry (+ an adapter for a new provider) and labels can
+// never drift from the registry's own names.
 export const RENDERERS = (() => {
   const table = {};
   for (const id of BACKEND_IDS) {
     const caps = capsFor(id);
-    const render = FAMILY_RENDER[caps.family];
-    if (!render) continue; // registry knows the model; this build has no renderer for its family
+    let render = null;
+    if (caps.family === 'kling' && caps.provider === 'fal') {
+      // Kling's renderer is fal-specific (elements + bound voice_id have no equivalent elsewhere).
+      render = renderKlingJobFal;
+    } else if (caps.family === 'seedance' && SEEDANCE_ADAPTERS[caps.provider]) {
+      const adapter = SEEDANCE_ADAPTERS[caps.provider];
+      render = (a) => renderSeedanceJob(a, { caps, adapter });
+    }
+    if (!render) continue; // registry knows the model; this build has no renderer for this entry
     table[id] = { render, label: `${caps.label} (${caps.providerLabel})` };
   }
   // The legacy one-word names are aliases onto the SAME entry object — nothing on disk migrates,

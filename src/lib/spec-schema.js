@@ -101,7 +101,7 @@ function validateAudio(spec, P) {
   }
 }
 
-function validateJobs(spec, P, elementIds, caps) {
+function validateJobs(spec, P, elementIds, caps, enforceModelAspects = false) {
   // Every number below is the RENDERING MODEL's, with the shared fallback used when the registry
   // entry stays silent about a cap (never "no cap declared" → "no check").
   const maxSegments = caps.maxSegments ?? MAX_STORYBOARDS;
@@ -116,6 +116,17 @@ function validateJobs(spec, P, elementIds, caps) {
   if (k.aspect_ratio !== undefined && !oneOf(k.aspect_ratio, ASPECTS)) P.push(`kling.aspect_ratio "${k.aspect_ratio}" not in ${ASPECTS.join('|')}`);
   if (k.resolution !== undefined && !oneOf(k.resolution, KLING_RES)) P.push(`kling.resolution "${k.resolution}" not in ${KLING_RES.join('|')}`);
   if (k.generate_audio !== undefined && typeof k.generate_audio !== 'boolean') P.push('kling.generate_audio must be boolean');
+  // Caps gate ON TOP of the structural superset, applied only when the caller NAMED the backend
+  // (the render/engine paths always do): the widened ASPECTS accepts any registered model's ratio,
+  // so a spec authored with a six-ratio model's aspect must still be rejected when the EFFECTIVE
+  // backend cannot render it — this is the render path's only aspect guard.
+  if (enforceModelAspects) {
+    for (const [where, v] of [['project.aspect_ratio', spec.project?.aspect_ratio], ['kling.aspect_ratio', k.aspect_ratio]]) {
+      if (v !== undefined && oneOf(v, ASPECTS) && Array.isArray(caps.aspects) && !caps.aspects.includes(v)) {
+        P.push(`${where} "${v}" is not renderable on ${caps.label} (its ratios: ${caps.aspects.join('|')})`);
+      }
+    }
+  }
 
   const shots = isArr(spec.shots) ? spec.shots : [];
   const shotIds = new Set(shots.map((s) => s.shot_id));
@@ -139,7 +150,19 @@ function validateJobs(spec, P, elementIds, caps) {
     // Kling, so "under Seedance 2.0's 4s/job minimum" tells the planner which window it missed.
     if (total < minSeconds) P.push(`${at}: total ${total}s is under ${caps.label}'s ${minSeconds}s/job minimum (merge a shot into this job)`);
     const refs = job.elements ?? [];
-    if (refs.length > maxRefs) P.push(`${at}: ${refs.length} elements exceeds the ${maxRefs}-reference cap`);
+    // The opening frame — an authored first_frame, or the seam frame every job after the first
+    // receives on a chained multi-job render — rides one of the SAME image slots on models that
+    // demote it to a reference (fal Seedance has no native slot; Segmind's native slot excludes
+    // refs). Validating against the full cap would pass a max-ref job here and then silently drop
+    // one paid identity reference at render time, so the slot is reserved up front.
+    const demotesOpeningFrame = !caps.nativeFirstFrame || !caps.argMap?.firstFrame || Boolean(caps.firstFrameExcludesRefs);
+    const holdsOpeningFrame = caps.family === 'seedance' && (nonEmpty(job.first_frame) || j > 0);
+    const refBudget = maxRefs - (holdsOpeningFrame && demotesOpeningFrame ? 1 : 0);
+    if (refs.length > refBudget) {
+      P.push(refBudget < maxRefs
+        ? `${at}: ${refs.length} elements exceeds the ${refBudget}-reference budget (${caps.label} caps at ${maxRefs} images and 1 slot is reserved for this job's opening/seam frame)`
+        : `${at}: ${refs.length} elements exceeds the ${maxRefs}-reference cap`);
+    }
     refs.forEach((id) => { if (!elementIds.has(id)) P.push(`${at}.elements: "${id}" not in kling.elements`); });
     if (job.first_frame !== undefined && !nonEmpty(job.first_frame)) P.push(`${at}.first_frame must be a non-empty path when present`);
     if (job.last_frame !== undefined && !nonEmpty(job.last_frame)) P.push(`${at}.last_frame must be a non-empty path when present`);
@@ -161,8 +184,12 @@ function validateQc(qc, P) {
  * is judged against 9 rather than the old both-backends intersection. An unknown backend THROWS —
  * silently validating against nothing would hand a bad spec to the renderer.
  */
-export function validateSpec(spec, { upTo = 7, backend = 'kling' } = {}) {
-  const caps = capsFor(backend);
+export function validateSpec(spec, { upTo = 7, backend } = {}) {
+  // With no backend named, this validator stays the structural SUPERSET (a six-ratio spec must
+  // survive round-tripping through backend-less callers). With an EXPLICIT backend — and every
+  // render/engine path passes the resolved one — that model's own ratio list is enforced too.
+  const enforceModelAspects = backend !== undefined;
+  const caps = capsFor(backend ?? 'kling');
   const P = [];
   if (!spec || typeof spec !== 'object') return { ok: false, errors: ['spec: not an object'] };
   if (spec.spec_version !== '1.0') P.push('spec_version must be "1.0"');
@@ -185,7 +212,7 @@ export function validateSpec(spec, { upTo = 7, backend = 'kling' } = {}) {
   if (upTo >= 4) validateElements(spec, P, elementIds);
   else if (upTo >= 6) validateElements(spec, P, elementIds); // jobs cross-ref needs element ids
   if (upTo >= 5) validateAudio(spec, P);
-  if (upTo >= 6) validateJobs(spec, P, elementIds, caps);
+  if (upTo >= 6) validateJobs(spec, P, elementIds, caps, enforceModelAspects);
   if (upTo >= 7) validateQc(spec.qc, P);
 
   return { ok: P.length === 0, errors: P };

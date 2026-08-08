@@ -68,9 +68,14 @@ test('a legacy alias key IS the canonical entry — same object, so labels can n
   assert.equal(RENDERERS.seedance, RENDERERS['seedance-2.0@fal']);
 });
 
-test('the family→render-fn map is what wires the table: same family ⇒ same render fn', async () => {
+test('each entry is bound to ITS OWN caps — never a family-shared shim', async () => {
   const { renderKlingJobFal } = await import('../../src/lib/fal-kling.js');
   const { renderSeedanceJobFal } = await import('../../src/lib/fal-seedance.js');
+  // Kling is genuinely fal-only, so its entry may be the fal renderer itself…
   assert.equal(RENDERERS['kling-o3@fal'].render, renderKlingJobFal);
-  assert.equal(RENDERERS['seedance-2.0@fal'].render, renderSeedanceJobFal);
+  // …but a seedance entry must NOT route through the 2.0@fal-pinned shim: a sibling model or
+  // provider added to the registry has to render with its own caps and its own transport, so the
+  // table binds a per-entry closure over capsFor(id) + that provider's adapter.
+  assert.equal(typeof RENDERERS['seedance-2.0@fal'].render, 'function');
+  assert.notEqual(RENDERERS['seedance-2.0@fal'].render, renderSeedanceJobFal);
 });

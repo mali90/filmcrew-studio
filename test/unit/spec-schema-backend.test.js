@@ -148,19 +148,62 @@ test('ASPECTS is the numeric superset — no adaptive/auto, and the schema accep
   assert.match(v.errors.join('\n'), /aspect_ratio "5:4"/);
 });
 
-// The other half of that split, stated as an assertion rather than a comment: the SCHEMA takes
-// '21:9' from any spec, but the run's MODEL decides whether it may be rendered. aspectsFor() is the
-// list the two run-time gates check against (engine buildCtx for the CLI, POST /api/runs for the
-// web), and kling-o3 does not list '21:9' — so the same spec.json that validates here is refused
-// there. Enforcing it inside validateSpec instead would break the superset: validateSpec defaults
-// to backend 'kling' and most callers pass no backend at all, so a six-ratio spec would read as
-// structurally invalid the moment anything round-tripped it.
-test("'21:9' clears the schema but is not legal on kling — per-run legality lives in the caps list", async () => {
+// The opening-frame slot (codex P1): on a chained multi-job Seedance render, every job after the
+// first receives the previous clip's last frame INSIDE the same image budget — as does any job
+// with an authored first_frame. Without a reserved slot here, a max-ref job validates and the
+// renderer then silently drops one PAID identity reference. Kling is untouched: its start frame is
+// a native param, not an element slot.
+test('Seedance reserves one image slot for the opening/seam frame; Kling does not', () => {
+  const max = SEEDANCE_CAPS.MAX_IMAGE_REFS;
+  const spec = loadGoldenSpec();
+  const [s1, s2] = spec.shots;
+  assert.ok(s2, 'fixture needs at least two shots');
+  spec.shots = [s1, s2];
+  s1.duration_s = 5;
+  s2.duration_s = 5;
+  spec.audio.voice.lines = spec.audio.voice.lines.filter((l) => [s1.shot_id, s2.shot_id].includes(l.shot_id));
+  const tpl = spec.kling.elements[0];
+  const ids = Array.from({ length: max }, (_, i) => `ref-${i}`);
+  spec.kling.elements = ids.map((id) => ({ ...tpl, id }));
+  spec.kling.jobs = [
+    { job_id: 'K1', shots: [s1.shot_id], elements: ids.slice() },
+    { job_id: 'K2', shots: [s2.shot_id], elements: ids.slice() },
+  ];
+
+  const v = validateSpec(spec, { backend: 'seedance' });
+  assert.equal(v.ok, false);
+  const errs = v.errors.join('\n');
+  // jobs after the first: the seam frame owns one of the slots…
+  assert.match(errs, new RegExp(`kling\\.jobs\\[1\\]: ${max} elements exceeds the ${max - 1}-reference budget`));
+  assert.match(errs, /reserved for this job's opening\/seam frame/);
+  // …but the FIRST job (no authored first_frame) may use the full cap.
+  assert.ok(!errs.includes('kling.jobs[0]:'), 'job 0 without first_frame keeps the full cap');
+
+  // An authored first_frame reserves the slot on job 0 too.
+  spec.kling.jobs[0].first_frame = 'first-frame/open.png';
+  const v2 = validateSpec(spec, { backend: 'seedance-2.0@fal' });
+  assert.match(v2.errors.join('\n'), new RegExp(`kling\\.jobs\\[0\\]: ${max} elements exceeds the ${max - 1}-reference budget`));
+
+  // Dropping to the budget passes.
+  spec.kling.jobs = spec.kling.jobs.map((j) => ({ ...j, elements: ids.slice(0, max - 1) }));
+  assert.equal(validateSpec(spec, { backend: 'seedance' }).ok, true);
+});
+
+// The other half of that split, stated as an assertion rather than a comment: with NO backend the
+// schema takes '21:9' from any spec (the superset), but the moment a caller NAMES the backend —
+// and every render/engine path passes the resolved one — the model's own ratio list is enforced.
+// Without this, a hand-authored 4:3 spec rendered with `--backend kling-o3@fal` would sail through
+// to a paid render the model cannot produce; the engine buildCtx and POST /api/runs gates only
+// cover THEIR entry points, not a spec.json handed straight to the render CLI.
+test("'21:9' clears the backend-less schema but FAILS validation once kling is named", async () => {
   const { aspectsFor } = await import('../../src/lib/render-models.js');
   const spec = loadGoldenSpec();
   spec.project.aspect_ratio = '21:9';
   spec.kling.aspect_ratio = '21:9';
-  assert.equal(validateSpec(spec, { backend: 'kling' }).ok, true, 'the schema is the superset');
+  assert.equal(validateSpec(spec).ok, true, 'no backend named — the schema stays the superset');
+  const v = validateSpec(spec, { backend: 'kling' });
+  assert.equal(v.ok, false, 'backend named — its ratio list bites');
+  assert.match(v.errors.join('\n'), /not renderable on Kling 3\.0 Omni/);
   assert.ok(ASPECTS.includes('21:9'));
   assert.ok(!aspectsFor('kling').includes('21:9'), 'kling-o3 renders 16:9/9:16/1:1 only');
   assert.ok(!aspectsFor('seedance-2.0@fal').includes('21:9'), 'seedance 2.0 the same three');

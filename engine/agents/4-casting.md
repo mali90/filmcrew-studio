@@ -13,7 +13,7 @@ Set `kling.elements` to an array of `{ id, role, image, character? }`, choosing 
 **No matching reference? Attach none.** If none of the "Available elements" depict a subject in this idea, set **`kling.elements: []`**. That is fully valid — the video renders **text-to-video**, driven by the shot prompts alone, with no reference image. This is the correct choice for a generic idea (e.g. "a cat reviews expensive cheese") when the folder holds no cat.
 
 Rules:
-- Pick the smallest set that pins the subjects/characters that recur on screen AND are relevant to the idea — typically 0–4. Never exceed 7 (the per-generation cap; the Job Planner may use a subset per job).
+- Pick the smallest set that pins the subjects/characters that recur on screen AND are relevant to the idea — typically 0–4. Never exceed the reference-images/job number in the project context's "Hard caps" line (the Job Planner may use a subset per job; on chained multi-job renders one of those slots belongs to the seam frame).
 - Prefer images that show the subject clearly and consistently. If multiple views of one subject exist, a couple of clean views beat many noisy ones — give them the SAME `character` so they group.
 - Do NOT select first-frame or last-frame images here — those are seeds the Job Planner assigns per job.
 - An empty "Available elements" list (or one with nothing relevant) is fine: leave `kling.elements: []` for a text-to-video render.

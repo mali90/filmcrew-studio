@@ -5,9 +5,25 @@ import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { api, ApiClientError } from '../../api/client';
+import { modelIdFor } from '../../../../shared/render-models';
 import { Button } from '../ui/Button';
 import { SegmentedControl } from '../ui/SegmentedControl';
 import { useToast } from '../ui/Toast';
+
+const BACKEND_SEGMENTS = [
+  { value: 'kling', label: 'Kling', hint: 'character elements + minted voices' },
+  { value: 'seedance', label: 'Seedance', hint: 'lip-sync from reference clips' },
+];
+
+// A saved default may be canonical ('seedance-2.0@fal') while the picker is keyed by the legacy
+// one-word ids — map by MODEL, or no segment is selected and the control loses its tab stop.
+const segmentFor = (value: string): string => {
+  try {
+    return BACKEND_SEGMENTS.find((s) => modelIdFor(s.value) === modelIdFor(value))?.value ?? value;
+  } catch {
+    return value;
+  }
+};
 
 const ASPECTS = [
   { value: '9:16', label: 'Portrait', box: 'h-7 w-4' },
@@ -26,7 +42,7 @@ export function DefaultsCard() {
 
   useEffect(() => {
     if (seeded || !q.data) return;
-    setBackend(q.data.backend);
+    setBackend(segmentFor(q.data.backend));
     setAspect(q.data.aspect);
     setSeeded(true);
   }, [seeded, q.data]);
@@ -45,7 +61,8 @@ export function DefaultsCard() {
 
   const onSave = () => {
     const d: { backend?: string; aspect?: string; resolution?: string; seedanceResolution?: string } = {};
-    if (backend !== q.data?.backend) d.backend = backend;
+    // Compare by segment: a canonical saved value that maps to the selected segment is unchanged.
+    if (backend !== (q.data ? segmentFor(q.data.backend) : backend)) d.backend = backend;
     if (aspect !== q.data?.aspect) d.aspect = aspect;
     if (!Object.keys(d).length) {
       toast({ kind: 'info', text: 'Nothing changed — there is nothing to save.' });
@@ -66,10 +83,7 @@ export function DefaultsCard() {
             label="Default render backend"
             value={backend}
             onChange={setBackend}
-            segments={[
-              { value: 'kling', label: 'Kling', hint: 'character elements + minted voices' },
-              { value: 'seedance', label: 'Seedance', hint: 'lip-sync from reference clips' },
-            ]}
+            segments={BACKEND_SEGMENTS}
           />
         </div>
 

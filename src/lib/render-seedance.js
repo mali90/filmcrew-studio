@@ -142,7 +142,7 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
   //    attach NO clip and let the model voice the written line natively (see config.seedance.voiceMode).
   //    A text-to-video job (no image refs) also voices natively: the endpoint requires audio refs to
   //    ride ≥1 image/video ref, so with no images we attach no clip.
-  const voiceRefs = (refCount && sdCfg.generateAudio && knobs.voiceMode !== 'native') ? await audioRefsFor(job, spec, dir, caps) : [];
+  const voiceRefs = ((refCount || firstFrameUrl) && sdCfg.generateAudio && knobs.voiceMode !== 'native') ? await audioRefsFor(job, spec, dir, caps) : [];
   const audioUrls = [];
   const audioIdx = new Map();
   for (const r of voiceRefs) {
@@ -178,8 +178,10 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
     totalDuration,
     seed,
   }, caps);
-  // No image refs → text-to-video (Casting attached nothing relevant); rides at probe resolution too.
-  const textToVideo = refCount === 0;
+  // No image inputs AT ALL → text-to-video (Casting attached nothing relevant); rides at probe
+  // resolution too. A native-slot first frame keeps refCount at 0 but is still an image the model
+  // conditions on, so it must route through the reference endpoint, not the text one.
+  const textToVideo = refCount === 0 && !firstFrameUrl;
   const endpointKey = textToVideo
     ? (caps.textEndpointKey ?? caps.endpointKey)
     : (lowRes ? (caps.probeEndpointKey ?? caps.endpointKey) : caps.endpointKey);
