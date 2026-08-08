@@ -10,8 +10,12 @@
 /** A defensive copy — the caller's arrays are never appended to in place. */
 const list = (v) => (Array.isArray(v) ? [...v] : []);
 
-/** "Seedance 2.0 on fal" — every error names the exact (model, provider) pair that rejected it. */
-const nameOf = (caps) => `${caps?.label ?? 'Seedance'}${caps?.providerLabel ? ` on ${caps.providerLabel}` : ''}`;
+/**
+ * "Seedance 2.0 on fal" — every error names the exact (model, provider) pair that rejected it.
+ * Exported because the renderer needs the same name for the messages it raises before the args are
+ * built; neither file may spell a model or provider name in a literal.
+ */
+export const nameOf = (caps) => `${caps?.label ?? 'Seedance'}${caps?.providerLabel ? ` on ${caps.providerLabel}` : ''}`;
 
 /**
  * Does an opening frame have to travel as a trailing IMAGE REF on this model rather than in a

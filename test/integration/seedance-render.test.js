@@ -2,9 +2,11 @@
 // args (no 422 landmines), chained seam frame as a prompt-pinned @Image ref, voice-ref lip-sync.
 //
 // BYTE-COMPAT GATE for the seedance-args / render-seedance extraction: every fal PAYLOAD assertion
-// below must keep passing untouched. The only edits this file has taken for the provider/model
-// registry are the two `r.backend` ids (resolveBackend now returns the canonical `<model>@<provider>`
-// form) — the request bodies and the prompts.json `backend` token are unchanged.
+// below must keep passing untouched — the request bodies are unchanged. The only edits this file has
+// taken for the provider/model registry are to IDENTIFIERS and PROSE, never a payload:
+//   - the two `r.backend` ids and the prompts.json `backend` token now carry the canonical
+//     `<model>@<provider>` form (the family token could not tell two Seedance models apart);
+//   - the audio-cap error names the model/provider pair from caps instead of a hardcoded "Seedance".
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -66,7 +68,7 @@ test('probe: mini endpoint, probe resolution, flat args, no seed/negative_prompt
     for (const k of ['seed', 'negative_prompt', 'elements', 'audio_urls']) assert.ok(!(k in body), `${k} must not be sent`);
 
     const sidecar = JSON.parse(fs.readFileSync(path.join(dir, 'K1', 'prompts.json'), 'utf8'));
-    assert.equal(sidecar.backend, 'seedance');
+    assert.equal(sidecar.backend, 'seedance-2.0@fal'); // the sidecar records WHICH MODEL rendered it
     assert.equal(sidecar.endpoint, 'seedance-probe');
     assert.equal(sidecar.seed_unused, 70000); // pipeline's per-job seed is recorded, never sent
   } finally { cleanup(); }
@@ -201,7 +203,7 @@ test('more voiced speakers than Seedance\'s 3-audio-ref cap is a per-job error, 
     ];
     const before = fal.requests.length;
     const r = await renderSpec(spec, { runDir: dir, probe: true });
-    assert.match(r.jobs[0].error, /4 voiced speakers exceeds Seedance's 3-audio-ref cap/);
+    assert.match(r.jobs[0].error, /4 voiced speakers exceeds Seedance 2\.0 on fal's 3-audio-ref cap/);
     assert.equal(lastSubmit(before), undefined, 'nothing was submitted to fal');
   } finally { cleanup(); }
 });

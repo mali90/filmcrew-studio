@@ -4,8 +4,9 @@
 
 ### Changed
 - **Render backends are now named `<model>@<provider>`** (`kling-o3@fal`, `seedance-2.0@fal`), and a
-  planned spec records that canonical id in `render_backend` whichever spelling you typed. The old
-  one-word `kling`/`seedance` names stay accepted forever — on the CLI, in `.env`, and in every spec
+  planned spec records that canonical id in `render_backend` whichever spelling you typed, as does
+  each rendered job's `prompts.json` sidecar — so an old clip can still say which *model* made it.
+  The old one-word `kling`/`seedance` names stay accepted forever — on the CLI, in `.env`, and in every spec
   or manifest already on disk — so nothing needs migrating. Planning is now told the *rendering
   model's own* caps (Seedance 2.0's 9 reference images instead of Kling's 7, its own 4–15s job
   window and its own aspect-ratio list) instead of one hardcoded set for every backend.

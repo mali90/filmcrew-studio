@@ -6,26 +6,47 @@
 // TDD (red first): src/lib/render-seedance.js does not exist; fal-seedance.js still owns the renderer.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { neutralizeDotenv } from '../helpers/env.js';
 neutralizeDotenv();
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
 const rs = await import('../../src/lib/render-seedance.js');
 const shim = await import('../../src/lib/fal-seedance.js');
 const { buildSeedanceArgs } = await import('../../src/lib/seedance-args.js');
 const { capsFor } = await import('../../src/lib/render-models.js');
 
-test('render-seedance exposes the generalized renderer and the fal provider adapter', () => {
+test('render-seedance exposes the generalized renderer and nothing provider-specific', () => {
   assert.equal(typeof rs.renderSeedanceJob, 'function');
-  assert.equal(typeof rs.falAdapter, 'object');
-  assert.equal(typeof rs.falAdapter.assetUrl, 'function', 'assetUrl: local path → a url the provider can fetch');
-  assert.equal(typeof rs.falAdapter.generate, 'function', 'generate: args → downloaded output paths');
-  assert.deepEqual(Object.keys(rs.falAdapter).sort(), ['assetUrl', 'generate'], 'the adapter surface is exactly two functions');
+  assert.equal(rs.falAdapter, undefined, 'the fal adapter belongs to the fal binding, not the generalized renderer');
 });
 
-test('fal-seedance.js keeps its public surface — no downstream import changes', () => {
+// The point of the extraction: a provider binding may import the renderer, never the reverse. If
+// render-seedance.js names a transport module, importing it for `seedance-2.0@segmind` would drag
+// fal (and config.fal) back into the graph — the leak this canary exists to catch.
+test('render-seedance.js imports NO provider transport', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'src/lib/render-seedance.js'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')          // strip comments first, so prose naming fal cannot trip it
+    .replace(/(^|[^:])\/\/.*$/gm, '$1');
+  const froms = [...src.matchAll(/\bfrom\s*['"]([^'"]+)['"]/g)].map((m) => m[1]);
+  for (const spec of froms) {
+    assert.ok(!/(^|\/)(fal|segmind)[-.]/.test(spec), `render-seedance.js must not import "${spec}"`);
+  }
+  assert.ok(!/\bimport\s*\(/.test(src), 'no dynamic import() either');
+});
+
+test('fal-seedance.js keeps its public surface and owns the fal provider adapter', () => {
   assert.equal(typeof shim.renderSeedanceJobFal, 'function');
   assert.equal(typeof shim.buildSeedanceArgs, 'function');
   assert.deepEqual(Object.keys(shim.default).sort(), ['buildSeedanceArgs', 'renderSeedanceJobFal']);
+
+  assert.equal(typeof shim.falAdapter, 'object');
+  assert.equal(typeof shim.falAdapter.assetUrl, 'function', 'assetUrl: local path → a url the provider can fetch');
+  assert.equal(typeof shim.falAdapter.generate, 'function', 'generate: args → downloaded output paths');
+  assert.deepEqual(Object.keys(shim.falAdapter).sort(), ['assetUrl', 'generate'], 'the adapter surface is exactly two functions');
 });
 
 test('the shim\'s one-arg buildSeedanceArgs === the pure builder fed fal Seedance 2.0 caps', () => {

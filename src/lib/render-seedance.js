@@ -9,7 +9,9 @@
 //     NOT caps — they stay config-sourced here, exactly as they were.
 //   - `adapter` carries the provider TRANSPORT: `assetUrl(absPath, mode, {cache})` turns a local
 //     file into something the provider can fetch, `generate(args, {endpoint, destDir, timeoutMs})`
-//     runs the job and returns downloaded output paths. Only the fal adapter exists this phase.
+//     runs the job and returns downloaded output paths. Adapters are DEFINED BY THE PROVIDER
+//     BINDING, not here — fal's lives in fal-seedance.js — so this file imports no transport and
+//     `import('./render-seedance.js')` never pulls fal (or, later, segmind) into the graph.
 //
 // Model behaviour that used to be hardcoded for fal Seedance 2.0 and is now data:
 //   - Inputs are FLAT refs, not elements: image refs (≤ caps.maxImages → @Image1..N in the prompt)
@@ -27,25 +29,15 @@ import fs from 'node:fs';
 import config from '../../config.js';
 import log from './logger.js';
 import { refLabel } from './render-models.js';
-import { buildSeedanceArgs, firstFrameIsRef } from './seedance-args.js';
+import { buildSeedanceArgs, firstFrameIsRef, nameOf } from './seedance-args.js';
 import { buildSeedanceJobPrompt, seedanceConfigFor } from './seedance.js';
-import { characterGroups, jobSpeakers } from './fal-kling.js';
-import { generateSeedance, falRef, toFalInputAs } from './fal.js';
+import { characterGroups, jobSpeakers } from './cast-groups.js';
 import { resolveImage } from './elements.js';
 import { getVoiceRefClip } from './voices.js';
 import { probeClip, extractAudio } from './assemble.js';
 import { slug } from './util.js';
 
 const oneMp4 = (outs) => outs.find((p) => /\.(mp4|mov|webm)$/i.test(p)) ?? outs[0];
-
-/**
- * The fal transport. `cache: false` bypasses the basename-keyed cloud-refs cache — seam frames are
- * per-run files that all share the basename last_frame.png, so caching them would churn/collide.
- */
-export const falAdapter = {
-  assetUrl: (absPath, mode, { cache = true } = {}) => (cache ? falRef(absPath, mode) : toFalInputAs(absPath, mode)),
-  generate: (args, { endpoint, destDir, timeoutMs }) => generateSeedance(args, { endpoint, destDir, timeoutMs }),
-};
 
 /**
  * Resolve one of the caps' endpoint KEY NAMES against the provider's config block. The registry
@@ -71,10 +63,10 @@ async function audioRefsFor(job, spec, dir, caps) {
   for (const sp of speakers) {
     const clip = getVoiceRefClip(sp);
     if (clip) refs.push({ speaker: sp, clip });
-    else log.warn(`[${job.job_id}] no voice ref clip for "${sp}" — Seedance voices the line natively (mint one with: npm run mint-voice -- "${sp}" <clip>)`);
+    else log.warn(`[${job.job_id}] no voice ref clip for "${sp}" — ${caps.label} voices the line natively (mint one with: npm run mint-voice -- "${sp}" <clip>)`);
   }
   if (refs.length > caps.maxAudioRefs) {
-    throw new Error(`fal job ${job.job_id}: ${refs.length} voiced speakers exceeds Seedance's ${caps.maxAudioRefs}-audio-ref cap — split the dialogue across jobs.`);
+    throw new Error(`job ${job.job_id}: ${refs.length} voiced speakers exceeds ${nameOf(caps)}'s ${caps.maxAudioRefs}-audio-ref cap — split the dialogue across jobs.`);
   }
   const perClipS = Math.floor(budgetS / (refs.length || 1));
   for (const r of refs) {
@@ -87,7 +79,7 @@ async function audioRefsFor(job, spec, dir, caps) {
         r.clip = await extractAudio(r.clip, path.join(dir, `${slug(r.speaker)}_ref.mp3`), { seconds: dur > perClipS ? perClipS : undefined });
       }
     } catch (e) {
-      log.warn(`[${job.job_id}] could not fit the "${r.speaker}" voice clip to Seedance's ${budgetS}s audio budget (${e.message}) — sending it as-is.`);
+      log.warn(`[${job.job_id}] could not fit the "${r.speaker}" voice clip to ${nameOf(caps)}'s ${budgetS}s audio budget (${e.message}) — sending it as-is.`);
     }
   }
   return refs;
@@ -121,7 +113,7 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
     const refs = [];
     for (const e of g.els) {
       if (imageUrls.length >= maxImages) {
-        log.warn(`[${job.job_id}] image refs exceed Seedance's ${caps.maxImages}-image cap — dropping "${e.id}" (and any further refs).`);
+        log.warn(`[${job.job_id}] image refs exceed ${nameOf(caps)}'s ${caps.maxImages}-image cap — dropping "${e.id}" (and any further refs).`);
         break;
       }
       imageUrls.push(await adapter.assetUrl(resolveImage(e.image), mode));
@@ -198,7 +190,9 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
   try {
     fs.writeFileSync(path.join(dir, 'prompts.json'), JSON.stringify({
       job_id: job.job_id,
-      backend: caps.family, // the legacy one-word token; the compound id lives on the spec/manifest
+      backend: caps.id, // the canonical `<model>@<provider>` — same vocabulary as spec.render_backend
+      // and render.json, so the sidecar answers "which MODEL produced this clip?" once two Seedance
+      // models ship (the family token could not).
       endpoint,
       aspect_ratio: args.aspect_ratio,
       resolution: args.resolution,
@@ -220,4 +214,4 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
   return { jobId: job.job_id, clip, totalDuration, segments: shotPrompts.length };
 }
 
-export default { renderSeedanceJob, falAdapter };
+export default { renderSeedanceJob };
