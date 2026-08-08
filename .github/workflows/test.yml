@@ -22,6 +22,24 @@ jobs:
       - name: Install ffmpeg (for assembly tests)
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
+      # The seamless stitcher (tools/seamstitch) is OPTIONAL: without numpy/pillow its tests skip and
+      # assembly falls back to a hard-cut stitch. Every step below is continue-on-error so a bad day
+      # on PyPI degrades the run to "skipped", never to "failed" — that is the product behaviour too.
+      - uses: actions/setup-python@v6
+        continue-on-error: true
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: tools/seamstitch/requirements.txt
+
+      - name: Install the seamless stitcher's deps (optional)
+        continue-on-error: true
+        run: python3 -m pip install -r tools/seamstitch/requirements.txt
+
+      - name: Byte-compile the seamless stitcher (optional)
+        continue-on-error: true
+        run: python3 -m compileall -q tools/seamstitch
+
       - name: Install dependencies
         run: npm ci   # package-lock.json (v3) is committed
 

@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Added
+- **Seam-invisible stitching.** A video over the model's window renders as several *chained* jobs —
+  each seeded with the previous clip's last frame — and the local stitch now colour-matches every
+  chained joint, drops the duplicated boundary frame (trimming one frame of audio to match) and
+  crossfades, instead of hard-cutting and leaving a lighting "pop" plus a 1-frame hitch. Scene cuts
+  in the same timeline stay cuts. It is pure local ffmpeg: no API call, no spend. The stitcher
+  (`tools/seamstitch`, vendored — see its `PROVENANCE.md`) is extended here with per-joint continuity,
+  per-joint crossfade lengths and a JSON report; the Node side adds `src/lib/seamstitch.js`,
+  `src/lib/stitch-math.js` (an independent re-derivation of the offset math, used to check the
+  tool's output), a `stitch` config block (`STITCH_*`), a SOFT doctor check,
+  `npm run assemble -- --continuity/--stitcher`, and `stitcher`/`joints`/`matched` on cut records.
+  See [docs/STITCHING.md](docs/STITCHING.md).
+
+  It is **optional and self-disabling**: without python3 + numpy + pillow — or if anything at all
+  goes wrong — assembly logs one warning and falls back to the hard-cut stitch, unchanged.
+  **Today the fallback still runs for most renders**: the seamless path only fires when the run can
+  say which joints are chained, which is recorded as one all-or-nothing flag. Per-joint seam lineage
+  is the next piece of work; when it lands, mixed timelines start stitching seamlessly on their own.
+
 ### Changed
 - **Render backends are now named `<model>@<provider>`** (`kling-o3@fal`, `seedance-2.0@fal`), and a
   planned spec records that canonical id in `render_backend` whichever spelling you typed, as does

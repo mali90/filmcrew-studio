@@ -1,0 +1,5 @@
+# seamstitch runtime deps (see SEAMLESS_STITCH_SPEC.md §5).
+# imageio is replaced by Pillow (already present; Image.convert('RGB') covers the same PNG I/O),
+# and pytest is omitted because the synthetic §10 fixture suite is out of this build's scope.
+numpy>=1.24
+pillow>=9.0
