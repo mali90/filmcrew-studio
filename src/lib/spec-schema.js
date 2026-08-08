@@ -11,7 +11,7 @@
 // each model states its own storyboard/second/reference window, so a spec is judged against the
 // model that will actually render it. The constants below survive only as SHARED FALLBACKS for the
 // caps a model leaves undeclared (Seedance names no segment caps, and the check must not vanish).
-import { ALL_BACKENDS, BACKEND_IDS, capsFor } from './render-models.js';
+import { ALL_BACKENDS, BACKEND_IDS, capsFor, demotesOpeningFrame } from './render-models.js';
 
 /**
  * The SUPERSET of aspect ratios any registered model can render — a shape check for
@@ -155,9 +155,8 @@ function validateJobs(spec, P, elementIds, caps, enforceModelAspects = false, ch
     // demote it to a reference (fal Seedance has no native slot; Segmind's native slot excludes
     // refs). Validating against the full cap would pass a max-ref job here and then silently drop
     // one paid identity reference at render time, so the slot is reserved up front.
-    const demotesOpeningFrame = !caps.nativeFirstFrame || !caps.argMap?.firstFrame || Boolean(caps.firstFrameExcludesRefs);
     const holdsOpeningFrame = caps.family === 'seedance' && (nonEmpty(job.first_frame) || (j > 0 && chainFrames));
-    const refBudget = maxRefs - (holdsOpeningFrame && demotesOpeningFrame ? 1 : 0);
+    const refBudget = maxRefs - (holdsOpeningFrame && demotesOpeningFrame(caps) ? 1 : 0);
     if (refs.length > refBudget) {
       P.push(refBudget < maxRefs
         ? `${at}: ${refs.length} elements exceeds the ${refBudget}-reference budget (${caps.label} caps at ${maxRefs} images and 1 slot is reserved for this job's opening/seam frame)`

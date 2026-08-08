@@ -177,6 +177,15 @@ export const aspectsFor = (value) => [...modelFor(value).aspects];
  * @param {'Image'|'Audio'|'Video'} kind
  * @param {number} n  1-based reference index
  */
+/**
+ * Whether an opening frame consumes one of this model's ordinary image slots when references are
+ * present: true when there is no native first-frame slot at all, and also when the native slot is
+ * mutually exclusive with reference images (Segmind's shape). The single source for the seam-slot
+ * budget — spec-schema's validation and the render paths must never disagree on it.
+ */
+export const demotesOpeningFrame = (caps) =>
+  !caps.nativeFirstFrame || !caps.argMap?.firstFrame || Boolean(caps.firstFrameExcludesRefs);
+
 export function refLabel(caps, kind, n) {
   const k = String(kind).charAt(0).toUpperCase() + String(kind).slice(1);
   const style = caps?.refStyle ?? 'compact';
