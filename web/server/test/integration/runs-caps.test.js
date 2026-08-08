@@ -104,6 +104,23 @@ test('POST /api/runs accepts legacy AND compound backend ids, rejects anything e
   assert.equal(runCount(), before, 'a rejected backend spawns nothing and writes no run dir');
 });
 
+test('POST /api/runs persists a MEMBER of ALL_BACKENDS, never the raw spelling', async () => {
+  // " seedance " normalizes fine at the gate, but the manifest must store a value the estimator's
+  // exact price-table lookup accepts — persisting the raw spelling would fail every estimate and
+  // paid action AFTER planning already spent money.
+  const manifestOf = async (over) => {
+    const before = new Set(fs.readdirSync(dirs.runs));
+    const res = await create(over);
+    assert.equal(res.statusCode, 201, res.body);
+    const id = fs.readdirSync(dirs.runs).find((d) => !before.has(d));
+    return JSON.parse(fs.readFileSync(path.join(dirs.runs, id, 'web.json'), 'utf8'));
+  };
+  const padded = await manifestOf({ backend: ' seedance ' });
+  assert.equal(padded.backend, 'seedance', 'trimmed member spelling wins — legacy manifests stay legacy');
+  const compound = await manifestOf({ backend: 'seedance-2.0@fal', aspect: '16:9' });
+  assert.equal(compound.backend, 'seedance-2.0@fal', 'a canonical submission stays canonical ($alias-priced)');
+});
+
 // ── cast caps (layer 2 of 3) ────────────────────────────────────────────────
 test('a cast over the model\'s limit is a 400 with a hint — before any child spawns', async () => {
   const before = runCount();

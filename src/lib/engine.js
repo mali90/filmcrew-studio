@@ -89,7 +89,11 @@ export function contextBlock(ctx) {
     `- Hard caps: ≤${caps.maxSegments ?? 6} shots/job, ≤${caps.maxSeconds}s/job, ≤${caps.maxSegmentChars ?? 512} chars/segment, ≤${caps.maxImages} reference images/job`,
     ...(caps.family === 'seedance'
       ? [`- Seedance packing rule: every job must total ${caps.minSeconds}–${caps.maxSeconds}s (a job under ${caps.minSeconds}s fails validation — merge short shots); the caps above are this model's own.`,
-         `- Reference budget: 1 of the ${caps.maxImages} image slots is reserved for the opening/seam frame on every job after the first (and on any job with an authored first_frame) — give those jobs at most ${caps.maxImages - 1} element refs.`]
+         // The budget must mirror what validateJobs will enforce, which depends on seam chaining:
+         // with chaining off, only an authored first_frame consumes a slot.
+         config.kling.chainFrames
+           ? `- Reference budget: 1 of the ${caps.maxImages} image slots is reserved for the opening/seam frame on every job after the first (and on any job with an authored first_frame) — give those jobs at most ${caps.maxImages - 1} element refs.`
+           : `- Reference budget: a job with an authored first_frame gives 1 of its ${caps.maxImages} image slots to it — plan at most ${caps.maxImages - 1} element refs there (seam chaining is off; other jobs keep all ${caps.maxImages}).`]
       : []),
     // Guaranteed text-to-video (Seedance, no cast, AND no reference image the Casting agent could
     // attach): steer the shot prose with the Seedance 2.0 guidelines from the start. Absent for
@@ -181,7 +185,7 @@ async function runAgentValidated(idx, spec, ctx, maxFix, seedNote = '') {
     const note = [seedNote, errNote].filter(Boolean).join('\n\n');
     const candidate = await runAgent(idx, cur, ctx, note);
     const upTo = idx === 7 ? 6 : idx; // QC validates the full creative spec (blocks 0..6) before judging
-    const v = validateSpec(candidate, { upTo, backend: ctx.backend });
+    const v = validateSpec(candidate, { upTo, backend: ctx.backend, chainFrames: Boolean(config.kling.chainFrames) });
     if (v.ok) return candidate;
     const errors = v.errors.map((e) => `- ${e}`).join('\n');
     errNote = `## Fix these validation problems from your previous attempt\n${errors}`;
@@ -357,7 +361,7 @@ export async function runEngine({ brief, runDir, durationTargetS, backend, aspec
   spec.render_backend = ctx.backend; // the CANONICAL id this spec was planned FOR — renders must not silently fall back to the config default
   if (ctx.castNames) spec.cast = ctx.castNames; // revisions re-inject the same starred profiles
   if (ctx.environmentSlug) spec.environment = ctx.environmentSlug; // revisions re-inject the same world bible
-  const final = validateSpec(spec, { upTo: 7, backend: ctx.backend });
+  const final = validateSpec(spec, { upTo: 7, backend: ctx.backend, chainFrames: Boolean(config.kling.chainFrames) });
   const passed = spec.qc?.status === 'pass' && final.ok;
   await writeJson(path.join(runDir, 'spec.json'), spec);
   if (!final.ok) log.warn(`Final spec has ${final.errors.length} structural issue(s):\n - ${final.errors.join('\n - ')}`);
@@ -432,7 +436,7 @@ async function routeFeedback(feedback) {
  */
 export async function reviseSpec({ spec, runDir, feedback, scope, owners, brief, backend, aspectRatio, maxFix = config.engine.maxFix, maxQc = config.engine.maxQc }) {
   if (!feedback || !String(feedback).trim()) throw new Error('reviseSpec needs non-empty feedback (what should change?).');
-  const v0 = validateSpec(spec, { upTo: 7, backend: backend ?? spec?.render_backend ?? config.render.backend });
+  const v0 = validateSpec(spec, { upTo: 7, backend: backend ?? spec?.render_backend ?? config.render.backend, chainFrames: Boolean(config.kling.chainFrames) });
   if (!v0.ok) throw new Error(`reviseSpec needs a valid spec to start from:\n - ${v0.errors.join('\n - ')}`);
   // a typo'd scope must fail loudly — silently widening 'K9' or 'contnet' to a whole-spec revision
   // sends the feedback to the wrong agents and re-runs more than the caller asked to pay attention to
@@ -484,7 +488,7 @@ export async function reviseSpec({ spec, runDir, feedback, scope, owners, brief,
   cur.render_backend = ctx.backend;
   if (ctx.castNames) cur.cast = ctx.castNames;
   if (ctx.environmentSlug) cur.environment = ctx.environmentSlug; // the revision re-stamps the same world bible
-  const final = validateSpec(cur, { upTo: 7, backend: ctx.backend });
+  const final = validateSpec(cur, { upTo: 7, backend: ctx.backend, chainFrames: Boolean(config.kling.chainFrames) });
   const passed = cur.qc?.status === 'pass' && final.ok;
   await writeJson(path.join(runDir, 'spec.json'), cur);
   if (!final.ok) log.warn(`Revised spec has ${final.errors.length} structural issue(s):\n - ${final.errors.join('\n - ')}`);

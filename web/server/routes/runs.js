@@ -74,8 +74,16 @@ export function registerRunRoutes(app) {
     // Backend, aspect and cast are all model-derived and all rejected HERE — synchronously, before
     // svc.createRun spawns the engine child — so a bad request leaves no run directory behind.
     let caps;
+    let storedBackend;
     try {
-      caps = capsFor(normalizeBackend(backend).id);
+      const be = normalizeBackend(backend);
+      caps = capsFor(be.id);
+      // Persist a MEMBER of ALL_BACKENDS, never the raw spelling: normalizeBackend tolerates
+      // " seedance ", but a raw store would fail the estimator's exact price-table lookup AFTER
+      // planning already spent money. The trimmed spelling wins when it is itself a member (legacy
+      // manifests stay legacy); anything else stores the canonical id (priced via its $alias hop).
+      const trimmed = typeof backend === 'string' ? backend.trim() : backend;
+      storedBackend = ALL_BACKENDS.includes(trimmed) ? trimmed : be.id;
     } catch (e) {
       throw Object.assign(new Error(e.message), { statusCode: 400, hint: `accepted backends: ${ALL_BACKENDS.join(', ')}` });
     }
@@ -124,7 +132,7 @@ export function registerRunRoutes(app) {
         throw Object.assign(new Error(`unknown environment "${environment}"`), { statusCode: 400, hint: 'create the environment on the Cast page first' });
       }
     }
-    const r = svc.createRun({ idea: String(idea).trim(), backend, aspect, durationS, cast: cast.map((c) => c.trim()), environment: environmentSlug });
+    const r = svc.createRun({ idea: String(idea).trim(), backend: storedBackend, aspect, durationS, cast: cast.map((c) => c.trim()), environment: environmentSlug });
     return reply.code(201).send(r);
   });
 

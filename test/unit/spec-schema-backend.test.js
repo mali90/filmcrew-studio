@@ -187,6 +187,17 @@ test('Seedance reserves one image slot for the opening/seam frame; Kling does no
   // Dropping to the budget passes.
   spec.kling.jobs = spec.kling.jobs.map((j) => ({ ...j, elements: ids.slice(0, max - 1) }));
   assert.equal(validateSpec(spec, { backend: 'seedance' }).ok, true);
+
+  // With seam chaining DISABLED (KLING_CHAIN_FRAMES=false, threaded by every render/engine caller),
+  // later jobs receive no seam frame, so the full cap is legal again — but an authored first_frame
+  // still consumes its slot.
+  spec.kling.jobs = spec.kling.jobs.map((j) => ({ ...j, elements: ids.slice() }));
+  delete spec.kling.jobs[0].first_frame;
+  assert.equal(validateSpec(spec, { backend: 'seedance', chainFrames: false }).ok, true,
+    'chaining off — no seam, no reservation');
+  spec.kling.jobs[1].first_frame = 'first-frame/open.png';
+  const v3 = validateSpec(spec, { backend: 'seedance', chainFrames: false });
+  assert.match(v3.errors.join('\n'), new RegExp(`kling\\.jobs\\[1\\]: ${max} elements exceeds the ${max - 1}-reference budget`));
 });
 
 // The other half of that split, stated as an assertion rather than a comment: with NO backend the

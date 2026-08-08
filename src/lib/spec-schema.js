@@ -101,7 +101,7 @@ function validateAudio(spec, P) {
   }
 }
 
-function validateJobs(spec, P, elementIds, caps, enforceModelAspects = false) {
+function validateJobs(spec, P, elementIds, caps, enforceModelAspects = false, chainFrames = true) {
   // Every number below is the RENDERING MODEL's, with the shared fallback used when the registry
   // entry stays silent about a cap (never "no cap declared" → "no check").
   const maxSegments = caps.maxSegments ?? MAX_STORYBOARDS;
@@ -156,7 +156,7 @@ function validateJobs(spec, P, elementIds, caps, enforceModelAspects = false) {
     // refs). Validating against the full cap would pass a max-ref job here and then silently drop
     // one paid identity reference at render time, so the slot is reserved up front.
     const demotesOpeningFrame = !caps.nativeFirstFrame || !caps.argMap?.firstFrame || Boolean(caps.firstFrameExcludesRefs);
-    const holdsOpeningFrame = caps.family === 'seedance' && (nonEmpty(job.first_frame) || j > 0);
+    const holdsOpeningFrame = caps.family === 'seedance' && (nonEmpty(job.first_frame) || (j > 0 && chainFrames));
     const refBudget = maxRefs - (holdsOpeningFrame && demotesOpeningFrame ? 1 : 0);
     if (refs.length > refBudget) {
       P.push(refBudget < maxRefs
@@ -184,10 +184,12 @@ function validateQc(qc, P) {
  * is judged against 9 rather than the old both-backends intersection. An unknown backend THROWS —
  * silently validating against nothing would hand a bad spec to the renderer.
  */
-export function validateSpec(spec, { upTo = 7, backend } = {}) {
+export function validateSpec(spec, { upTo = 7, backend, chainFrames = true } = {}) {
   // With no backend named, this validator stays the structural SUPERSET (a six-ratio spec must
   // survive round-tripping through backend-less callers). With an EXPLICIT backend — and every
   // render/engine path passes the resolved one — that model's own ratio list is enforced too.
+  // `chainFrames` mirrors config.kling.chainFrames (callers thread it; this module stays
+  // config-free): with chaining OFF, later jobs receive no seam frame, so no slot is reserved.
   const enforceModelAspects = backend !== undefined;
   const caps = capsFor(backend ?? 'kling');
   const P = [];
@@ -212,7 +214,7 @@ export function validateSpec(spec, { upTo = 7, backend } = {}) {
   if (upTo >= 4) validateElements(spec, P, elementIds);
   else if (upTo >= 6) validateElements(spec, P, elementIds); // jobs cross-ref needs element ids
   if (upTo >= 5) validateAudio(spec, P);
-  if (upTo >= 6) validateJobs(spec, P, elementIds, caps, enforceModelAspects);
+  if (upTo >= 6) validateJobs(spec, P, elementIds, caps, enforceModelAspects, chainFrames);
   if (upTo >= 7) validateQc(spec.qc, P);
 
   return { ok: P.length === 0, errors: P };

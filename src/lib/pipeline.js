@@ -92,7 +92,7 @@ export function uniqueOutPath(dir, base) {
  */
 export async function renderSpec(spec, { runDir, probe = false, upscale = false, backend, take, outName } = {}) {
   const be = resolveBackend(spec, backend);
-  const v = validateSpec(spec, { upTo: 7, backend: be });
+  const v = validateSpec(spec, { upTo: 7, backend: be, chainFrames: Boolean(config.kling.chainFrames) });
   if (!v.ok) throw new Error(`Spec failed validation:\n - ${v.errors.join('\n - ')}`);
   ensureDir(runDir);
   await writeJson(path.join(runDir, 'spec.json'), spec);
@@ -151,7 +151,7 @@ export async function renderSpec(spec, { runDir, probe = false, upscale = false,
  */
 export async function renderJob(spec, jobId, { runDir, backend, take = 0, feedback, seamFrom, lowRes = false } = {}) {
   const be = resolveBackend(spec, backend);
-  const v = validateSpec(spec, { upTo: 7, backend: be });
+  const v = validateSpec(spec, { upTo: 7, backend: be, chainFrames: Boolean(config.kling.chainFrames) });
   if (!v.ok) throw new Error(`Spec failed validation:\n - ${v.errors.join('\n - ')}`);
   const jobs = spec.kling.jobs;
   const idx = jobs.findIndex((j) => j?.job_id === jobId);
