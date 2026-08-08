@@ -21,5 +21,8 @@
     "perSecondUsd": 0.12,
     "_source": "fal.ai topaz/upscale/video ballpark per output second"
   },
+  "_aliases": "Rows shaped {\"$alias\": \"<key>\"} are ONE-HOP redirects, not rate tables. The CLI records the CANONICAL compound backend id (<model>@<provider>) in render.json, and the estimate endpoint prices CLI-created runs off that value — these hops send it to the legacy rate row above instead of throwing. Only ONE hop is followed, so a genuinely unknown id (kling-o3@segmind) still fails loudly.",
+  "kling-o3@fal": { "$alias": "kling" },
+  "seedance-2.0@fal": { "$alias": "seedance" },
   "voiceMintUsd": 0.007
 }

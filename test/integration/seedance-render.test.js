@@ -1,5 +1,10 @@
 // renderSpec with the Seedance backend against the mock fal queue: endpoint/tier selection, flat
 // args (no 422 landmines), chained seam frame as a prompt-pinned @Image ref, voice-ref lip-sync.
+//
+// BYTE-COMPAT GATE for the seedance-args / render-seedance extraction: every fal PAYLOAD assertion
+// below must keep passing untouched. The only edits this file has taken for the provider/model
+// registry are the two `r.backend` ids (resolveBackend now returns the canonical `<model>@<provider>`
+// form) — the request bodies and the prompts.json `backend` token are unchanged.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -46,7 +51,7 @@ test('probe: mini endpoint, probe resolution, flat args, no seed/negative_prompt
     const before = fal.requests.length;
     const r = await renderSpec(loadGoldenSpec(), { runDir: dir, probe: true });
     assert.equal(r.probe, true);
-    assert.equal(r.backend, 'seedance');
+    assert.equal(r.backend, 'seedance-2.0@fal'); // resolveBackend canonicalizes; the PAYLOAD below is untouched
     assert.ok(r.clip && fs.existsSync(r.clip));
 
     const submit = lastSubmit(before);
@@ -169,7 +174,7 @@ test('spec.render_backend beats the env default: "kling" in the spec routes to t
     spec.render_backend = 'kling'; // env says seedance (RENDER_BACKEND above) — the spec must win
     const before = fal.requests.length;
     const r = await renderSpec(spec, { runDir: dir, probe: true });
-    assert.equal(r.backend, 'kling');
+    assert.equal(r.backend, 'kling-o3@fal');
     const submit = lastSubmit(before);
     assert.equal(submit.path, '/submit');
     const body = JSON.parse(submit.body);

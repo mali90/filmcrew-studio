@@ -7,25 +7,50 @@ import fs from 'node:fs';
 import config, { resolvePath } from '../../config.js';
 import log from './logger.js';
 import { ensureDir, writeJson, readJson, slug } from './util.js';
-import { validateSpec, RENDER_BACKENDS } from './spec-schema.js';
+import { validateSpec } from './spec-schema.js';
+import { BACKEND_IDS, LEGACY_BACKENDS, capsFor, normalizeBackend } from './render-models.js';
 import { renderKlingJobFal } from './fal-kling.js';
 import { renderSeedanceJobFal } from './fal-seedance.js';
 import { assembleVideo, grabFrame, lastFrameOf } from './assemble.js';
 import { upscaleVideoTopaz, probeDims } from './upscale.js';
 
-// Render backends — one entry per backend, all honoring the same per-job contract
-// ({ job, spec, runDir, seed, lowRes, startFrame, nonce }) → { jobId, clip, totalDuration,
-// segments }. Modeled on PROVIDERS in llm.js: adding a backend = one entry here (+ its renderer).
-export const RENDERERS = {
-  kling: { render: renderKlingJobFal, label: 'Kling 3.0 Omni (fal)' },
-  seedance: { render: renderSeedanceJobFal, label: 'Seedance 2.0 (fal)' },
-};
+// One render fn per model FAMILY — the wire protocol is a property of the family, not of the
+// model or the provider, so a new model in a known family needs no code here at all.
+const FAMILY_RENDER = { kling: renderKlingJobFal, seedance: renderSeedanceJobFal };
 
-/** The effective render backend: CLI flag > spec.render_backend > config default. Throws on unknown. */
+// Render backends — one entry per renderable `<model>@<provider>`, all honoring the same per-job
+// contract ({ job, spec, runDir, seed, lowRes, startFrame, nonce }) → { jobId, clip, totalDuration,
+// segments }. DERIVED from the render-models registry (BACKEND_IDS × FAMILY_RENDER), so adding a
+// model/provider is a registry entry and labels can never drift from the registry's own names.
+export const RENDERERS = (() => {
+  const table = {};
+  for (const id of BACKEND_IDS) {
+    const caps = capsFor(id);
+    const render = FAMILY_RENDER[caps.family];
+    if (!render) continue; // registry knows the model; this build has no renderer for its family
+    table[id] = { render, label: `${caps.label} (${caps.providerLabel})` };
+  }
+  // The legacy one-word names are aliases onto the SAME entry object — nothing on disk migrates,
+  // and there is exactly one label per backend however it was spelled.
+  for (const alias of LEGACY_BACKENDS) {
+    const entry = table[normalizeBackend(alias).id];
+    if (entry) table[alias] = entry;
+  }
+  return table;
+})();
+
+/**
+ * The effective render backend as its CANONICAL `<model>@<provider>` id: CLI flag >
+ * spec.render_backend > config default. Legacy one-word names ('kling'/'seedance') are accepted and
+ * canonicalized HERE, so everything downstream — render.json's `backend`, the stamped
+ * spec.render_backend, the web estimator's price lookup — speaks a single vocabulary.
+ * Throws on unknown.
+ */
 export function resolveBackend(spec, explicit) {
   const name = explicit || spec?.render_backend || config.render.backend;
-  if (!RENDERERS[name]) throw new Error(`Unknown render backend "${name}" — use one of: ${RENDER_BACKENDS.join(', ')} (RENDER_BACKEND in .env, or --backend).`);
-  return name;
+  const { id } = normalizeBackend(name, { hint: 'RENDER_BACKEND in .env, or --backend' });
+  if (!RENDERERS[id]) throw new Error(`Render backend "${id}" has no renderer in this build — use one of: ${Object.keys(RENDERERS).join(', ')}.`);
+  return id;
 }
 
 /** Deterministic per-job seed (recorded in the renderers' prompts.json sidecars for traceability —
@@ -72,7 +97,7 @@ export async function renderSpec(spec, { runDir, probe = false, upscale = false,
   // renderers). The audio seam fade (assemble.js) smooths the join under this continuous visual.
   // Skip for a text-to-video (no-element) render on Kling: it has no reference-to-video path to accept
   // a seam start frame, so each job renders independently (Seedance seeds the seam as its lone image).
-  const textToVideoKling = be === 'kling' && !(spec.kling.elements?.length);
+  const textToVideoKling = capsFor(be).family === 'kling' && !(spec.kling.elements?.length);
   const chain = config.kling.chainFrames && !probe && toRender.length > 1 && !textToVideoKling;
   if (textToVideoKling && !probe && toRender.length > 1) log.info('Kling text-to-video render — seam-chaining disabled (no reference frame); jobs render independently.');
   const results = [];

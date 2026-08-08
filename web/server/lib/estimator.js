@@ -26,6 +26,15 @@ export function jobSeconds(spec, jobId) {
  * resolution — same standard tier), 'job' (one job; `cascade` adds its stale-seam downstream jobs).
  * @returns {{perJob:{jobId:string,seconds:number,usd:number}[], totalUsd:number, currency:'USD', label:'estimate'}}
  */
+/** The rate row for a price key, following a single `{"$alias": "<key>"}` hop — the CLI records the
+ *  CANONICAL compound backend id ('seedance-2.0@fal') in render.json, and prices.json redirects
+ *  those to the legacy rate rows. Returns the RESOLVED key too, so rate rules keyed off the backend
+ *  (kling's audio-off tier) survive the hop instead of silently overcharging. */
+function tableFor(key) {
+  const row = PRICES[key];
+  return row?.$alias ? { key: row.$alias, rates: PRICES[row.$alias] } : { key, rates: row };
+}
+
 /** Per-second rate for a backend. Flat rates are numbers; resolution-scaled backends (Seedance —
  *  fal bills by tokens = h×w×seconds×24/1024, so price tracks pixel count) use a map keyed by
  *  resolution with a defaultResolution fallback. */
@@ -39,8 +48,8 @@ function rateFor(rates, resolution) {
 }
 
 export function estimateRender(spec, { backend, mode = 'full', jobId, cascade = false, resolution } = {}) {
-  const rates = PRICES[backend];
-  if (!rates) throw new Error(`no price table for backend "${backend}" (have: ${Object.keys(PRICES).filter((k) => PRICES[k]?.perSecondUsd).join(', ')})`);
+  const { key: priceKey, rates } = tableFor(backend);
+  if (!rates) throw new Error(`no price table for backend "${backend}" (have: ${Object.keys(PRICES).filter((k) => PRICES[k]?.perSecondUsd || PRICES[k]?.$alias).join(', ')})`);
   const jobs = spec?.kling?.jobs ?? [];
   if (!jobs.length) throw new Error('spec has no kling.jobs to estimate');
 
@@ -50,7 +59,7 @@ export function estimateRender(spec, { backend, mode = 'full', jobId, cascade = 
   // defaults and which would misprice (and mis-render) Seedance at 1080p
   let perSecond = rateFor(rates, spec?.seedance?.resolution ?? resolution);
   // fal prices Kling FLAT across resolutions; the only price knob is native audio on/off
-  if (backend === 'kling' && spec?.kling?.generate_audio === false && rates.audioOffPerSecondUsd) {
+  if (priceKey === 'kling' && spec?.kling?.generate_audio === false && rates.audioOffPerSecondUsd) {
     perSecond = rates.audioOffPerSecondUsd;
   }
   if (mode === 'probe') {
@@ -85,7 +94,8 @@ export function readSeedanceResolution(envRoot) {
 
 /** Estimate a Topaz upscale over clip durations (one Topaz job per sub-1080p clip). */
 export function estimateUpscale(clips) {
-  const perJob = (clips ?? []).map((c) => ({ jobId: c.jobId, seconds: c.seconds, usd: round2(c.seconds * PRICES.topaz.perSecondUsd) }));
+  const topaz = tableFor('topaz').rates;
+  const perJob = (clips ?? []).map((c) => ({ jobId: c.jobId, seconds: c.seconds, usd: round2(c.seconds * topaz.perSecondUsd) }));
   return { perJob, totalUsd: round2(perJob.reduce((a, j) => a + j.usd, 0)), currency: 'USD', label: 'estimate' };
 }
 

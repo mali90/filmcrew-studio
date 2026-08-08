@@ -104,6 +104,45 @@ test('unknown backend throws (never a silent $0 estimate)', () => {
   assert.throws(() => estimateRender(golden(), { backend: 'nope', mode: 'full' }), /backend/);
 });
 
+// ── Compound backend ids ────────────────────────────────────────────────────
+// The CLI now writes the CANONICAL compound id into render.json, and run-scan falls back to it for
+// run.backend — so a plain PRICES[backend] lookup would throw on the estimate endpoint for every
+// CLI-created run. prices.json carries `{"$alias": "<legacy key>"}` hops for the compound ids and
+// the table lookup follows one hop.
+//
+// TDD (red first): the $alias rows and the hop do not exist yet.
+test('$alias: a compound backend id prices exactly like its legacy key', () => {
+  const spec = threeJobs();
+  for (const [compound, legacy] of [['kling-o3@fal', 'kling'], ['seedance-2.0@fal', 'seedance']]) {
+    for (const mode of ['full', 'probe']) {
+      assert.deepEqual(
+        estimateRender(spec, { backend: compound, mode, resolution: '480p' }),
+        estimateRender(spec, { backend: legacy, mode, resolution: '480p' }),
+        `${compound} (${mode})`,
+      );
+    }
+  }
+});
+
+test('$alias hop preserves the kling audio-off rate (a literal backend check would miss it)', () => {
+  const noAudio = threeJobs();
+  noAudio.kling.generate_audio = false;
+  assert.equal(
+    estimateRender(noAudio, { backend: 'kling-o3@fal', mode: 'full' }).totalUsd,
+    estimateRender(noAudio, { backend: 'kling', mode: 'full' }).totalUsd,
+  );
+  assert.ok(
+    estimateRender(noAudio, { backend: 'kling-o3@fal', mode: 'full' }).totalUsd
+    < estimateRender(threeJobs(), { backend: 'kling-o3@fal', mode: 'full' }).totalUsd,
+    'the cheaper audio-off rate still applies through the alias',
+  );
+});
+
+test('$alias resolves ONE hop and still fails loudly on a genuinely unknown compound id', () => {
+  assert.throws(() => estimateRender(threeJobs(), { backend: 'seedance-2.5@segmind', mode: 'full' }), /backend/);
+  assert.throws(() => estimateRender(threeJobs(), { backend: 'kling-o3@segmind', mode: 'full' }), /backend/);
+});
+
 test('readSeedanceResolution: reads .env, tolerates quotes, defaults to 480p', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-res-'));
   try {
