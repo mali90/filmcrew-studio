@@ -184,7 +184,7 @@ export async function generateKling(args, { endpoint = FAL.klingEndpoint, destDi
 /**
  * Run one Seedance 2.0 generation on fal and download its output(s) to destDir. `args` is the
  * endpoint's arguments object ({ prompt, image_urls, audio_urls?, aspect_ratio, resolution,
- * duration, generate_audio }) — built by fal-seedance.js and verified against the endpoint's fal
+ * duration, generate_audio }) — built by seedance-args.js and verified against the endpoint's fal
  * "API" tab. It must NEVER carry `seed` or `negative_prompt`: both are HTTP 422 on this endpoint
  * (and 422s are deterministic, so runFal surfaces them without retrying). `endpoint` switches
  * between the standard and mini (probe) tiers. fal result URLs EXPIRE → downloaded immediately.
