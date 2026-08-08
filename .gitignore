@@ -44,6 +44,10 @@ LAUNCH.md
 FAL_KLING_WORKFLOW_CONTEXT.md
 FAL_SEEDANCE_WORKFLOW_CONTEXT.md
 
+# python bytecode (tools/seamstitch)
+__pycache__/
+*.pyc
+
 # OS / editor
 .DS_Store
 *.log

@@ -8,6 +8,7 @@
   "files": [
     "src",
     "engine",
+    "tools",
     "config.js",
     ".env.example",
     "README.md",
