@@ -48,7 +48,7 @@ test('render --probe --backend seedance against the mock', async () => {
     assert.equal(code, 0, stdout);
     const r = jsonTail(stdout);
     assert.equal(r.probe, true);
-    assert.equal(r.backend, 'seedance');
+    assert.equal(r.backend, 'seedance-2.0@fal'); // --backend seedance still works; the RECORD is canonical
     assert.ok(r.clip && fs.existsSync(r.clip));
   } finally { cleanup(); }
 });

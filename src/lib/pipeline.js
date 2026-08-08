@@ -7,25 +7,63 @@ import fs from 'node:fs';
 import config, { resolvePath } from '../../config.js';
 import log from './logger.js';
 import { ensureDir, writeJson, readJson, slug } from './util.js';
-import { validateSpec, RENDER_BACKENDS } from './spec-schema.js';
+import { validateSpec } from './spec-schema.js';
+import { BACKEND_IDS, LEGACY_BACKENDS, capsFor, demotesOpeningFrame, normalizeBackend } from './render-models.js';
 import { renderKlingJobFal } from './fal-kling.js';
-import { renderSeedanceJobFal } from './fal-seedance.js';
+import { falAdapter } from './fal-seedance.js';
+import { renderSeedanceJob } from './render-seedance.js';
 import { assembleVideo, grabFrame, lastFrameOf } from './assemble.js';
 import { upscaleVideoTopaz, probeDims } from './upscale.js';
 
-// Render backends — one entry per backend, all honoring the same per-job contract
-// ({ job, spec, runDir, seed, lowRes, startFrame, nonce }) → { jobId, clip, totalDuration,
-// segments }. Modeled on PROVIDERS in llm.js: adding a backend = one entry here (+ its renderer).
-export const RENDERERS = {
-  kling: { render: renderKlingJobFal, label: 'Kling 3.0 Omni (fal)' },
-  seedance: { render: renderSeedanceJobFal, label: 'Seedance 2.0 (fal)' },
-};
+// Seedance transports by PROVIDER id — a new provider is a binding module exporting an adapter
+// plus one line here. The generalized renderer then runs with EACH ENTRY'S OWN caps, so a sibling
+// model (seedance-2.5@fal) or a sibling provider (seedance-2.0@segmind) can never silently render
+// through another entry's limits or transport.
+const SEEDANCE_ADAPTERS = { fal: falAdapter };
 
-/** The effective render backend: CLI flag > spec.render_backend > config default. Throws on unknown. */
+// Render backends — one entry per renderable `<model>@<provider>`, all honoring the same per-job
+// contract ({ job, spec, runDir, seed, lowRes, startFrame, nonce }) → { jobId, clip, totalDuration,
+// segments }. DERIVED from the render-models registry, and each entry is bound to ITS id's caps —
+// so adding a model/provider is a registry entry (+ an adapter for a new provider) and labels can
+// never drift from the registry's own names.
+export const RENDERERS = (() => {
+  const table = {};
+  for (const id of BACKEND_IDS) {
+    const caps = capsFor(id);
+    let render = null;
+    if (caps.family === 'kling' && caps.provider === 'fal') {
+      // Kling's renderer is fal-specific (elements + bound voice_id have no equivalent elsewhere),
+      // but it still stamps THIS entry's canonical id into its prompts.json sidecar — model/provider
+      // traceability must not be a Seedance-only property.
+      render = (a) => renderKlingJobFal({ ...a, backend: id });
+    } else if (caps.family === 'seedance' && SEEDANCE_ADAPTERS[caps.provider]) {
+      const adapter = SEEDANCE_ADAPTERS[caps.provider];
+      render = (a) => renderSeedanceJob(a, { caps, adapter });
+    }
+    if (!render) continue; // registry knows the model; this build has no renderer for this entry
+    table[id] = { render, label: `${caps.label} (${caps.providerLabel})` };
+  }
+  // The legacy one-word names are aliases onto the SAME entry object — nothing on disk migrates,
+  // and there is exactly one label per backend however it was spelled.
+  for (const alias of LEGACY_BACKENDS) {
+    const entry = table[normalizeBackend(alias).id];
+    if (entry) table[alias] = entry;
+  }
+  return table;
+})();
+
+/**
+ * The effective render backend as its CANONICAL `<model>@<provider>` id: CLI flag >
+ * spec.render_backend > config default. Legacy one-word names ('kling'/'seedance') are accepted and
+ * canonicalized HERE, so everything downstream — render.json's `backend`, the stamped
+ * spec.render_backend, the web estimator's price lookup — speaks a single vocabulary.
+ * Throws on unknown.
+ */
 export function resolveBackend(spec, explicit) {
   const name = explicit || spec?.render_backend || config.render.backend;
-  if (!RENDERERS[name]) throw new Error(`Unknown render backend "${name}" — use one of: ${RENDER_BACKENDS.join(', ')} (RENDER_BACKEND in .env, or --backend).`);
-  return name;
+  const { id } = normalizeBackend(name, { hint: 'RENDER_BACKEND in .env, or --backend' });
+  if (!RENDERERS[id]) throw new Error(`Render backend "${id}" has no renderer in this build — use one of: ${Object.keys(RENDERERS).join(', ')}.`);
+  return id;
 }
 
 /** Deterministic per-job seed (recorded in the renderers' prompts.json sidecars for traceability —
@@ -56,7 +94,9 @@ export function uniqueOutPath(dir, base) {
  */
 export async function renderSpec(spec, { runDir, probe = false, upscale = false, backend, take, outName } = {}) {
   const be = resolveBackend(spec, backend);
-  const v = validateSpec(spec, { upTo: 7, backend: be });
+  // A probe renders only the first job and never chains (see `chain` below), so no downstream job
+  // holds a seam slot in that mode — reserving one would reject a legal max-ref later job.
+  const v = validateSpec(spec, { upTo: 7, backend: be, chainFrames: Boolean(config.kling.chainFrames) && !probe });
   if (!v.ok) throw new Error(`Spec failed validation:\n - ${v.errors.join('\n - ')}`);
   ensureDir(runDir);
   await writeJson(path.join(runDir, 'spec.json'), spec);
@@ -72,7 +112,7 @@ export async function renderSpec(spec, { runDir, probe = false, upscale = false,
   // renderers). The audio seam fade (assemble.js) smooths the join under this continuous visual.
   // Skip for a text-to-video (no-element) render on Kling: it has no reference-to-video path to accept
   // a seam start frame, so each job renders independently (Seedance seeds the seam as its lone image).
-  const textToVideoKling = be === 'kling' && !(spec.kling.elements?.length);
+  const textToVideoKling = capsFor(be).family === 'kling' && !(spec.kling.elements?.length);
   const chain = config.kling.chainFrames && !probe && toRender.length > 1 && !textToVideoKling;
   if (textToVideoKling && !probe && toRender.length > 1) log.info('Kling text-to-video render — seam-chaining disabled (no reference frame); jobs render independently.');
   const results = [];
@@ -115,14 +155,16 @@ export async function renderSpec(spec, { runDir, probe = false, upscale = false,
  */
 export async function renderJob(spec, jobId, { runDir, backend, take = 0, feedback, seamFrom, lowRes = false } = {}) {
   const be = resolveBackend(spec, backend);
-  const v = validateSpec(spec, { upTo: 7, backend: be });
+  // Structural pass first, with NO seam assumed (chainFrames:false is the permissive reading): a
+  // single-job re-render supplies an opening frame only when --seam-from resolves, so a 9-ref job
+  // must not be rejected for a seam slot this invocation may never fill — and an invalid spec must
+  // fail with the full validation report, not a job-lookup error.
+  const v = validateSpec(spec, { upTo: 7, backend: be, chainFrames: false });
   if (!v.ok) throw new Error(`Spec failed validation:\n - ${v.errors.join('\n - ')}`);
   const jobs = spec.kling.jobs;
   const idx = jobs.findIndex((j) => j?.job_id === jobId);
-  if (idx === -1) throw new Error(`job "${jobId}" not found in spec.kling.jobs (${jobs.map((j) => j.job_id).join(', ')})`);
+  if (idx === -1) throw new Error(`job "${jobId}" not found in spec.kling.jobs (${jobs.map((j) => j?.job_id).join(', ')})`);
   const job = jobs[idx];
-  ensureDir(runDir);
-  await writeJson(path.join(runDir, 'spec.json'), spec);
 
   // Seam in: an authored job.first_frame wins inside the renderer; else chain from the previous
   // job's last frame in a prior render dir, exactly like renderSpec's in-sequence chaining.
@@ -132,6 +174,20 @@ export async function renderJob(spec, jobId, { runDir, backend, take = 0, feedba
     if (fs.existsSync(cand)) startFrame = cand;
     else log.warn(`no seam frame at ${cand} — rendering ${jobId} without cross-job continuity`);
   }
+
+  // A seam frame WAS resolved: it takes one of the TARGET job's image slots on models that demote
+  // it to a reference, so re-check just that job's budget (other jobs are not rendered by this
+  // invocation — a whole-spec re-validation would reject them for seams nobody is supplying).
+  const caps = capsFor(be);
+  if (startFrame && !job.first_frame && caps.family === 'seedance' && demotesOpeningFrame(caps)) {
+    // An omitted/empty job.elements inherits the WHOLE roster (characterGroups), so count that.
+    const refs = job.elements?.length ? job.elements.length : (spec.kling.elements?.length ?? 0);
+    if (refs > caps.maxImages - 1) {
+      throw new Error(`${jobId} carries ${refs} element refs, but the seam frame from --seam-from takes 1 of ${caps.label}'s ${caps.maxImages} image slots — drop a reference or render without --seam-from (a visible cut).`);
+    }
+  }
+  ensureDir(runDir);
+  await writeJson(path.join(runDir, 'spec.json'), spec);
 
   log.step(`Render job — ${jobId} — ${RENDERERS[be].label}${take ? ` [take ${take}]` : ''}`);
   const r = await RENDERERS[be].render({ job, spec, runDir, seed: seedForJob(idx, take), lowRes, startFrame, nonce: take, feedback });

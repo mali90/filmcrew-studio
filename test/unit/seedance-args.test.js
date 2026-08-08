@@ -1,9 +1,13 @@
+// BYTE-COMPAT GATE. This file must keep passing UNMODIFIED through the seedance-args /
+// render-seedance extraction: it is the proof that the fal Seedance 2.0 payload did not move a
+// single byte. It imports ONLY fal-seedance.js — the two pipeline cases that used to live here
+// moved to test/unit/pipeline-backends.test.js so a backend-id change can never force an edit
+// to the gate. The caps-driven behaviour of the NEW pure builder lives in seedance-args-caps.test.js.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { neutralizeDotenv } from '../helpers/env.js';
 neutralizeDotenv();
 const { buildSeedanceArgs } = await import('../../src/lib/fal-seedance.js');
-const { resolveBackend, RENDERERS } = await import('../../src/lib/pipeline.js');
 
 const BASE = { prompt: 'p', imageUrls: ['u1'], aspectRatio: '9:16', resolution: '1080p', generateAudio: true, totalDuration: 13 };
 
@@ -31,20 +35,4 @@ test('buildSeedanceArgs: audio_urls only when voice refs exist; generate_audio c
   assert.ok(!('audio_urls' in buildSeedanceArgs(BASE)));
   assert.deepEqual(buildSeedanceArgs({ ...BASE, audioUrls: ['a1', 'a2'] }).audio_urls, ['a1', 'a2']);
   assert.equal(buildSeedanceArgs({ ...BASE, generateAudio: undefined }).generate_audio, false);
-});
-
-test('resolveBackend precedence: explicit flag > spec.render_backend > config default', () => {
-  assert.equal(resolveBackend({}, 'seedance'), 'seedance');
-  assert.equal(resolveBackend({ render_backend: 'kling' }, 'seedance'), 'seedance');
-  assert.equal(resolveBackend({ render_backend: 'seedance' }), 'seedance');
-  assert.equal(resolveBackend({}), 'kling'); // config default (env neutralized)
-  assert.throws(() => resolveBackend({}, 'nope'), /Unknown render backend "nope"/);
-});
-
-test('RENDERERS table carries both backends with render fns and labels', () => {
-  assert.deepEqual(Object.keys(RENDERERS).sort(), ['kling', 'seedance']);
-  for (const r of Object.values(RENDERERS)) {
-    assert.equal(typeof r.render, 'function');
-    assert.equal(typeof r.label, 'string');
-  }
 });

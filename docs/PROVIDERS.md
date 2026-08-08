@@ -20,15 +20,29 @@ default in `.env` or switch per run with `--backend`.
 2. In `.env`:
    ```
    FAL_KEY=paste_your_fal_key_here
-   RENDER_BACKEND=kling        # kling (default) | seedance
+   RENDER_BACKEND=kling-o3@fal  # kling-o3@fal (default) | seedance-2.0@fal
    ```
 
+**Backend ids are `<model>@<provider>`.** A backend names the *model* and the *provider that runs
+it*, so the same model can later be offered by a second provider without touching any plumbing. The
+old one-word names **`kling`** and **`seedance`** stay accepted forever — on the CLI, in `.env`, and
+in spec/manifest files already on disk — and simply resolve to `kling-o3@fal` and `seedance-2.0@fal`.
+Nothing needs migrating; whichever spelling you type, the planned spec records the canonical id in
+`render_backend`.
+
 Selection precedence at render time: `--backend` flag → `render_backend` in the spec →
-`RENDER_BACKEND` in `.env` → `kling`.
+`RENDER_BACKEND` in `.env` → `kling-o3@fal`.
+
+Each model carries its own caps — job window, reference-image budget, cast ceiling and aspect-ratio
+list — and the planner is told *that model's* numbers, so a plan is written to the limits of the
+backend it will actually render on.
 
 | | **Kling 3.0 Omni** (default) | **Seedance 2.0** (ByteDance) |
 |---|---|---|
+| Backend id (legacy alias) | `kling-o3@fal` (`kling`) | `seedance-2.0@fal` (`seedance`) |
 | One generation renders | up to 6 storyboard segments (≤15s) | one rich multi-shot prompt (4–15s) |
+| Starred cast members (max) | 1 | 2 |
+| Aspect ratios | `16:9`, `9:16`, `1:1` | `16:9`, `9:16`, `1:1` |
 | Identity pinning | `elements` (frontal + reference images) | flat `@Image1..9` reference images |
 | Character voices | persistent minted `voice_id` bound per element | lip-sync to the mint-time **clip** (`@Audio1..3`) |
 | Seam continuity (>15s videos) | `start_image_url` = previous last frame | same frame, appended as a ref and **prompt-pinned** |
@@ -49,6 +63,16 @@ Two Seedance quirks worth knowing: the endpoint accepts **no `seed` and no `nega
 (both are rejected with HTTP 422), so retakes use the `--take <n>` prompt nonce and appearance
 guards ride the prompt itself (`SEEDANCE_AVOID`, `SEEDANCE_TEXT_RULE`, `SEEDANCE_STYLE`). Jobs must
 total **at least 4 seconds** — the planner packs to this automatically.
+
+**Caps are checked before you spend.** Starring more characters than the chosen model can carry is
+rejected before any LLM call (Kling 3.0 Omni takes 1 starred character, Seedance 2.0 takes 2 — each
+one costs reference-image slots), and an aspect ratio or resolution the model does not offer is
+refused before the render request goes out rather than after paying for a round trip. Home's cast
+pills and **Aspect** control show the selected model's limits and re-pick for you when switching
+models invalidates a choice.
+
+> The registry also declares **Seedance 2.5** (4 starred characters; six aspect ratios) ahead of the
+> endpoints that will run it — it is not selectable as a backend until a provider entry lands.
 
 ---
 
@@ -138,7 +162,7 @@ Uncomment (remove the leading `#`) and set any of these to change a default:
 |---|---|---|
 | `KLING_MODEL` | `kling-v3-omni` | `kling-v3-omni` or `kling-video-o1`. |
 | `KLING_RESOLUTION` | `1080p` | `720p`, `1080p`, or `4k` (higher = more cost). |
-| `KLING_ASPECT` | `9:16` | `9:16` (vertical), `16:9` (widescreen), `1:1` (square). |
+| `KLING_ASPECT` | `9:16` | The default aspect ratio for a run. Six numeric ratios exist — `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `21:9` — but a run may only use one the chosen model renders (both shipping models: `16:9`, `9:16`, `1:1`). `adaptive`/`auto` are deliberately not offered: the stitcher needs a deterministic ratio. |
 | `KLING_MULTI_SHOT` | `true` | one generation holds up to 6 shots vs one shot per generation. |
 | `KLING_GENERATE_AUDIO` | `true` | Kling's native synced sound (dialogue/SFX/ambience). |
 | `KLING_CHAIN_FRAMES` | `true` | for >15s videos, seed each job with the previous clip's last frame (seam continuity). |

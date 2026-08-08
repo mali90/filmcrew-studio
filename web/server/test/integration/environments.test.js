@@ -160,7 +160,7 @@ test('subtle coupling: Seedance + no cast + no refs + environment STILL plans as
   const res = await post('/api/runs', { idea: 'a drone drifts through the undercity', backend: 'seedance', aspect: '9:16', durationS: null, environment: 'undercity' });
   assert.equal(res.statusCode, 201, res.body);
   const run = await waitPlanReady(res.json().runId);
-  assert.equal(run.spec.render_backend, 'seedance', 'it planned for seedance and did not fall back');
+  assert.equal(run.spec.render_backend, 'seedance-2.0@fal', 'it planned for seedance and did not fall back');
   assert.equal(run.spec.environment, 'undercity', 'the environment enriched the t2v prompt and was stamped');
 });
 

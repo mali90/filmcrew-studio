@@ -5,6 +5,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { isRunId, safeChild } from '../lib/paths.js';
 import { estimateRender, estimateUpscale, jobSeconds, readSeedanceResolution } from '../lib/estimator.js';
+// The registry is the ONE static import this server takes from the host src/ tree. It is safe
+// precisely because it has zero imports and reads no env (test/unit/render-models.test.js pins
+// that), so it cannot drag config.js — and a developer's real .env — into web/server's static
+// graph. The canary in test/integration/runs-caps.test.js walks this graph and enforces it.
+import { normalizeBackend, capsFor, castLimitFor, ALL_BACKENDS } from '../../../src/lib/render-models.js';
 
 const SPEC_FILE_RE = /^(revisions\/r\d+\/)?spec[-\w]*\.json$/;
 
@@ -66,8 +71,28 @@ export function registerRunRoutes(app) {
   app.post('/api/runs', async (req, reply) => {
     const { idea, backend = 'kling', aspect = '9:16', durationS = null, cast = [], environment = null } = req.body ?? {};
     if (!idea || !String(idea).trim()) throw Object.assign(new Error('idea is required'), { statusCode: 400, hint: 'one line is enough — the engine does the rest' });
-    if (!['kling', 'seedance'].includes(backend)) throw Object.assign(new Error(`unknown backend "${backend}"`), { statusCode: 400, hint: 'use kling or seedance' });
-    if (!['9:16', '16:9', '1:1'].includes(aspect)) throw Object.assign(new Error(`unknown aspect "${aspect}"`), { statusCode: 400, hint: 'use 9:16, 16:9 or 1:1' });
+    // Backend, aspect and cast are all model-derived and all rejected HERE — synchronously, before
+    // svc.createRun spawns the engine child — so a bad request leaves no run directory behind.
+    let caps;
+    let storedBackend;
+    try {
+      const be = normalizeBackend(backend);
+      caps = capsFor(be.id);
+      // Persist a MEMBER of ALL_BACKENDS, never the raw spelling: normalizeBackend tolerates
+      // " seedance ", but a raw store would fail the estimator's exact price-table lookup AFTER
+      // planning already spent money. The trimmed spelling wins when it is itself a member (legacy
+      // manifests stay legacy); anything else stores the canonical id (priced via its $alias hop).
+      const trimmed = typeof backend === 'string' ? backend.trim() : backend;
+      storedBackend = ALL_BACKENDS.includes(trimmed) ? trimmed : be.id;
+    } catch (e) {
+      throw Object.assign(new Error(e.message), { statusCode: 400, hint: `accepted backends: ${ALL_BACKENDS.join(', ')}` });
+    }
+    // aspect ratios are per-model — 21:9 is a Seedance 2.5 ratio, not a Kling one
+    if (!caps.aspects.includes(aspect)) {
+      throw Object.assign(new Error(`unknown aspect "${aspect}" for ${caps.label}`), {
+        statusCode: 400, hint: `${caps.label} renders ${caps.aspects.join(', ')}`,
+      });
+    }
     if (durationS !== null && (!Number.isInteger(durationS) || durationS < 3 || durationS > 120)) {
       throw Object.assign(new Error('durationS must be 3–120 seconds or null for auto'), { statusCode: 400, hint: 'null lets the engine choose from the story' });
     }
@@ -79,6 +104,17 @@ export function registerRunRoutes(app) {
       if (!fs.existsSync(path.join(app.ctx.profilesDir, `${c.trim()}.md`))) {
         throw Object.assign(new Error(`unknown cast member "${c}"`), { statusCode: 400, hint: 'create the character on the Cast page first' });
       }
+    }
+    // Cast cap, layer 2 of 3 (engine / server / UI): each model takes only so many starred
+    // characters, and an over-starred run can never render — so it is refused here rather than
+    // paid for in planning. Mirrors the engine's message (src/lib/engine.js buildCtx).
+    const castLimit = castLimitFor(caps.id);
+    if (cast.length > castLimit) {
+      const over = cast.length - castLimit;
+      throw Object.assign(
+        new Error(`${caps.label} supports at most ${castLimit} starred character${castLimit === 1 ? '' : 's'} — you selected ${cast.length} (${cast.join(', ')})`),
+        { statusCode: 400, hint: `unstar ${over === 1 ? 'one' : over}, or pick a model with a higher cast limit` },
+      );
     }
     // exactly one environment per idea (single-select) — if named it must exist NOW, before any LLM spend
     let environmentSlug = null;
@@ -96,7 +132,7 @@ export function registerRunRoutes(app) {
         throw Object.assign(new Error(`unknown environment "${environment}"`), { statusCode: 400, hint: 'create the environment on the Cast page first' });
       }
     }
-    const r = svc.createRun({ idea: String(idea).trim(), backend, aspect, durationS, cast: cast.map((c) => c.trim()), environment: environmentSlug });
+    const r = svc.createRun({ idea: String(idea).trim(), backend: storedBackend, aspect, durationS, cast: cast.map((c) => c.trim()), environment: environmentSlug });
     return reply.code(201).send(r);
   });
 

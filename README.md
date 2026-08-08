@@ -95,12 +95,12 @@ npm run engine -- --brief "your idea here" --render --probe   # long multi-job v
 | `npm run assemble -- --from runs/<id>/renders/<take>` | Finish or re-stitch a prior render — free, no API calls. |
 | `npm run mint-voice -- <name> <clip.mp3>` | Give a character a persistent voice (once per character). |
 
-Two video models: **Kling 3.0** (default) and **Seedance 2.0** — pick per run with `--backend`, or set the default in Settings. How they differ: [docs/PROVIDERS.md](docs/PROVIDERS.md). Slow, hand-held setup (including editing `.env` yourself): [docs/SETUP.md](docs/SETUP.md).
+Two video models: **Kling 3.0** (default) and **Seedance 2.0** — pick per run with `--backend`, or set the default in Settings. Backends are named `<model>@<provider>` (`kling-o3@fal`, `seedance-2.0@fal`); the old one-word `kling`/`seedance` names still work everywhere, including in specs already on disk. How they differ: [docs/PROVIDERS.md](docs/PROVIDERS.md). Slow, hand-held setup (including editing `.env` yourself): [docs/SETUP.md](docs/SETUP.md).
 
 ## What you get
 
 - **An 8-agent planning engine** with a QC gate that re-runs only the agents whose work fails — the plan is sound before a single paid frame renders.
-- **Two render backends** behind one spec — any plan renders on either.
+- **Two render backends** behind one spec, each planned to **its own model's caps** — job window, reference-image budget, starred-cast ceiling (Kling 1, Seedance 2) and aspect-ratio list. Over-cap choices are refused before any paid step.
 - **Characters that persist**: reference images, subject bibles and minted voices, managed on the Cast page and starrable per idea. A sample character, **Wren**, ships in the box — open the Cast page or add `--cast wren` to any idea to try it (activate his voice with `npm run mint-voice -- "Wren" voices/wren.mp3`).
 - **Environments that persist**: a purely descriptive world/mood/palette bible (`environments/<slug>.md`, no images or voice), managed on the Cast page and set per idea to steer every shot's look. A sample environment, **Neon City**, ships in the box — open the Cast page or add `--environment neon-city` to any idea to try it.
 - **Honest money UX**: a price on every render button, first-job probes on multi-job plans, free re-assembly, upscale only when you choose it.

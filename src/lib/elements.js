@@ -54,7 +54,7 @@ export function inventoryText(inv = buildInventory()) {
   const section = (label, list) =>
     !list.length ? '' : `\n${label}:\n` + list.map((e) => `  - id: ${e.id}  file: ${e.file}${e.description ? `  — ${e.description}` : ''}`).join('\n');
   return [
-    section('REFERENCE IMAGES (Elements — pin subject/object/style; up to 7 per generation)', byType.reference),
+    section('REFERENCE IMAGES (Elements — pin subject/object/style; the per-job cap is the Hard caps line above)', byType.reference),
     section('FIRST-FRAME seeds (optional opening frame)', byType.first_frame),
     section('LAST-FRAME seeds (optional closing frame — requires a first frame)', byType.last_frame),
   ].filter(Boolean).join('\n');

@@ -11,7 +11,8 @@ import config, { resolvePath } from '../../config.js';
 import log from './logger.js';
 import { ensureDir, writeJson, slug } from './util.js';
 import { complete, extractJson } from './llm.js';
-import { validateSpec, RENDER_BACKENDS, ASPECTS } from './spec-schema.js';
+import { validateSpec } from './spec-schema.js';
+import { RENDER_MODELS, capsFor, castLimitFor, normalizeBackend } from './render-models.js';
 import { buildInventory, inventoryText } from './elements.js';
 import { voicesInventoryText } from './voices.js';
 import { SEEDANCE_TTV_GUIDANCE } from './seedance.js';
@@ -50,26 +51,49 @@ async function loadSkills(idx) {
   return out.join('\n\n---\n\n');
 }
 
+/**
+ * The model FAMILY behind any accepted backend spelling — a compound `<model>@<provider>` id, a
+ * legacy alias, or a bare model id whose provider entries have not landed yet. null when the name
+ * is unknown, so the callers below can key off the family instead of a literal backend string.
+ */
+function familyOf(value) {
+  if (typeof value === 'string' && Object.hasOwn(RENDER_MODELS, value)) return RENDER_MODELS[value].family;
+  try { return capsFor(value).family; } catch { return null; }
+}
+
 /** A Seedance render with NO cast AND NO reference image available is guaranteed text-to-video (the
  *  Casting agent has nothing to attach) — the only case where injecting the text-to-video prompt style
  *  + identity override is safe. A no-cast render whose folder holds a relevant image becomes
- *  image-to-video (Casting attaches by relevance), whose planning must stay unchanged. */
+ *  image-to-video (Casting attaches by relevance), whose planning must stay unchanged. Keyed off the
+ *  model FAMILY, so every Seedance model (2.0, 2.5, on any provider) takes this path. */
 export function isTextToVideoPlan({ backend, cast, refCount }) {
-  return backend === 'seedance' && !(cast?.length) && refCount === 0;
+  return familyOf(backend) === 'seedance' && !(cast?.length) && refCount === 0;
 }
 
 /** The shared project context every agent sees (brief, config defaults + caps, elements, profiles). */
 export function contextBlock(ctx) {
   const k = config.kling;
+  // Per-model caps ride on the ctx buildCtx built; a hand-assembled ctx (unit tests, callers that
+  // only hold a backend name) gets them derived from the backend it names, so the Job Planner is
+  // never told Kling's numbers for a Seedance plan.
+  const caps = ctx.caps ?? capsFor(ctx.backend);
   return [
     '## Project context',
     `- Brief: ${ctx.brief}`,
     `- Defaults: model=${k.model}, aspect_ratio=${ctx.aspectRatio ?? k.aspectRatio}, resolution=${k.resolution}, ` +
       `multi_shot=${k.multiShot}, native_audio=${k.nativeAudio}, target_duration≈${ctx.durationTargetS}s`,
-    `- Render backend: ${ctx.backend}`,
-    `- Hard caps: ≤${k.maxStoryboards} shots/job, ≤${k.maxJobSeconds}s/job, ≤512 chars/segment, ≤${k.maxRefImages} reference images/job`,
-    ...(ctx.backend === 'seedance'
-      ? [`- Seedance packing rule: every job must total ${config.seedance.minJobSeconds}–${config.seedance.maxJobSeconds}s (a job under ${config.seedance.minJobSeconds}s fails validation — merge short shots); other caps are identical.`]
+    `- Render backend: ${caps.id}`,
+    // Every number here is the RENDERING MODEL's own (registry caps), with the shared fallbacks for
+    // the caps a model leaves undeclared — the same pair spec-schema's validateJobs applies, so the
+    // planner is never told a window the validator will then reject.
+    `- Hard caps: ≤${caps.maxSegments ?? 6} shots/job, ≤${caps.maxSeconds}s/job, ≤${caps.maxSegmentChars ?? 512} chars/segment, ≤${caps.maxImages} reference images/job`,
+    ...(caps.family === 'seedance'
+      ? [`- Seedance packing rule: every job must total ${caps.minSeconds}–${caps.maxSeconds}s (a job under ${caps.minSeconds}s fails validation — merge short shots); the caps above are this model's own.`,
+         // The budget must mirror what validateJobs will enforce, which depends on seam chaining:
+         // with chaining off, only an authored first_frame consumes a slot.
+         config.kling.chainFrames
+           ? `- Reference budget: 1 of the ${caps.maxImages} image slots is reserved for the opening/seam frame on every job after the first (and on any job with an authored first_frame) — give those jobs at most ${caps.maxImages - 1} element refs.`
+           : `- Reference budget: a job with an authored first_frame gives 1 of its ${caps.maxImages} image slots to it — plan at most ${caps.maxImages - 1} element refs there (seam chaining is off; other jobs keep all ${caps.maxImages}).`]
       : []),
     // Guaranteed text-to-video (Seedance, no cast, AND no reference image the Casting agent could
     // attach): steer the shot prose with the Seedance 2.0 guidelines from the start. Absent for
@@ -81,8 +105,10 @@ export function contextBlock(ctx) {
          SEEDANCE_TTV_GUIDANCE,
          '- IDENTITY: overriding the scene-director\'s usual "never describe the subject\'s appearance" rule — since no reference image pins identity here, DO describe each subject\'s look concretely (build, clothing, colours, distinctive features) and keep it consistent across every shot.']
       : []),
+    // aspect_ratio is the MODEL's list (identical to the historic three for both shipping models),
+    // so a model with wider ratios never has them talked out of the plan by a hardcoded enum.
     '- Valid enums: shot_size ∈ {extreme_close_up, close_up, medium_close_up, medium, medium_wide, wide, extreme_wide}; ' +
-      'aspect_ratio ∈ {16:9, 9:16, 1:1}; kling.model_name ∈ {kling-v3-omni, kling-video-o1}; ' +
+      `aspect_ratio ∈ {${caps.aspects.join(', ')}}; kling.model_name ∈ {kling-v3-omni, kling-video-o1}; ` +
       'kling.resolution ∈ {4k, 1080p, 720p}',
     '',
     '## Available elements (the Casting agent must pick `image` paths from THIS list)',
@@ -159,7 +185,7 @@ async function runAgentValidated(idx, spec, ctx, maxFix, seedNote = '') {
     const note = [seedNote, errNote].filter(Boolean).join('\n\n');
     const candidate = await runAgent(idx, cur, ctx, note);
     const upTo = idx === 7 ? 6 : idx; // QC validates the full creative spec (blocks 0..6) before judging
-    const v = validateSpec(candidate, { upTo, backend: ctx.backend });
+    const v = validateSpec(candidate, { upTo, backend: ctx.backend, chainFrames: Boolean(config.kling.chainFrames) });
     if (v.ok) return candidate;
     const errors = v.errors.map((e) => `- ${e}`).join('\n');
     errNote = `## Fix these validation problems from your previous attempt\n${errors}`;
@@ -244,14 +270,29 @@ async function loadEnvironment(environment) {
   return fsp.readFile(path.join(dir, hit), 'utf8');
 }
 
-/** Validate backend + aspect up-front (BEFORE any LLM spend) and build the shared agent context. */
+/** Validate backend + aspect + cast size up-front (BEFORE any LLM spend) and build the shared agent context. */
 export async function buildCtx({ brief, backend, aspectRatio, durationTargetS, cast, environment }) {
-  const be = backend ?? config.render.backend;
-  if (!RENDER_BACKENDS.includes(be)) {
-    throw new Error(`Unknown render backend "${be}" — use one of: ${RENDER_BACKENDS.join(', ')} (RENDER_BACKEND in .env, or --backend).`);
+  // Canonicalize FIRST: everything below is per-model (which ratios are legal, which caps the agents
+  // are told, which id the spec is stamped with), and a typo'd backend must cost nothing. A legacy
+  // 'kling'/'seedance' converges here on the same compound id as its `<model>@<provider>` spelling.
+  const { id: be } = normalizeBackend(backend ?? config.render.backend, { hint: 'RENDER_BACKEND in .env, or --backend' });
+  const caps = capsFor(be);
+  // Judge the EFFECTIVE ratio — the flag when given, else the config default the plan would
+  // inherit (KLING_ASPECT): a 4:3 default on a three-ratio model must not spend a whole planning
+  // pass on a spec the renderer will then reject.
+  const effAspect = aspectRatio ?? config.kling.aspectRatio;
+  if (effAspect !== undefined && !caps.aspects.includes(effAspect)) {
+    throw new Error(`Unknown aspect ratio "${effAspect}"${aspectRatio === undefined ? ' (the KLING_ASPECT config default)' : ''} — use one of: ${caps.aspects.join(', ')}.`);
   }
-  if (aspectRatio !== undefined && !ASPECTS.includes(aspectRatio)) {
-    throw new Error(`Unknown aspect ratio "${aspectRatio}" — use one of: ${ASPECTS.join(', ')}.`);
+  // Cast cap, layer 1 of 3 (engine / server / UI). Every starred character burns reference-image
+  // slots, so each model has a hard ceiling. This has to fire HERE — before loadProfiles and before
+  // the first agent prompt — because an over-starred run can never render: planning it would be
+  // eight agents of spend for a spec that dies at the renderer. Ordering also means an over-cap list
+  // of unknown names reports the real problem ("too many") instead of "unknown cast member".
+  const castLimit = castLimitFor(be);
+  if (cast?.length > castLimit) {
+    const over = cast.length - castLimit;
+    throw new Error(`${caps.label} supports at most ${castLimit} starred character${castLimit === 1 ? '' : 's'} — you selected ${cast.length} (${cast.join(', ')}). Drop ${over === 1 ? 'one' : over}, or switch to a model with a higher cast limit.`);
   }
   const inv = buildInventory();
   // The environment carries NO reference image, so it is loaded AFTER (and independently of) the
@@ -260,7 +301,8 @@ export async function buildCtx({ brief, backend, aspectRatio, durationTargetS, c
   const environmentText = await loadEnvironment(environment);
   return {
     brief,
-    backend: be,
+    backend: be, // the CANONICAL `<model>@<provider>` id — what gets stamped onto the spec
+    caps, // the rendering model's own caps: contextBlock's hard-caps lines read them
     aspectRatio, // undefined = config default (contextBlock falls back to config.kling.aspectRatio)
     durationTargetS: durationTargetS ?? config.kling.defaultShotSeconds * 3,
     // Guaranteed text-to-video? (no cast AND no reference image to attach — see isTextToVideoPlan)
@@ -285,11 +327,14 @@ function stampAspect(spec, aspectRatio) {
 /**
  * Run the full engine for one brief.
  * @param {{brief:string, runDir:string, durationTargetS?:number, backend?:string, aspectRatio?:string, cast?:string[], maxFix?:number, maxQc?:number}} p
- *   `backend`: render backend the spec is planned for ('kling' default) — the job planner packs to
- *   its caps and the incremental validation enforces them. `aspectRatio` (16:9|9:16|1:1): overrides
+ *   `backend`: render backend the spec is planned for (a `<model>@<provider>` id or a legacy
+ *   'kling'/'seedance' alias; config default when omitted) — the job planner packs to that model's
+ *   caps, the incremental validation enforces them, and the spec is stamped with the CANONICAL id.
+ *   `aspectRatio` (one of the model's own ratios): overrides
  *   the config default in the agents' context and is stamped onto the final spec. `cast` (character
  *   names with profiles/<name>.md): narrows the injected profiles to those characters and directs
- *   the agents to star them; unknown names throw before any LLM spend. `environment` (a single
+ *   the agents to star them; an over-cap list (more than the model's `castLimit`) or an unknown name
+ *   throws before any LLM spend. `environment` (a single
  *   environments/<slug>.md): injects that world/mood/style bible with precedence over character
  *   world notes and is stamped onto the spec; an unknown slug throws before any LLM spend.
  * @returns {Promise<{spec:object, passed:boolean}>}
@@ -313,10 +358,10 @@ export async function runEngine({ brief, runDir, durationTargetS, backend, aspec
   spec = await qcLoop(spec, ctx, { runDir, maxFix, maxQc });
 
   stampAspect(spec, ctx.aspectRatio);
-  spec.render_backend = ctx.backend; // the spec is planned FOR this backend — renders must not silently fall back to the config default
+  spec.render_backend = ctx.backend; // the CANONICAL id this spec was planned FOR — renders must not silently fall back to the config default
   if (ctx.castNames) spec.cast = ctx.castNames; // revisions re-inject the same starred profiles
   if (ctx.environmentSlug) spec.environment = ctx.environmentSlug; // revisions re-inject the same world bible
-  const final = validateSpec(spec, { upTo: 7, backend: ctx.backend });
+  const final = validateSpec(spec, { upTo: 7, backend: ctx.backend, chainFrames: Boolean(config.kling.chainFrames) });
   const passed = spec.qc?.status === 'pass' && final.ok;
   await writeJson(path.join(runDir, 'spec.json'), spec);
   if (!final.ok) log.warn(`Final spec has ${final.errors.length} structural issue(s):\n - ${final.errors.join('\n - ')}`);
@@ -389,15 +434,41 @@ async function routeFeedback(feedback) {
  *   a job id narrows the feedback to that job's shots without pinning the agent choice.
  * @returns {Promise<{spec:object, passed:boolean, owners:number[]}>}
  */
-export async function reviseSpec({ spec, runDir, feedback, scope, owners, brief, backend, aspectRatio, maxFix = config.engine.maxFix, maxQc = config.engine.maxQc }) {
+export async function reviseSpec({ spec, runDir, feedback, scope, owners, brief, backend, aspectRatio, cast, maxFix = config.engine.maxFix, maxQc = config.engine.maxQc }) {
   if (!feedback || !String(feedback).trim()) throw new Error('reviseSpec needs non-empty feedback (what should change?).');
-  const v0 = validateSpec(spec, { upTo: 7, backend: backend ?? spec?.render_backend ?? config.render.backend });
+  // Judge the STARTING spec by the backend it was planned for — `backend` is the revision's TARGET
+  // (the switch-and-revise workflow), and judging the old spec by the new model's caps would reject
+  // exactly the specs the revision exists to adapt (e.g. a 9-ref Seedance plan moving to Kling).
+  // The target still governs the revision itself: buildCtx below and the final validation.
+  const v0 = validateSpec(spec, { upTo: 7, backend: spec?.render_backend ?? backend ?? config.render.backend, chainFrames: Boolean(config.kling.chainFrames) });
   if (!v0.ok) throw new Error(`reviseSpec needs a valid spec to start from:\n - ${v0.errors.join('\n - ')}`);
   // a typo'd scope must fail loudly — silently widening 'K9' or 'contnet' to a whole-spec revision
   // sends the feedback to the wrong agents and re-runs more than the caller asked to pay attention to
   if (scope && scope !== 'whole' && TAG_OWNER[scope] === undefined && !scopeShots(spec, scope)) {
     const jobIds = (spec?.kling?.jobs ?? []).map((j) => j?.job_id).filter(Boolean);
     throw new Error(`Unknown revision scope "${scope}" — use 'whole', a spec block (${Object.keys(TAG_OWNER).join(', ')}), or a job id (${jobIds.join(', ') || 'none in this spec'}).`);
+  }
+  // A backend SWITCH can strand the persisted cast over the TARGET model's cap, and buildCtx's
+  // create-time rejection offers no way out of a plan that already exists — so fail with the
+  // revise-specific remediation first: an explicit `cast` (CLI --cast) picks who stays.
+  const effCast = cast ?? (Array.isArray(spec?.cast) && spec.cast.length ? spec.cast : undefined);
+  if (!cast && effCast) {
+    const target = backend ?? spec?.render_backend ?? config.render.backend;
+    const limit = castLimitFor(target);
+    if (effCast.length > limit) {
+      throw new Error(`This plan stars ${effCast.length} characters (${effCast.join(', ')}) but ${capsFor(normalizeBackend(target).id).label} takes at most ${limit} — pass --cast <names> to choose who stays (e.g. --cast ${effCast.slice(0, limit).join(',')}).`);
+    }
+  }
+  // Cast identity is SLUG-based (profiles are looked up by slug), so a stored "wren" and
+  // `--cast Wren` are the SAME character — compare normalized rosters, or a case difference
+  // re-plans the whole story for nothing. Computed — and the scope conflict rejected — BEFORE
+  // buildCtx and the LLM owner-routing call: an invalid command must not spend a routing prompt.
+  const rosterOf = (a) => JSON.stringify([...a].map((n) => slug(String(n))).sort());
+  const castSwitched = Boolean(cast) && rosterOf(cast) !== rosterOf(Array.isArray(spec?.cast) ? spec.cast : []);
+  if (castSwitched && scope && scope !== 'whole') {
+    // A cast switch re-plans the whole story; a narrowing scope would tell every agent to touch
+    // only one block while the removed character lives everywhere else. Contradictory — refuse.
+    throw new Error(`Changing the starred cast re-plans the whole story — drop --scope "${scope}" (or keep the cast unchanged for a scoped revision).`);
   }
   const ctx = await buildCtx({
     brief: brief ?? `${spec.project?.title ?? ''} — ${spec.project?.logline ?? ''}`.trim(),
@@ -406,16 +477,37 @@ export async function reviseSpec({ spec, runDir, feedback, scope, owners, brief,
     // tell the owner agents to "fix" a 16:9 spec toward the .env's 9:16 mid-revision
     aspectRatio: aspectRatio ?? spec?.kling?.aspect_ratio ?? spec?.project?.aspect_ratio,
     durationTargetS: spec.project?.duration_target_s,
-    cast: Array.isArray(spec?.cast) && spec.cast.length ? spec.cast : undefined, // same starred profiles as the plan
+    cast: effCast, // the plan's starred profiles, unless the caller re-picked them for this revision
     environment: spec?.environment, // re-derive the same world bible from the persisted spec
   });
   ensureDir(runDir);
 
-  const ownerList = owners?.length
+  let ownerList = owners?.length
     ? [...new Set(owners)].sort((a, b) => a - b)
     : (ownersForScope(scope) ?? await routeFeedback(feedback));
   if (ownerList.some((o) => !Number.isInteger(o) || o < 0 || o > 6)) {
     throw new Error(`reviseSpec owners must be agent indices 0–6 (got: ${ownerList.join(', ')}).`);
+  }
+  // A backend or cast SWITCH invalidates blocks the feedback may never mention: qcLoop re-judges
+  // the jobs against the TARGET model's caps, a re-picked cast must re-pick its element
+  // references, and a removed character's voice lines must not survive onto whoever remains
+  // (stale audio.voice.lines[].speaker entries would voice the dropped character's dialogue
+  // through the retained cast's element). So a backend switch forces Casting (4) + Job Planner
+  // (6), and a cast switch forces Sound (5) as well — whatever the router chose.
+  const revTarget = ctx.backend; // buildCtx already canonicalized the effective target
+  const revSource = (() => { try { return normalizeBackend(spec?.render_backend).id; } catch { return revTarget; } })();
+  if (revTarget !== revSource || castSwitched) {
+    // A cast switch rewrites the STORY, not just the references: project.cast, the shot list and
+    // every content_prompt speak about who is on screen, and agents 4–6 are told to preserve those
+    // blocks — so switching cast re-runs every owner (it is a re-plan with the new cast). A
+    // backend-only switch needs the cap owners (Casting + Job Planner) — plus the Scene Director
+    // when the switch lands in Seedance TEXT-TO-VIDEO mode, whose guidance (concrete subject
+    // descriptions, no reference images) the existing content_prompt prose was never written for.
+    const forced = castSwitched ? [0, 1, 2, 3, 4, 5, 6] : (ctx.textToVideo ? [2, 4, 6] : [4, 6]);
+    ownerList = [...new Set([...ownerList, ...forced])].sort((a, b) => a - b);
+    log.info(castSwitched
+      ? `Revision changes the starred cast${revTarget !== revSource ? ` (and the backend to ${revTarget})` : ''} — every planning agent re-runs: the story itself is being re-planned around the new cast.`
+      : `Revision switches the backend to ${revTarget} — Casting and the Job Planner re-run to adapt the plan to its caps.`);
   }
 
   const jobShots = scopeShots(spec, scope);
@@ -438,10 +530,12 @@ export async function reviseSpec({ spec, runDir, feedback, scope, owners, brief,
   cur = await qcLoop(cur, ctx, { runDir, maxFix, maxQc, filePrefix: 'spec-r07-qc', seedNote: note });
 
   stampAspect(cur, ctx.aspectRatio);
-  cur.render_backend = ctx.backend; // a revision keeps (or deliberately changes) the planned backend — never loses it
+  // A revision keeps (or deliberately changes) the planned backend — never loses it — and re-stamps
+  // it canonically, so revising a spec written before compound ids existed upgrades it in place.
+  cur.render_backend = ctx.backend;
   if (ctx.castNames) cur.cast = ctx.castNames;
   if (ctx.environmentSlug) cur.environment = ctx.environmentSlug; // the revision re-stamps the same world bible
-  const final = validateSpec(cur, { upTo: 7, backend: ctx.backend });
+  const final = validateSpec(cur, { upTo: 7, backend: ctx.backend, chainFrames: Boolean(config.kling.chainFrames) });
   const passed = cur.qc?.status === 'pass' && final.ok;
   await writeJson(path.join(runDir, 'spec.json'), cur);
   if (!final.ok) log.warn(`Revised spec has ${final.errors.length} structural issue(s):\n - ${final.errors.join('\n - ')}`);

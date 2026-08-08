@@ -1,11 +1,16 @@
 # Limits & cost
 
+Every limit below belongs to a **model**, not to the tool. Each backend id names the model and the
+provider running it (`kling-o3@fal`, `seedance-2.0@fal`; the old `kling`/`seedance` spellings still
+work), and the planner is given the caps of the backend the run will actually render on.
+
 ## Kling's hard limits (per single generation — a "job")
 
 - at most **6 shots**
 - at most **15 seconds** total
 - at most **512 characters** per shot prompt
 - at most **7 reference images**
+- at most **1 starred cast member** (each one costs reference-image slots)
 
 If you ask for a longer video, the tool automatically **splits** it into several jobs and stitches
 them back together in order (with a faded audio seam and last-frame continuity) — you don't do anything.
@@ -15,10 +20,13 @@ them back together in order (with a faded audio seam and last-frame continuity) 
 - **4 to 15 seconds** total (note the 4s *minimum* — the planner merges shorter jobs)
 - at most **9 reference images** (one slot is reserved for the seam frame on chained jobs)
 - at most **3 voice-ref clips**, combined ≤ 15s (they're auto-trimmed to fit)
+- at most **2 starred cast members**
 - no per-shot character squeeze — the whole job is one rich prompt (byte-clamped at ~5000)
 
-The same splitting/stitching applies; the shared spec caps are the intersection of both backends,
-so any valid spec renders on either.
+The same splitting/stitching applies. A plan is written and validated against **its own backend's**
+caps rather than one hardcoded set, so a spec planned for one model can exceed another's window —
+re-plan (or revise) after switching instead of assuming every spec renders anywhere. Over-cap casts
+and unsupported aspect ratios are refused **before any LLM or render spend**, not after.
 
 ## Cost 💳
 

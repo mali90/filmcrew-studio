@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+### Changed
+- **Render backends are now named `<model>@<provider>`** (`kling-o3@fal`, `seedance-2.0@fal`), and a
+  planned spec records that canonical id in `render_backend` whichever spelling you typed, as does
+  each rendered job's `prompts.json` sidecar — so an old clip can still say which *model* made it.
+  The old one-word `kling`/`seedance` names stay accepted forever — on the CLI, in `.env`, and in every spec
+  or manifest already on disk — so nothing needs migrating. Planning is now told the *rendering
+  model's own* caps (Seedance 2.0's 9 reference images instead of Kling's 7, its own 4–15s job
+  window and its own aspect-ratio list) instead of one hardcoded set for every backend.
+- **Cost estimates follow the rename.** A CLI-created run now records the canonical id in its
+  `render.json`, so the web app prices `kling-o3@fal`/`seedance-2.0@fal` off the same rate rows as
+  the old one-word names — including Kling's cheaper audio-off tier, which a literal name check
+  would have quietly overcharged. A model/provider pair with no rate table (`kling-o3@segmind`)
+  still fails loudly instead of guessing a price.
+- **Seedance renders fail fast on an argument the chosen model does not accept** — an aspect ratio or
+  resolution outside that model's list, more reference images than it takes, or a kind of reference
+  it has no input for — instead of paying for a provider round trip to be told the same thing.
+- **Starring more characters than the chosen model can carry is now rejected before any LLM spend.**
+  Each model has its own cast ceiling (Kling 3.0 Omni 1, Seedance 2.0 2) because every starred
+  character costs reference-image slots. Over-starring used to plan a full 8-agent spec that could
+  only ever fail at the renderer; the engine now stops at the flag with a message naming the model,
+  its limit and the characters you picked, and `POST /api/runs` refuses the same request before it
+  queues anything. On Home, the **Starring** row states the cap ("up to 1 for Kling 3.0 Omni"),
+  greys out the pills you have no room for, and switching model unstars whoever no longer fits and
+  says so — the cap is now unhittable rather than explained after the fact.
+- **Aspect ratios are per model.** The app now understands six numeric ratios — `16:9`, `9:16`,
+  `1:1`, `4:3`, `3:4` and `21:9` — and each run may only pick from the ones its own model renders
+  (Kling 3.0 Omni and Seedance 2.0 keep today's three). Home's **Aspect** control offers exactly the
+  selected model's ratios and re-picks for you if a switch invalidates your choice. The stitch canvas
+  shapes itself for all six, never upscaling past the source clips. `adaptive`/`auto` are deliberately
+  not offered: the stitcher needs a deterministic ratio.
+
 ### Fixed
 - **Finalize/upscale now uses the cut you selected**, not always the newest. In review, switching to
   an earlier cut and clicking Approve (with or without upscale) previously finalized/upscaled the

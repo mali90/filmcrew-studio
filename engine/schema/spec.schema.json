@@ -7,8 +7,8 @@
   "properties": {
     "spec_version": { "const": "1.0" },
     "render_backend": {
-      "enum": ["kling", "seedance"],
-      "description": "Optional: which backend renders kling.jobs[] (default: RENDER_BACKEND / kling). The spec is backend-neutral; Seedance adds a 4s/job minimum."
+      "enum": ["kling-o3@fal", "seedance-2.0@fal", "kling", "seedance"],
+      "description": "Optional: which backend renders kling.jobs[] (default: RENDER_BACKEND / kling). The engine stamps the canonical `<model>@<provider>` id; the legacy one-word aliases stay valid forever. The spec is backend-neutral; Seedance adds a 4s/job minimum. Keep this enum in sync with ALL_BACKENDS in src/lib/render-models.js."
     },
     "project": {
       "type": "object",
@@ -18,7 +18,7 @@
         "logline": { "type": "string" },
         "format": { "type": "string", "description": "e.g. skit, explainer, product_demo, micro_story, trend, ad, pov" },
         "duration_target_s": { "type": "number", "minimum": 3, "maximum": 120 },
-        "aspect_ratio": { "enum": ["16:9", "9:16", "1:1"] },
+        "aspect_ratio": { "enum": ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"], "description": "structural superset — each model renders its own subset (aspectsFor in src/lib/render-models.js)" },
         "hook": { "type": "string" },
         "payoff": { "type": "string" },
         "cast": { "type": "array", "items": { "type": "string" } },
@@ -80,7 +80,7 @@
       "required": ["model_name", "jobs"],
       "properties": {
         "model_name": { "enum": ["kling-v3-omni", "kling-video-o1"] },
-        "aspect_ratio": { "enum": ["16:9", "9:16", "1:1"] },
+        "aspect_ratio": { "enum": ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"], "description": "structural superset — each model renders its own subset (aspectsFor in src/lib/render-models.js)" },
         "resolution": { "enum": ["4k", "1080p", "720p"] },
         "generate_audio": { "type": "boolean" },
         "elements": {
@@ -100,14 +100,14 @@
         "jobs": {
           "type": "array",
           "minItems": 1,
-          "description": "one Kling generation each (stitched in array order). ≤6 shots / ≤15s / ≤7 elements per job.",
+          "description": "one generation each (stitched in array order). Per-model caps rule (capsFor in src/lib/render-models.js): Kling ≤6 shots / ≤15s / ≤7 elements; Seedance ≤9 elements minus 1 reserved for the opening/seam frame on chained jobs. maxItems here is the structural superset.",
           "items": {
             "type": "object",
             "required": ["job_id", "shots"],
             "properties": {
               "job_id": { "type": "string" },
               "shots": { "type": "array", "items": { "type": "string" }, "maxItems": 6 },
-              "elements": { "type": "array", "items": { "type": "string" }, "maxItems": 7 },
+              "elements": { "type": "array", "items": { "type": "string" }, "maxItems": 9 },
               "first_frame": { "type": "string", "description": "optional opening-frame image path" },
               "last_frame": { "type": "string", "description": "optional closing-frame path (requires first_frame)" }
             }

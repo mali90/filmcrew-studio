@@ -24,7 +24,7 @@ like one scene. Trim ruthlessly to stay under 512 characters.
 - ≤6 storyboard segments (shots) per job
 - ≤15 seconds total per job
 - ≤512 characters per segment
-- ≤7 reference images per job
+- reference images per job: the number in the project context's "Hard caps" line (the rendering model's own; on chained Seedance jobs one slot of it belongs to the seam frame — see "Reference budget")
 
 ## Dialogue (don't write it in content_prompt)
 Spoken lines live in `audio.voice.lines[]` (set by the Sound agent), keyed by `shot_id` — never in

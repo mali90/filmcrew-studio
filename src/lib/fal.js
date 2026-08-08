@@ -12,6 +12,18 @@ import config from '../../config.js';
 import log from './logger.js';
 import { fetchJson, fetchRetry, pollUntil, writeBuffer, ensureDir, sleep } from './util.js';
 import { getCloudRef, setCloudRef } from './cloud-refs.js';
+// The submit→poll→download plumbing and its error classifiers are provider-neutral and live in
+// queue-transport.js. They are RE-EXPORTED here (same function objects, `isTransientError` under its
+// historic name `isTransientFalError`) so every existing `from './fal.js'` import is unchanged.
+import {
+  resultFileUrls, downloadResultFiles,
+  isValidationError, isTransientError as isTransientFalError, isContentPolicyError, contentPolicyError,
+} from './queue-transport.js';
+
+export {
+  resultFileUrls, downloadResultFiles,
+  isValidationError, isTransientFalError, isContentPolicyError, contentPolicyError,
+};
 
 const FAL = config.fal;
 
@@ -73,36 +85,6 @@ export async function falRef(absPath, mode = FAL.uploadMode) {
   if (!fsSync.existsSync(absPath)) throw new Error(`fal input file missing: ${absPath}`);
   const key = `fal:${path.basename(absPath)}`;
   return getCloudRef(key, absPath) ?? setCloudRef(key, await uploadToStorage(absPath), absPath);
-}
-
-// A deterministic fal rejection (bad args / validation) — surface immediately, never retry.
-const VALIDATION = /validation|unprocessable|invalid|must be|required|not (a )?valid|bad request|exceeds|unsupported/i;
-export function isValidationError(err) {
-  const m = String(err?.message ?? '');
-  return /HTTP 4(00|22)\b/.test(m) || VALIDATION.test(m);
-}
-
-// fal ALSO returns a 4xx (seen as HTTP 422 "…is not valid: timeout while fetching resource") when its
-// worker transiently fails to fetch a reference URL we just uploaded — a CDN/propagation race, NOT a
-// bad argument. Those must stay retryable despite matching VALIDATION above; a resubmit after backoff
-// normally clears it. Keep this narrow to fetch/download timeouts so real bad-arg 422s still fail fast.
-const TRANSIENT_FETCH = /timeout while fetching|fetching (the )?resource|failed to (fetch|download)|could not (fetch|download|retrieve)|unable to (fetch|download|access)|timed out fetching/i;
-export function isTransientFalError(err) {
-  return TRANSIENT_FETCH.test(String(err?.message ?? ''));
-}
-
-// A content-policy rejection: the model's moderation flagged the GENERATED video (or, rarely, an
-// input) as sensitive — a false positive on a benign prompt is common. It is NOT retried: a resubmit
-// is a fresh PAID generation, and the user's constraint is "don't add cost" on this 422. We only
-// swap the raw fal blob for a clear, actionable message. Detected across both surfaces fal uses: an
-// HTTP-4xx response body (fetchJson at line ~115) and a FAILED status blob (line ~113).
-const CONTENT_POLICY = /content_policy_violation|sensitive content|partner_validation_failed|content policy/i;
-export function isContentPolicyError(err) {
-  return CONTENT_POLICY.test(String(err?.message ?? ''));
-}
-// Keep the `content_policy_violation` token in the message so the web banner can key off it.
-function contentPolicyError(err, endpoint) {
-  return new Error(`fal ${endpoint}: the generated video was flagged by content moderation as sensitive (content_policy_violation) — usually a false positive on a benign prompt. Revise the plan to rephrase it (LLM only, no render spend), or retry to re-roll. [${String(err?.message ?? '').slice(0, 160)}]`);
 }
 
 /** Submit one queued job and resolve its result object (polls status_url → response_url). */
@@ -188,16 +170,6 @@ export async function validateFal(apiKey) {
   return { ok: true, status: res.status };
 }
 
-/** Pull every downloadable file URL out of a fal Kling result ({ video:{url} } and common variants). */
-function resultFileUrls(result) {
-  const urls = [];
-  const push = (v) => { if (v?.url) urls.push(v.url); };
-  push(result?.video);
-  for (const v of result?.videos ?? []) push(v);
-  if (typeof result?.url === 'string') urls.push(result.url);
-  return urls;
-}
-
 /**
  * Run one Kling generation on fal and download its output(s) to destDir. `args` is the endpoint's
  * arguments object (prompt|multi_prompt, elements[{frontal_image_url, reference_image_urls, voice_id}],
@@ -212,7 +184,7 @@ export async function generateKling(args, { endpoint = FAL.klingEndpoint, destDi
 /**
  * Run one Seedance 2.0 generation on fal and download its output(s) to destDir. `args` is the
  * endpoint's arguments object ({ prompt, image_urls, audio_urls?, aspect_ratio, resolution,
- * duration, generate_audio }) — built by fal-seedance.js and verified against the endpoint's fal
+ * duration, generate_audio }) — built by seedance-args.js and verified against the endpoint's fal
  * "API" tab. It must NEVER carry `seed` or `negative_prompt`: both are HTTP 422 on this endpoint
  * (and 422s are deterministic, so runFal surfaces them without retrying). `endpoint` switches
  * between the standard and mini (probe) tiers. fal result URLs EXPIRE → downloaded immediately.
@@ -220,21 +192,6 @@ export async function generateKling(args, { endpoint = FAL.klingEndpoint, destDi
 export async function generateSeedance(args, { endpoint = FAL.seedanceEndpoint, destDir, timeoutMs } = {}) {
   const result = await runFal(endpoint, args, { timeoutMs: timeoutMs ?? 1200000 });
   return downloadResultFiles(result, destDir, 'fal Seedance');
-}
-
-/** Download every file url in a completed fal result to destDir (shared by the video backends). */
-async function downloadResultFiles(result, destDir, label) {
-  const urls = resultFileUrls(result);
-  if (!urls.length) throw new Error(`${label} job produced no video url: ${JSON.stringify(result).slice(0, 400)}`);
-  ensureDir(destDir);
-  const paths = [];
-  for (const [i, url] of urls.entries()) {
-    const res = await fetchRetry(url, {}, { retries: 3 });
-    if (!res.ok) throw new Error(`${label} output download failed (${url.slice(0, 80)}): HTTP ${res.status}`);
-    const base = (() => { try { return path.basename(new URL(url).pathname) || `out_${i + 1}.mp4`; } catch { return `out_${i + 1}.mp4`; } })();
-    paths.push(await writeBuffer(path.join(destDir, base.replace(/[/\\]/g, '_')), Buffer.from(await res.arrayBuffer())));
-  }
-  return paths;
 }
 
 /** Build the fal Topaz video-upscale args object. Pure (unit-tested). */

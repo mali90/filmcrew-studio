@@ -36,13 +36,10 @@ async function main() {
   log.info(`Brief: ${brief.slice(0, 200)}${brief.length > 200 ? '…' : ''}`);
 
   const backend = str('backend');
+  // runEngine already stamps the persisted spec with the CANONICAL `<model>@<provider>` id of
+  // whatever `--backend` named (or the config default), so re-renders/assembles of this run pick
+  // the same backend without the flag — re-stamping the raw flag value here would undo that.
   const { spec, passed } = await runEngine({ brief, runDir, durationTargetS, backend, aspectRatio, cast, environment });
-  if (backend) {
-    // Stamp the explicit choice into the persisted spec so re-renders/assembles of this run
-    // pick the same backend without the flag.
-    spec.render_backend = backend;
-    await fsp.writeFile(path.join(runDir, 'spec.json'), JSON.stringify(spec, null, 2) + '\n');
-  }
   log.info(`\nEngine ${passed ? '✓ QC pass' : '✗ QC not passed'} — spec: ${path.relative(config.root, path.join(runDir, 'spec.json'))}`);
 
   let master = null;

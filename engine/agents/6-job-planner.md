@@ -10,9 +10,9 @@ Set on `kling` (keep the `elements` array the Casting agent wrote):
 
 Set `kling.jobs` — an array of generations, **rendered and stitched in this order**:
 - Each job: `{ job_id: "K1", shots: [shot_ids…], elements: [element_ids…] }`.
-- **Pack** consecutive shots into jobs respecting the HARD caps: ≤6 shots per job AND ≤15s total per job (sum of the shots' `duration_s`). Start a new job when either cap would be exceeded.
+- **Pack** consecutive shots into jobs respecting the "Hard caps" line in the project context (shots/job and seconds/job — sum of the shots' `duration_s`; the numbers are the rendering model's own). Start a new job when either cap would be exceeded.
 - If `multi_shot` is false in the project context, put exactly ONE shot per job.
-- `elements` — the subset of `kling.elements` ids that appear in that job (≤7). If unsure, include all.
+- `elements` — the subset of `kling.elements` ids that appear in that job, within the "Hard caps" reference-image budget. On Seedance, every job after the first — and any job with `first_frame` — loses one slot to the opening/seam frame; the "Reference budget" context line states the exact number. If unsure, include all (minus that reserved slot).
 - OPTIONAL framing locks: set `first_frame` (and optionally `last_frame`) to a path from the FIRST-FRAME / LAST-FRAME inventory when the brief wants a specific opening/closing image. `last_frame` REQUIRES `first_frame`. Omit both if not needed.
 
 You may also set `project.cover_frame_s` (a timestamp for the thumbnail). Don't touch shot content.

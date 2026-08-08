@@ -18,9 +18,14 @@ import config from '../../config.js';
 import log from './logger.js';
 import { buildKlingStoryboard, klingConfigFor } from './kling.js';
 import { generateKling, toFalInput, falRef } from './fal.js';
+import { characterGroups, jobSpeakers } from './cast-groups.js';
 import { resolveImage } from './elements.js';
 import { getVoiceId } from './voices.js';
 import { slug } from './util.js';
+
+// The cast helpers now live in the provider-neutral cast-groups.js (every renderer reads the spec
+// the same way). Re-exported here so no import path downstream changed.
+export { characterGroups, jobSpeakers };
 
 const MAX_REFS_PER_ELEMENT = 3; // schema: 1-3 additional reference images per element
 const MAX_VOICES_PER_JOB = 2;   // Kling hard cap: at most two bound voices per task (runbook §5)
@@ -29,41 +34,6 @@ const oneMp4 = (outs) => outs.find((p) => /\.(mp4|mov|webm)$/i.test(p)) ?? outs[
 
 /** A local image as a fal input (cached across runs in storage mode) — shared falRef, config mode. */
 const falRefFor = (absPath) => falRef(absPath, config.fal.uploadMode);
-
-/** Distinct speaker names among a job's VO lines (first-seen order, first-seen casing). Deduped by
- *  slug — the voice registry and the element/audio-ref maps all match speakers slug-wise, so "Host"
- *  and "host" are the same character and must not count twice. Shared with fal-seedance.js. */
-export function jobSpeakers(job, spec) {
-  const seen = new Map();
-  for (const l of spec.audio?.voice?.lines ?? []) {
-    if (!job.shots.includes(l?.shot_id) || !(l?.text ?? '').trim() || !l?.speaker) continue;
-    if (!seen.has(slug(l.speaker))) seen.set(slug(l.speaker), l.speaker);
-  }
-  return [...seen.values()];
-}
-
-/**
- * Group a job's spec elements into one fal element per character. If any element carries a `character`
- * field, group by it (multi-character); otherwise all of the job's images form ONE element named after
- * the job's sole speaker (or 'subject'). Each group → @Element{index} in prompt order. Shared with
- * fal-seedance.js, where each group's images become flat @ImageN refs instead.
- */
-export function characterGroups(job, spec) {
-  const roster = spec.kling.elements ?? [];
-  const ids = job.elements?.length ? job.elements : roster.map((e) => e.id);
-  const els = ids.map((id) => {
-    const e = roster.find((r) => r.id === id);
-    if (!e) throw new Error(`fal job ${job.job_id}: element id "${id}" not in spec.kling.elements`);
-    return e;
-  });
-  if (els.some((e) => e.character)) {
-    const m = new Map();
-    for (const e of els) { const c = e.character || e.id; if (!m.has(c)) m.set(c, []); m.get(c).push(e); }
-    return [...m.entries()].map(([name, list]) => ({ name, els: list }));
-  }
-  const speakers = jobSpeakers(job, spec);
-  return [{ name: speakers.length === 1 ? speakers[0] : 'subject', els }];
-}
 
 /**
  * Render ONE Kling job on fal (reference-to-video) → a single mp4 under <runDir>/<job_id>/.
@@ -75,7 +45,7 @@ export function characterGroups(job, spec) {
 // endpoint takes no seed input (every render is naturally a fresh take), and director feedback
 // reaches Kling through an engine revision (which rewrites the content prompts) instead of a
 // prompt suffix — the 512-char segment budget leaves no room for a reliable note.
-export async function renderKlingJobFal({ job, spec, runDir, seed, lowRes = false, startFrame = null, nonce = 0, feedback = '' }) {
+export async function renderKlingJobFal({ job, spec, runDir, seed, lowRes = false, startFrame = null, nonce = 0, feedback = '', backend = 'kling-o3@fal' }) {
   if (feedback) {
     log.warn(`[${job.job_id}] Kling ignores per-render director notes (its 512-char segment budget leaves no room) — route feedback through a revision (revise) so the engine rewrites the prompts instead.`);
   }
@@ -151,7 +121,7 @@ export async function renderKlingJobFal({ job, spec, runDir, seed, lowRes = fals
   // Effective prompts/elements → sidecar for review (mirrors the cloud renderer).
   try {
     fs.writeFileSync(path.join(dir, 'prompts.json'), JSON.stringify({
-      job_id: job.job_id, transport: 'fal', endpoint,
+      job_id: job.job_id, backend, transport: 'fal', endpoint,
       aspect_ratio: klingCfg.aspectRatio, generate_audio: !!klingCfg.generateAudio, total_duration_s: totalDuration,
       start_frame: textToVideo ? null : (job.first_frame ?? (startFrame ? `seam:${path.basename(startFrame)}` : null)),
       elements: textToVideo ? [] : groups.map((g, i) => ({ ref: `@Element${i + 1}`, character: g.name, images: g.els.map((e) => e.id), voice_id: getVoiceId(g.name) ?? null })),

@@ -73,7 +73,7 @@ test('seedance: --take and --feedback reach the prompt (Alternate take + Directo
     spec.render_backend = 'seedance';
     const before = fal.requests.length;
     const r = await renderJob(spec, 'K3', { runDir: take.dir, take: 2, feedback: 'less fog, warmer light' });
-    assert.equal(r.backend, 'seedance');
+    assert.equal(r.backend, 'seedance-2.0@fal'); // resolveBackend canonicalizes the legacy alias
     assert.deepEqual(r.staleDownstream, []);
     const submit = lastSubmit(before);
     assert.equal(submit.path, '/seedance-submit');

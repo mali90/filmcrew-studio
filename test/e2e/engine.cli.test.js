@@ -72,7 +72,7 @@ test('engine --backend seedance: plans, renders on the seedance endpoint, and st
     assert.equal(jsonTail(stdout).passed, true);
     // the explicit choice must persist so a later render/assemble of this run picks the same backend
     const spec = JSON.parse(fs.readFileSync(path.join(dir, 'spec.json'), 'utf8'));
-    assert.equal(spec.render_backend, 'seedance');
+    assert.equal(spec.render_backend, 'seedance-2.0@fal'); // stamped canonically, whatever alias the flag used
   } finally { cleanup(); }
 });
 
