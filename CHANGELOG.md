@@ -16,7 +16,8 @@
   Each model has its own cast ceiling (Kling 3.0 Omni 1, Seedance 2.0 2) because every starred
   character costs reference-image slots. Over-starring used to plan a full 8-agent spec that could
   only ever fail at the renderer; the engine now stops at the flag with a message naming the model,
-  its limit and the characters you picked.
+  its limit and the characters you picked, and `POST /api/runs` refuses the same request before it
+  queues anything.
 - **Aspect ratios are per model.** The app now understands six numeric ratios — `16:9`, `9:16`,
   `1:1`, `4:3`, `3:4` and `21:9` — and each run may only pick from the ones its own model renders
   (Kling 3.0 Omni and Seedance 2.0 keep today's three). The stitch canvas shapes itself for all six,
