@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { neutralizeDotenv } from '../helpers/env.js';
 import { loadGoldenSpec } from '../helpers/fixtures.js';
 neutralizeDotenv();
@@ -147,6 +148,65 @@ test('clampBytes never splits a multibyte char and is a no-op under budget', () 
   assert.ok(Buffer.byteLength(out, 'utf8') <= 21);
   assert.ok(out.endsWith('…'));
   assert.ok(!out.includes('�'));
+});
+
+// ── shot syntax: 'connectors' (Seedance 2.0) vs 'numbered' (Seedance 2.5, BOTH providers) ────────
+// Seedance 2.5's documented prompt form numbers its shots ("Shot 1: …", "Shot 2: …") instead of
+// joining them with transition connectors. Which form a model wants is DATA (caps.shotSyntax) that
+// render-seedance.js forwards — so this pure builder learns one option and no renderer forks.
+
+test('shotSyntax "numbered": Shot N: prefixes, no connector words, raw shotPrompts unchanged', () => {
+  const spec = loadGoldenSpec();
+  const { prompt, shotPrompts, totalDuration } = buildSeedanceJobPrompt(spec.kling.jobs[0], spec, {
+    refGroups: REFS, shotSyntax: 'numbered',
+  });
+  assert.equal(shotPrompts.length, 3);
+  assert.match(prompt, /\bShot 1: /);
+  assert.match(prompt, /\nShot 2: /);
+  assert.match(prompt, /\nShot 3: /);
+  assert.ok(!prompt.includes('\nCut to: '), 'numbered shots carry no connector word');
+  assert.equal((prompt.match(/Shot \d+: /g) ?? []).length, 3, 'exactly one prefix per shot');
+  // the sidecar/preview contract: shotPrompts stay the RAW blocks — the numbering is a joining
+  // decision, not part of a shot's authored prose.
+  for (const b of shotPrompts) assert.ok(!/^Shot \d+: /.test(b), `"${b.slice(0, 24)}…" must not carry the prefix`);
+  assert.ok(prompt.includes(shotPrompts[1]), 'the raw block text still appears verbatim in the prompt');
+  assert.equal(totalDuration, 13, 'the duration derivation is untouched by the syntax');
+});
+
+test('numbered mode keeps every front-matter clause and the hook directive', () => {
+  const spec = loadGoldenSpec();
+  const { prompt } = buildSeedanceJobPrompt(spec.kling.jobs[0], spec, {
+    refGroups: REFS, shotSyntax: 'numbered', startFrameRef: '[Image3]',
+  });
+  assert.match(prompt, /All shots feature the SAME character — Keeper/);
+  assert.match(prompt, /No on-screen text/);
+  assert.match(prompt, /Use \[Image3\] as the literal first frame of this clip/);
+  assert.ok(prompt.includes(HOOK_PREFIX));
+  // authored transitions are IGNORED in numbered mode — the model's own syntax wins
+  const withTrans = loadGoldenSpec();
+  withTrans.assembly = { transitions: [{ after_shot: 'S1', type: 'match_cut' }] };
+  const t = buildSeedanceJobPrompt(withTrans.kling.jobs[0], withTrans, { refGroups: REFS, shotSyntax: 'numbered' });
+  assert.ok(!t.prompt.includes('Match cut to:'));
+  assert.match(t.prompt, /\nShot 2: /);
+});
+
+// ── BYTE-COMPAT GATE for the fal Seedance 2.0 payload ────────────────────────
+// Adding an option must not move the shipping prompt by a single byte. The hash pins the golden
+// spec's prompt as it is TODAY; `shotSyntax` omitted and `shotSyntax:'connectors'` must both
+// reproduce it. If this fails, the fal 2.0 render payload changed — that is a regression, not a
+// test to update (regenerate the hash only when a deliberate prompt change is being shipped).
+test('shotSyntax omitted / "connectors" is byte-identical to the shipped Seedance 2.0 prompt', () => {
+  const spec = loadGoldenSpec();
+  const shipped = buildSeedanceJobPrompt(spec.kling.jobs[0], spec, { refGroups: REFS }).prompt;
+  const sha = createHash('sha256').update(shipped, 'utf8').digest('hex');
+  assert.equal(sha, 'c5b81fb820e5c3f8f6309d5fd118eb87ca85a626865836033615f1fe5a56c5a5', 'the fal Seedance 2.0 prompt must not move');
+  assert.equal(Buffer.byteLength(shipped, 'utf8'), 1353);
+
+  const explicit = buildSeedanceJobPrompt(spec.kling.jobs[0], spec, { refGroups: REFS, shotSyntax: 'connectors' }).prompt;
+  assert.equal(explicit, shipped, "'connectors' is the default, stated");
+  // an unknown syntax degrades to the shipping form rather than emitting a broken prompt
+  const unknown = buildSeedanceJobPrompt(spec.kling.jobs[0], spec, { refGroups: REFS, shotSyntax: 'nonsense' }).prompt;
+  assert.equal(unknown, shipped);
 });
 
 test('throws on unknown shot id / missing content_prompt', () => {
