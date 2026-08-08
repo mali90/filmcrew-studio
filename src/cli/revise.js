@@ -7,6 +7,9 @@
 //   node src/cli/revise.js --from runs/<id> --feedback "the keeper looks too young" [--out <dir>]
 //   node src/cli/revise.js --from runs/<id> --feedback "…" --scope K2      # only job K2's shots
 //   node src/cli/revise.js --from runs/<id> --feedback "…" --owners 2,3    # pin the agents yourself
+//   node src/cli/revise.js --from runs/<id> --feedback "…" --backend kling --cast keeper
+//       # switching to a lower-cap model: --cast picks who stays starred (required when the plan
+//       # stars more characters than the target model takes)
 //
 // --from may also point directly at a spec.json. Artifacts in --out (default: <from>/revisions/r<N>):
 // feedback.json, spec-rNN.json per re-run agent, spec-r07-qcN.json per QC cycle, final spec.json.
@@ -47,6 +50,7 @@ async function main() {
     owners: owners?.length ? owners : undefined,
     backend: str('backend'),
     aspectRatio: str('aspect'),
+    cast: str('cast')?.split(',').map((s) => s.trim()).filter(Boolean),
   });
 
   log.info(`\nRevision ${r.passed ? '✓ QC pass' : '✗ QC not passed'} — agents re-run: [${r.owners.join(', ')}]`);

@@ -434,7 +434,7 @@ async function routeFeedback(feedback) {
  *   a job id narrows the feedback to that job's shots without pinning the agent choice.
  * @returns {Promise<{spec:object, passed:boolean, owners:number[]}>}
  */
-export async function reviseSpec({ spec, runDir, feedback, scope, owners, brief, backend, aspectRatio, maxFix = config.engine.maxFix, maxQc = config.engine.maxQc }) {
+export async function reviseSpec({ spec, runDir, feedback, scope, owners, brief, backend, aspectRatio, cast, maxFix = config.engine.maxFix, maxQc = config.engine.maxQc }) {
   if (!feedback || !String(feedback).trim()) throw new Error('reviseSpec needs non-empty feedback (what should change?).');
   // Judge the STARTING spec by the backend it was planned for — `backend` is the revision's TARGET
   // (the switch-and-revise workflow), and judging the old spec by the new model's caps would reject
@@ -448,6 +448,17 @@ export async function reviseSpec({ spec, runDir, feedback, scope, owners, brief,
     const jobIds = (spec?.kling?.jobs ?? []).map((j) => j?.job_id).filter(Boolean);
     throw new Error(`Unknown revision scope "${scope}" — use 'whole', a spec block (${Object.keys(TAG_OWNER).join(', ')}), or a job id (${jobIds.join(', ') || 'none in this spec'}).`);
   }
+  // A backend SWITCH can strand the persisted cast over the TARGET model's cap, and buildCtx's
+  // create-time rejection offers no way out of a plan that already exists — so fail with the
+  // revise-specific remediation first: an explicit `cast` (CLI --cast) picks who stays.
+  const effCast = cast ?? (Array.isArray(spec?.cast) && spec.cast.length ? spec.cast : undefined);
+  if (!cast && effCast) {
+    const target = backend ?? spec?.render_backend ?? config.render.backend;
+    const limit = castLimitFor(target);
+    if (effCast.length > limit) {
+      throw new Error(`This plan stars ${effCast.length} characters (${effCast.join(', ')}) but ${capsFor(normalizeBackend(target).id).label} takes at most ${limit} — pass --cast <names> to choose who stays (e.g. --cast ${effCast.slice(0, limit).join(',')}).`);
+    }
+  }
   const ctx = await buildCtx({
     brief: brief ?? `${spec.project?.title ?? ''} — ${spec.project?.logline ?? ''}`.trim(),
     backend: backend ?? spec?.render_backend,
@@ -455,7 +466,7 @@ export async function reviseSpec({ spec, runDir, feedback, scope, owners, brief,
     // tell the owner agents to "fix" a 16:9 spec toward the .env's 9:16 mid-revision
     aspectRatio: aspectRatio ?? spec?.kling?.aspect_ratio ?? spec?.project?.aspect_ratio,
     durationTargetS: spec.project?.duration_target_s,
-    cast: Array.isArray(spec?.cast) && spec.cast.length ? spec.cast : undefined, // same starred profiles as the plan
+    cast: effCast, // the plan's starred profiles, unless the caller re-picked them for this revision
     environment: spec?.environment, // re-derive the same world bible from the persisted spec
   });
   ensureDir(runDir);

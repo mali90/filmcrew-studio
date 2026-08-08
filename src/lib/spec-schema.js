@@ -11,7 +11,7 @@
 // each model states its own storyboard/second/reference window, so a spec is judged against the
 // model that will actually render it. The constants below survive only as SHARED FALLBACKS for the
 // caps a model leaves undeclared (Seedance names no segment caps, and the check must not vanish).
-import { ALL_BACKENDS, capsFor } from './render-models.js';
+import { ALL_BACKENDS, BACKEND_IDS, capsFor } from './render-models.js';
 
 /**
  * The SUPERSET of aspect ratios any registered model can render — a shape check for
@@ -184,14 +184,36 @@ function validateQc(qc, P) {
  * is judged against 9 rather than the old both-backends intersection. An unknown backend THROWS —
  * silently validating against nothing would hand a bad spec to the renderer.
  */
+// The WIDEST structural window any registered model offers — the backend-less fallback for specs
+// that carry no render_backend. Built from the registry, so a new model widens it automatically;
+// family stays null (no model ⇒ no seam-slot reservation, no model-specific floors).
+const SUPERSET_CAPS = (() => {
+  const entries = BACKEND_IDS.map((id) => capsFor(id));
+  const widest = (k, dflt, pick) => entries.reduce((m, c) => pick(m, c[k] ?? dflt), dflt);
+  return {
+    id: null, family: null, label: 'any registered model',
+    maxImages: widest('maxImages', MAX_REF_IMAGES, Math.max),
+    maxSeconds: widest('maxSeconds', MAX_JOB_SECONDS, Math.max),
+    minSeconds: widest('minSeconds', 1, Math.min),
+    maxSegments: widest('maxSegments', MAX_STORYBOARDS, Math.max),
+    maxSegmentChars: widest('maxSegmentChars', MAX_SEG_CHARS, Math.max),
+    aspects: [...ASPECTS],
+  };
+})();
+
 export function validateSpec(spec, { upTo = 7, backend, chainFrames = true } = {}) {
-  // With no backend named, this validator stays the structural SUPERSET (a six-ratio spec must
-  // survive round-tripping through backend-less callers). With an EXPLICIT backend — and every
-  // render/engine path passes the resolved one — that model's own ratio list is enforced too.
-  // `chainFrames` mirrors config.kling.chainFrames (callers thread it; this module stays
-  // config-free): with chaining OFF, later jobs receive no seam frame, so no slot is reserved.
+  // Caps precedence: an EXPLICIT backend (every render/engine path passes the resolved one, and
+  // only it turns on the model-aspect gate) > the spec's own persisted render_backend (a stored
+  // 9-ref Seedance spec must not be judged by Kling's 7 just because a reader passed no options) >
+  // the true structural SUPERSET (a spec naming no backend must round-trip anything any registered
+  // model accepts). `chainFrames` mirrors config.kling.chainFrames (callers thread it; this module
+  // stays config-free): with chaining OFF, later jobs receive no seam frame, so no slot is reserved.
   const enforceModelAspects = backend !== undefined;
-  const caps = capsFor(backend ?? 'kling');
+  let caps = SUPERSET_CAPS;
+  if (backend !== undefined) caps = capsFor(backend);
+  else if (typeof spec?.render_backend === 'string') {
+    try { caps = capsFor(spec.render_backend); } catch { /* unknown value — reported as a problem below */ }
+  }
   const P = [];
   if (!spec || typeof spec !== 'object') return { ok: false, errors: ['spec: not an object'] };
   if (spec.spec_version !== '1.0') P.push('spec_version must be "1.0"');

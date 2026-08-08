@@ -200,6 +200,32 @@ test('Seedance reserves one image slot for the opening/seam frame; Kling does no
   assert.match(v3.errors.join('\n'), new RegExp(`kling\\.jobs\\[1\\]: ${max} elements exceeds the ${max - 1}-reference budget`));
 });
 
+// Backend-less caps precedence (codex round 4): a persisted spec is judged by ITS OWN backend, and
+// a spec naming none gets the widest registered window — never silently Kling's 7-reference cap.
+test('backend-less validation infers caps from spec.render_backend, else the superset', () => {
+  const max = SEEDANCE_CAPS.MAX_IMAGE_REFS;
+  const spec = loadGoldenSpec();
+  const [s1, s2] = spec.shots;
+  spec.shots = [s1, s2];
+  s1.duration_s = 5;
+  s2.duration_s = 5;
+  spec.audio.voice.lines = spec.audio.voice.lines.filter((l) => [s1.shot_id, s2.shot_id].includes(l.shot_id));
+  const tpl = spec.kling.elements[0];
+  const ids = Array.from({ length: max - 1 }, (_, i) => `ref-${i}`);
+  spec.kling.elements = ids.map((id) => ({ ...tpl, id }));
+  spec.kling.jobs = [
+    { job_id: 'K1', shots: [s1.shot_id], elements: ids.slice() },
+    { job_id: 'K2', shots: [s2.shot_id], elements: ids.slice() },
+  ];
+  // 8 refs: over Kling's 7, within Seedance's chained budget of 8.
+  spec.render_backend = 'seedance-2.0@fal';
+  assert.equal(validateSpec(spec).ok, true, 'the persisted backend judges, not the old kling default');
+  delete spec.render_backend;
+  assert.equal(validateSpec(spec).ok, true, 'no backend anywhere — the widest registered window judges');
+  spec.render_backend = 'kling';
+  assert.equal(validateSpec(spec).ok, false, 'a persisted kling spec still gets kling\'s 7');
+});
+
 // The other half of that split, stated as an assertion rather than a comment: with NO backend the
 // schema takes '21:9' from any spec (the superset), but the moment a caller NAMES the backend —
 // and every render/engine path passes the resolved one — the model's own ratio list is enforced.
