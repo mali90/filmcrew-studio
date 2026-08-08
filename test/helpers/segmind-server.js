@@ -1,0 +1,106 @@
+// Mock of the Segmind async v2 queue API on 127.0.0.1:0 — the Segmind sibling of fal-server.js, with
+// the SAME ergonomics: a mutable `opts` object a test flips between assertions, a `requests[]` log of
+// every hit, and a download route. Tests point config.segmind.baseUrl here via SEGMIND_BASE_URL.
+//
+// The real shape this mirrors (verified 2026-08-08, plan "Research facts"):
+//   POST {base}/v2/<slug>              → { request_id, status_url, response_url }   (x-api-key auth)
+//   GET  {base}/v2/requests/{id}/status→ { status: QUEUED|PROCESSING|COMPLETED|FAILED,
+//                                          metrics: { cost, remaining_credits } }   (terminal only)
+//   GET  {base}/v2/requests/{id}       → { video: { url } }  — a PUBLIC CDN url, no auth to download
+//   422 = deterministic FAILED (carries `detail`)   406 = insufficient credits   404 = record expired
+//
+// TWO properties of this mock are load-bearing and deliberate:
+//   1. `queued[]` records only jobs that were ACTUALLY accepted — an empty/`{}` POST answers 422
+//      WITHOUT queuing anything, which is what makes the validateSegmind money-safety assertion
+//      ("zero billable jobs") real rather than a tautology.
+//   2. `/dl/*` requires NO auth and records the `x-api-key` header it received (normally undefined),
+//      so a test can prove the result download never carries the key — Segmind's CDN rejects it.
+import http from 'node:http';
+
+const readBody = (req) => new Promise((r) => { let b = ''; req.on('data', (c) => (b += c)); req.on('end', () => r(b)); });
+
+/**
+ * @param {{videoBytes?:Buffer, opts?:object}} p
+ *   opts (all optional, all mutable at runtime):
+ *     authFail          — every authenticated route answers 401
+ *     validationFail    — POST /v2/:slug answers 422 (deterministic bad args; never retried)
+ *     insufficientCredits — POST answers 406 (never retried; actionable message)
+ *     submitFailTimes   — the next N POSTs answer 500 (transient; resubmit IS allowed pre-request_id)
+ *     statusFailOnce    — the FIRST status poll answers 500 (transient; only GETs may retry)
+ *     processingHits    — the first N status polls answer PROCESSING before COMPLETED
+ *     failed            — the status poll answers HTTP 422 { status:'FAILED', detail }
+ *     contentPolicy     — the status poll answers a FAILED blob carrying content_policy_violation
+ *     expired           — status/result answer 404 (the ~1h record expiry)
+ *     cost / remainingCredits — the terminal body's metrics
+ * @returns {Promise<{baseUrl:string, requests:object[], queued:object[], opts:object, close:()=>Promise<void>}>}
+ */
+export async function startSegmindServer({ videoBytes = Buffer.from('FAKE-MP4'), opts = {} } = {}) {
+  let statusHits = 0;
+  let nextId = 1;
+  const requests = [];
+  const queued = [];
+
+  const server = http.createServer(async (req, res) => {
+    const u = new URL(req.url, 'http://x');
+    const body = ['POST', 'PUT'].includes(req.method) ? await readBody(req) : '';
+    const apiKey = req.headers['x-api-key'];
+    requests.push({ method: req.method, path: u.pathname, body, apiKey, auth: req.headers.authorization });
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const json = (c, o) => { res.writeHead(c, { 'content-type': 'application/json' }); res.end(JSON.stringify(o)); };
+
+    // The public CDN: no auth, ever. Checked FIRST so an authFail run can still download.
+    if (u.pathname.startsWith('/dl/')) { res.writeHead(200, { 'content-type': 'video/mp4' }); return res.end(videoBytes); }
+
+    if (opts.authFail || !apiKey) return json(401, { detail: 'unauthorized' });
+
+    // ── submit ────────────────────────────────────────────────────────────
+    if (req.method === 'POST' && u.pathname.startsWith('/v2/')) {
+      const slug = u.pathname.slice('/v2/'.length);
+      // A deliberately empty probe (validateSegmind) is rejected on shape alone — and QUEUES NOTHING.
+      if (!body.trim() || body.trim() === '{}') return json(422, { detail: [{ loc: ['body', 'prompt'], msg: 'field required', type: 'missing' }] });
+      if (opts.submitFailTimes > 0) { opts.submitFailTimes -= 1; res.writeHead(500); return res.end('transient'); }
+      if (opts.insufficientCredits) return json(406, { detail: 'Insufficient credits to run this model.' });
+      if (opts.validationFail) return json(422, { detail: [{ loc: ['body', 'duration'], msg: 'duration must be between 4 and 30', type: 'value_error' }] });
+      const id = `sg_${nextId++}`;
+      let args;
+      try { args = JSON.parse(body); } catch { args = null; }
+      queued.push({ id, slug, args });
+      return json(200, { request_id: id, status_url: `${base}/v2/requests/${id}/status`, response_url: `${base}/v2/requests/${id}` });
+    }
+
+    // ── poll ──────────────────────────────────────────────────────────────
+    if (req.method === 'GET' && /^\/v2\/requests\/[^/]+\/status$/.test(u.pathname)) {
+      if (opts.expired) return json(404, { detail: 'Request not found' });
+      if (opts.statusFailOnce && statusHits++ === 0) { res.writeHead(500); return res.end('transient'); }
+      if (opts.processingHits > 0) { opts.processingHits -= 1; return json(200, { status: 'PROCESSING' }); }
+      if (opts.contentPolicy) {
+        return json(200, {
+          status: 'FAILED',
+          detail: [{ loc: ['body', 'generated_video'], msg: 'Output video has sensitive content.', type: 'content_policy_violation' }],
+        });
+      }
+      if (opts.failed) return json(422, { status: 'FAILED', detail: 'the model rejected the job: reference audio shorter than 2s' });
+      return json(200, {
+        status: 'COMPLETED',
+        metrics: { cost: opts.cost ?? 0.42, remaining_credits: opts.remainingCredits ?? 1234 },
+      });
+    }
+
+    // ── result ────────────────────────────────────────────────────────────
+    if (req.method === 'GET' && /^\/v2\/requests\/[^/]+$/.test(u.pathname)) {
+      if (opts.expired) return json(404, { detail: 'Request not found' });
+      return json(200, { video: { url: `${base}/dl/out.mp4` }, seed: 70000 });
+    }
+
+    res.writeHead(404); res.end();
+  });
+
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  return {
+    baseUrl: `http://127.0.0.1:${server.address().port}`,
+    requests,
+    queued,
+    opts,
+    close: () => new Promise((r) => server.close(r)),
+  };
+}
