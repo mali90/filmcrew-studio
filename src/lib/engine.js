@@ -471,11 +471,24 @@ export async function reviseSpec({ spec, runDir, feedback, scope, owners, brief,
   });
   ensureDir(runDir);
 
-  const ownerList = owners?.length
+  let ownerList = owners?.length
     ? [...new Set(owners)].sort((a, b) => a - b)
     : (ownersForScope(scope) ?? await routeFeedback(feedback));
   if (ownerList.some((o) => !Number.isInteger(o) || o < 0 || o > 6)) {
     throw new Error(`reviseSpec owners must be agent indices 0–6 (got: ${ownerList.join(', ')}).`);
+  }
+  // A backend or cast SWITCH invalidates blocks the feedback may never mention: qcLoop re-judges
+  // the jobs against the TARGET model's caps, and a re-picked cast must re-pick its element
+  // references. So Casting (4) and the Job Planner (6) always run on a switch, whatever the router
+  // chose — without this, an unrelated revision of a 9-ref Seedance plan aimed at Kling validates
+  // its way into exhausted QC retries, and a dropped character's references keep rendering.
+  const revTarget = ctx.backend; // buildCtx already canonicalized the effective target
+  const revSource = (() => { try { return normalizeBackend(spec?.render_backend).id; } catch { return revTarget; } })();
+  const castSwitched = Boolean(cast)
+    && JSON.stringify([...cast].sort()) !== JSON.stringify([...(Array.isArray(spec?.cast) ? spec.cast : [])].sort());
+  if (revTarget !== revSource || castSwitched) {
+    ownerList = [...new Set([...ownerList, 4, 6])].sort((a, b) => a - b);
+    log.info(`Revision switches ${revTarget !== revSource ? `backend to ${revTarget}` : ''}${revTarget !== revSource && castSwitched ? ' and ' : ''}${castSwitched ? 'the starred cast' : ''} — Casting and the Job Planner re-run to adapt the plan.`);
   }
 
   const jobShots = scopeShots(spec, scope);
