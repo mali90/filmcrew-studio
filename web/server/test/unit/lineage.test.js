@@ -208,3 +208,30 @@ test('lineage.js is pure: it imports no config, no fs, and no run-service', PEND
   }
   assert.ok(!/process\.env/.test(src));
 });
+
+// The same transitive leak canary the caps route gets (test/integration/runs-caps.test.js): the
+// source check above only sees lineage.js itself, so if it ever grows a relative import this walk
+// keeps the promise for the whole graph behind it.
+test("lineage.js's STATIC import graph never reaches config.js or dotenv", PENDING, () => {
+  const seen = new Set();
+  const visit = (file) => {
+    if (seen.has(file) || !fs.existsSync(file)) return;
+    seen.add(file);
+    const src = fs.readFileSync(file, 'utf8');
+    const specifiers = [
+      ...src.matchAll(/^\s*import\b[^;]*?from\s+['"]([^'"]+)['"]/gm),
+      ...src.matchAll(/^\s*export\b[^;]*?from\s+['"]([^'"]+)['"]/gm),
+      ...src.matchAll(/\bimport\(\s*['"]([^'"]+)['"]\s*\)/g), // lazy imports leak just as well
+    ].map((m) => m[1]);
+    for (const spec of specifiers) {
+      if (!spec.startsWith('.')) continue; // node: builtins and npm deps carry no repo config
+      const resolved = path.resolve(path.dirname(file), spec);
+      assert.notEqual(path.basename(resolved), 'config.js',
+        `${path.relative(HOST_ROOT, file)} imports config.js — the continuity rule must stay config-free`);
+      visit(resolved);
+    }
+    assert.ok(!/from\s+['"]dotenv/.test(src), `${path.relative(HOST_ROOT, file)} must not load dotenv`);
+  };
+  visit(path.join(HERE, '../../lib/lineage.js'));
+  assert.ok(seen.size >= 1, 'the walker found lineage.js');
+});
