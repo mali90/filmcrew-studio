@@ -102,10 +102,12 @@ describe('ReviewStage', () => {
       { id: 't4', mode: 'job', jobId: 'K2', revision: 'r1', createdAt: '2026-07-04T12:00:00.000Z' },
     ];
     renderReview(<Stage run={run} />);
+    // The 9:16 thumb is 47px wide, so the takes pill sits in the caption row in its compact form
+    // and carries the words on its tooltip (spec D8).
     // K2 has THREE clips on disk: the full render's + two re-renders (it once said "2 takes")
-    expect(screen.getByText('3 takes')).toBeInTheDocument();
+    expect(screen.getByText('×3')).toHaveAttribute('title', '3 takes');
     // K1 has exactly one (the full render) — singular, quiet
-    expect(screen.getByText('1 take')).toBeInTheDocument();
+    expect(screen.getByText('×1')).toHaveAttribute('title', '1 take');
   });
 
   it('a cascade take counts for the downstream jobs it re-rendered too', () => {
@@ -116,6 +118,6 @@ describe('ReviewStage', () => {
     ];
     renderReview(<Stage run={run} />);
     // K1 and K2 both got fresh clips from the cascade → 2 each
-    expect(screen.getAllByText('2 takes')).toHaveLength(2);
+    expect(screen.getAllByText('×2')).toHaveLength(2);
   });
 });

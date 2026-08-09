@@ -20,6 +20,10 @@ const THUMB_WIDTH: Record<Aspect, string> = {
   '4:3': 'w-[128px]', '3:4': 'w-[72px]', '21:9': 'w-[224px]',
 };
 
+/** The chip shape every status pill wears — the review strip's ContinuityBadge reuses it verbatim
+ *  so a join chip and a job chip read as the same kind of object. */
+export const PILL_CLASS = 'inline-flex h-5 items-center rounded-full px-2 text-caption font-medium';
+
 function Pill({ state }: { state: JobUiState }) {
   const cls: Record<JobUiState, string> = {
     queued: 'bg-surface-2 text-ink-muted',
@@ -29,7 +33,7 @@ function Pill({ state }: { state: JobUiState }) {
   };
   const label: Record<JobUiState, string> = { queued: 'Queued', rendering: 'Rendering', done: 'Done', failed: 'Failed' };
   return (
-    <span className={clsx('inline-flex h-5 items-center rounded-full px-2 text-caption font-medium', cls[state])}>
+    <span className={clsx(PILL_CLASS, cls[state])}>
       {label[state]}
     </span>
   );

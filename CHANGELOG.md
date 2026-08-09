@@ -31,6 +31,16 @@
   see. Take/job ids only: no filesystem path is ever serialized. The manifest gained `clipLineage`
   (which take each job's newest clip came out of, with its seams), and a composed cut now carries
   every clip's own `seamIn`/`seamOut` into `render.json` instead of dropping them.
+- **The review page draws that continuity.** The clip row under the player became a proper
+  continuity strip: each segment is a tile (fixed height, width from the run's aspect, so all six
+  ratios work), and *between* the tiles the join itself is drawn — a solid rule with a chevron where
+  a clip really does start on its neighbour's last frame, two offset stubs where that link is
+  broken, a divider where the cut is a scene cut by design, a dashed rule where the answer was
+  reconstructed. Each tile carries a chip saying which of those it is in words (*joined* · *join
+  broken* · *scene cut* · *join unknown*), and one shared line under the strip explains the hovered
+  clip's joins in plain language — no legend, no popovers. A reconstructed (pre-lineage) run says so
+  and never claims a link it cannot see. The strip no longer wraps: a chain folded onto a second
+  line lies about which clip follows which, so it scrolls instead. Read-only — nothing here spends.
 - **Boundary frames are applied honestly, per model.** One decision (`chooseSeamMode`) now answers
   "how is this clip pinned to its neighbours?" for the renderers, the prompt preview and the UI
   copy: `native` (a real first/last-frame anchor — the only mode anything may call *seamless*),

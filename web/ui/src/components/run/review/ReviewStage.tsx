@@ -1,6 +1,6 @@
 // The stage band: the current cut plays center-stage on the darkened strip, with a cut switcher
-// when there is more than one stitched master, a clip strip that seeks the master per job, and a
-// probe banner when the latest take only rendered the first job.
+// when there is more than one stitched master, a continuity strip that seeks the master per job and
+// draws how the clips join, and a probe banner when the latest take only rendered the first job.
 import { useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
@@ -10,6 +10,7 @@ import { api, ApiClientError } from '../../../api/client';
 import { useToast } from '../../ui/Toast';
 import { timeAgo } from '../../../lib/format';
 import { jobSeconds, outMediaUrl } from './lib';
+import { ClipStrip } from './ClipStrip';
 import { PaidButton } from './PaidButton';
 
 export function ReviewStage({ run, cutId, setCutId }: {
@@ -129,38 +130,7 @@ export function ReviewStage({ run, cutId, setCutId }: {
       </div>
 
       {jobs.length > 0 && (
-        <div className="mt-5 flex flex-wrap justify-center gap-2" aria-label="Clips in this cut">
-          {jobs.map((job, i) => {
-            const secs = jobSeconds(run.spec, job.jobId);
-            const takeCount = jobTakeCount(job.jobId);
-            return (
-              <button
-                key={job.jobId}
-                aria-label={`Play from ${job.jobId}`}
-                onClick={() => seekToJob(i)}
-                className="group flex flex-col items-center gap-1.5 rounded-r2 border border-line bg-surface-1 p-2 hover:border-line-strong"
-              >
-                <video
-                  preload="metadata"
-                  muted
-                  src={job.clipUrl ?? undefined}
-                  className="rounded-r1 bg-black object-cover"
-                  style={{ height: 72, aspectRatio: (run.aspect ?? '9:16').replace(':', ' / ') }}
-                  aria-hidden
-                />
-                <span className="flex items-center gap-1.5">
-                  <span className="font-mono text-caption text-ink-secondary">{job.jobId}</span>
-                  <span className="tnum text-caption text-ink-muted">{secs}s</span>
-                  {takeCount > 0 && (
-                    <span className="tnum rounded-full bg-surface-2 px-1.5 text-caption text-ink-muted">
-                      {takeCount} {takeCount === 1 ? 'take' : 'takes'}
-                    </span>
-                  )}
-                </span>
-              </button>
-            );
-          })}
-        </div>
+        <ClipStrip run={run} jobs={jobs} takeCountFor={jobTakeCount} onSeek={seekToJob} />
       )}
     </section>
   );
