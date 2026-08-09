@@ -311,9 +311,14 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
     nonce,
     start_frame: startFrameSrc ? startFrameSource : null,
     // `from`/`to` name the SOURCE and DESTINATION clips, which is what the continuity rule compares
-    // against the cut. `to` (and the closing frame this job hands forward) is only knowable once the
-    // next job has rendered, so the caller re-stamps it then.
-    seam_in: { mode: appliedIn, frame: appliedIn === 'none' ? null : startFrameSrc, from: seamInFrom ?? null },
+    // against the cut. `from` is dropped along with an unapplied opening pin: a clip that was NOT
+    // conditioned on that frame does not continue from it, and a source recorded next to
+    // mode:'none' would be read as exactly the continuation that never happened.
+    // The two ends are not symmetric: `mode` is about the pin applied to THIS render, while
+    // seam_out's `frame`/`frameSource`/`to` are the closing still handed FORWARD — only knowable
+    // once the next job has rendered, so the caller re-stamps them then (and only if that job
+    // really opened on this frame).
+    seam_in: { mode: appliedIn, frame: appliedIn === 'none' ? null : startFrameSrc, from: appliedIn === 'none' ? null : (seamInFrom ?? null) },
     seam_out: { mode: appliedOut, frame: appliedOut === 'none' ? null : endFrameSrc, frameSource: null, to: seamOutTo ?? null },
     image_refs: imageRefs,
     audio_refs: voiceRefs.map((r, i) => ({ ref: refLabel(caps, 'Audio', i + 1), speaker: r.speaker, clip: r.clip })),

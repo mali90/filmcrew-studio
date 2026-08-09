@@ -209,8 +209,12 @@ export async function renderSpec(spec, { runDir, probe = false, upscale = false,
       .catch((e) => { log.error(`[${job.job_id}] failed: ${e.message}`); return { jobId: job.job_id, error: e.message }; });
     results.push(r);
     // The previous job's sidecar was written before THIS clip existed: stamp where its closing frame
-    // actually went, so the recorded chain names both ends of every joint.
-    if (prev && r.clip) {
+    // actually went, so the recorded chain names both ends of every joint. Only when this job REALLY
+    // opened on that frame, though — chaining off, a text-to-video job, or a soft pin the reference
+    // budget dropped all leave `seamIn.from` null, and a destination recorded for a frame nothing
+    // consumed is the same false continuation claim from the other side.
+    const openedOnPrev = Boolean(prev && r.seamIn?.from?.job === prev.jobId && r.seamIn.from.take === takeId);
+    if (r.clip && openedOnPrev) {
       const to = { take: takeId, job: job.job_id, clip: r.clip };
       const p = results.find((x) => x.jobId === prev.jobId);
       if (p?.seamOut) p.seamOut.to = to;

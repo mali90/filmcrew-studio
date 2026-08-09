@@ -145,7 +145,10 @@ export async function renderKlingJobFal({ job, spec, runDir, seed, lowRes = fals
     seed: null, seed_unused: seed ?? null,
     nonce,
     start_frame: textToVideo ? null : (job.first_frame ?? (startFrame ? `seam:${path.basename(startFrame)}` : null)),
-    seam_in: { mode: seam.in.mode, frame: seam.in.mode === 'none' ? null : startFrameSrc, from: seamInFrom ?? null },
+    // A source clip is recorded only for a seam that was actually applied: a text-to-video job is
+    // handed a seam frame it cannot use, and naming its source would claim a continuation the clip
+    // does not have (see the Seedance sidecar for the two ends' asymmetry).
+    seam_in: { mode: seam.in.mode, frame: seam.in.mode === 'none' ? null : startFrameSrc, from: seam.in.mode === 'none' ? null : (seamInFrom ?? null) },
     seam_out: { mode: seam.out.mode, frame: seam.out.mode === 'none' ? null : endFrameSrc, frameSource: null, to: seamOutTo ?? null },
     image_refs: elementLegend.map((e) => ({ ref: e.ref, id: e.images[0] ?? null, character: e.character })),
     elements: elementLegend,

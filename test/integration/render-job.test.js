@@ -51,6 +51,10 @@ test('kling: middle job chains from the PREVIOUS job\'s seam frame and reports s
     assert.ok(body.start_image_url?.startsWith('data:image/png'), 'seam frame rides as the start image');
     const rj = JSON.parse(fs.readFileSync(path.join(take.dir, 'render.json'), 'utf8'));
     assert.equal(rj.jobs[0].jobId, 'K2');
+    // The take's own record of WHERE that frame came from — the source a mixed-take cut is caught by.
+    assert.equal(rj.jobs[0].seamIn.mode, 'native', 'Kling anchors the frame through its Elements set');
+    assert.equal(rj.jobs[0].seamIn.from.take, path.basename(prev.dir));
+    assert.equal(rj.jobs[0].seamIn.from.job, 'K1');
     assert.ok(fs.existsSync(path.join(take.dir, 'spec.json')), 'take dir is self-contained (assemblable)');
   } finally { take.cleanup(); prev.cleanup(); }
 });

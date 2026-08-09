@@ -142,7 +142,32 @@ test('the recorded seam mode is what was APPLIED, not what was wished for', PEND
     const s2 = sidecar(dir, 'K2');
     assert.equal(s2.seam_in.mode, 'none', 'Kling text-to-video ignores the frame — record the truth, not the intent');
     assert.equal(s2.seam_in.from, null);
+    // …and the other end of that joint must not claim it either: K1 handed its closing frame to
+    // nobody, so naming K2 as its destination would be the same false continuation, mirrored.
+    assert.equal(sidecar(dir, 'K1').seam_out.to, null, 'no destination for a frame the next job could not use');
   } finally { cleanup(); }
+});
+
+test('a seam frame that was offered and refused records no source clip', PENDING, async () => {
+  const t1 = mkTmp('t1-refused');
+  const t2 = mkTmp('t2-refused');
+  try {
+    // --seam-from finds the prior take's closing frame, so the lineage pointer EXISTS at the call
+    // site — but a text-to-video Kling job has no element to seed a frame from and pins nothing.
+    // Recording the source anyway is how a hard cut gets sold as a continuation.
+    fs.mkdirSync(path.join(t1.dir, 'K1'), { recursive: true });
+    fs.writeFileSync(path.join(t1.dir, 'K1', 'last_frame.png'), ONE_PX_PNG);
+    const spec = twoJobSpec('kling');
+    spec.kling.elements = [];
+    spec.kling.jobs.forEach((j) => { j.elements = []; });
+
+    await renderJob(spec, 'K2', { runDir: t2.dir, seamFrom: t1.dir });
+    const s2 = sidecar(t2.dir, 'K2');
+    assert.equal(s2.seam_in.mode, 'none');
+    assert.equal(s2.seam_in.frame, null);
+    assert.equal(s2.seam_in.from, null, 'an offered-and-refused frame is not a continuation');
+    assert.equal(renderJson(t2.dir).jobs[0].seamIn.from, null, 'render.json tells the same story');
+  } finally { t1.cleanup(); t2.cleanup(); }
 });
 
 test('the Kling sidecar is normalized to the Seedance superset (one reader for both)', PENDING, async () => {
