@@ -247,6 +247,56 @@ export function registerRunRoutes(app) {
     return { lines, nextCursor: ring.lastCursor };
   });
 
+  // ── Prompt preview (WS2-P3) ───────────────────────────────────────────────────────────────────
+  // The prompt service is LAZY-imported inside every handler, on purpose: it reaches into the host
+  // src/ tree for the pure composer and reads the run's .env as data, and this route file's STATIC
+  // import graph must stay config-free (test/integration/runs-caps.test.js walks it transitively).
+  const promptArgs = (run) => ({
+    root: app.ctx.root,
+    envRoot: app.ctx.envRoot,
+    childEnv: app.ctx.childEnv,
+    runDir: run.dir,
+    spec: run.spec,
+    backend: run.backend,
+    voicesDir: path.dirname(app.ctx.voicesFile),
+  });
+  const plannedRunOr409 = (id, reply) => {
+    const run = load(id);
+    if (!run) { notFound(reply); return null; }
+    if (!run.spec) throw Object.assign(new Error('no plan yet'), { statusCode: 409, hint: 'prompts are composed from the plan — wait for planning to finish' });
+    return run;
+  };
+
+  app.get('/api/runs/:id/prompts', async (req, reply) => {
+    const run = plannedRunOr409(req.params.id, reply);
+    if (!run) return reply;
+    const { buildPromptViews } = await import('../lib/prompt-service.js');
+    const { backend, jobs, prompts } = await buildPromptViews(promptArgs(run));
+    // `orphaned` is always present (empty until P4's overrides sidecar can strand one) so the UI
+    // never has to branch on its absence.
+    return { runId: run.id, backend, jobs, prompts, orphaned: [] };
+  });
+
+  app.get('/api/runs/:id/prompt', async (req, reply) => {
+    const run = plannedRunOr409(req.params.id, reply);
+    if (!run) return reply;
+    const jobId = String(req.query.job ?? '').trim();
+    const jobIds = (run.spec.kling?.jobs ?? []).map((j) => j?.job_id).filter(Boolean);
+    if (!jobId) throw Object.assign(new Error('job required'), { statusCode: 400, hint: `?job=<id> — this plan has: ${jobIds.join(', ')}` });
+    const take = req.query.take ? String(req.query.take) : null;
+    const { buildPromptView } = await import('../lib/prompt-service.js');
+    const view = await buildPromptView({ ...promptArgs(run), jobId, take });
+    if (!view) {
+      // Both misses are "no such prompt": an unknown job, or a take that never sent one for it.
+      // The hint carries the plan's job list so the caller can fix the query without a second round.
+      return reply.code(404).send({
+        error: take ? `take "${take}" has no prompt for job "${jobId}"` : `job "${jobId}" is not in this plan`,
+        hint: `this plan has: ${jobIds.join(', ') || '(no jobs)'}`,
+      });
+    }
+    return view;
+  });
+
   app.get('/api/runs/:id/estimate', async (req, reply) => {
     const run = load(req.params.id);
     if (!run) return notFound(reply);

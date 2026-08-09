@@ -177,6 +177,64 @@ export interface Estimate {
    *  ~1080 for fal's factor plan) — the review UI's "already HD" gate judges against this. */
   targetShortSide?: number;
 }
+// ── Prompt preview (WS2-P3) ──
+// What the render will be sent, composed by the SAME pure builder the renderer uses
+// (src/lib/prompt-compose.js) — so `prompt` here is byte-for-byte what leaves for the provider.
+/** One image/audio reference the prompt cites by label. Ids and names only — never a file path. */
+export interface PromptRef { ref: string; character?: string | null; role?: string }
+/** Kling composes one ≤500-byte segment per shot, so its budget (and its editor) is per segment. */
+export interface PromptSegment {
+  shotId: string | null;
+  prompt: string;
+  duration: number | null;
+  speaker: string | null;
+  bytes: number;
+  maxBytes: number | null;
+  pinBytes: number | null;
+}
+export interface PromptView {
+  jobId: string;
+  /** The model that will render it — `<model>@<provider>`, or what a past take recorded. */
+  backend: Backend | string | null;
+  /** Plain-words provider + model ("fal.ai Seedance 2.0"), for honest "what you are paying" copy. */
+  endpointLabel: string;
+  shots: string[];
+  /** 'plan' = the agents' text; 'override' = a saved edit (P4); 'take' = immutable, as sent. */
+  source: 'plan' | 'override' | 'take';
+  take: string | null;
+  /** When a 'take' view's prompts.json was written — i.e. when this text was sent. */
+  sentAt: string | null;
+  /** True when the plan moved under a saved override (fingerprint mismatch). */
+  stale: boolean;
+  /** Hash of exactly the authored inputs this prompt is composed from; null for a past take. */
+  fingerprint: string | null;
+  prompt: string;
+  /** Kling only — one entry per shot; null on Seedance (one prompt per job). */
+  segments: PromptSegment[] | null;
+  /** Seedance only — the raw per-shot blocks before they are joined. */
+  shotPrompts: string[] | null;
+  refs: PromptRef[];
+  bytes: number;
+  /** The byte budget the meter draws against; null for a past take (its budget isn't recorded). */
+  maxBytes: number | null;
+  /** Kling's per-segment cap, when the budget is per segment. */
+  segmentMaxBytes: number | null;
+  /** Bytes the SYSTEM already owns (front matter, guards, frame pins) — an edit cannot spend them. */
+  pinBytes: number | null;
+  /** How each boundary will be pinned: only 'native' may ever be called seamless in UI copy. */
+  seam?: { in: string | null; out: string | null };
+  /** Set when this job cannot be composed at all (the render would fail on the same message). */
+  error?: string;
+}
+export interface PromptsResponse {
+  runId: string;
+  backend: Backend | string;
+  jobs: string[];
+  prompts: PromptView[];
+  /** Saved overrides whose job the plan no longer has — kept, never silently discarded (P4). */
+  orphaned: { jobId: string }[];
+}
+
 export interface SetupStatus {
   envSource: '.env' | '.env.example' | 'none';
   llm: { provider: string; transport: string; model: string | null; hasKey: boolean };

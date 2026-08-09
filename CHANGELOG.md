@@ -3,6 +3,20 @@
 ## Unreleased
 
 ### Added
+- **The prompt each segment will be sent is now readable from the server — composed by the same
+  builder the renderer uses.** `GET /api/runs/:id/prompts` (every job of the current plan) and
+  `GET /api/runs/:id/prompt?job=K2` return the exact text that would leave for the provider, the
+  reference legend it cites (`@Image1`, `@Audio1`, the boundary pins), its UTF-8 byte count, the
+  model's byte budget, and how much of that budget the SYSTEM already owns (front matter, guards,
+  frame pins) so an editor can draw a real meter. This is not a second implementation: the server
+  calls `src/lib/prompt-compose.js` — the same pure function the renderers call — and an
+  integration test composes the same job independently and compares buffers, because a preview that
+  differs from what is sent by a single byte is a lie. `&take=t2` serves that take's `prompts.json`
+  verbatim instead: what was actually sent, when, and to which provider, never recomposed (the
+  settings may have moved since). Reading spends nothing — no model is called and no render is
+  queued. The run's `.env` is read as **data** for the byte budgets and never sourced into the
+  server process, and the service is lazy-imported so web/server's static import graph stays
+  config-free.
 - **Per-joint seam lineage — every clip now records which clip it continues from.** `prompts.json`
   becomes `schema: 2` on both renderers and carries `seam_in { mode, frame, from: {take, job, clip} }`
   and `seam_out { mode, frame, frameSource, to }`; `render.json` carries the same per job, and it

@@ -76,10 +76,14 @@ async function plannedRun(idea = 'a lighthouse keeper on his last night') {
   return runId;
 }
 
-// Arm on the read endpoint existing at all.
+// Two arming probes, because read (P3) and edit (P4) ship in that order and each phase has to be
+// independently green: the read specs arm on the read endpoint answering, the edit specs on the
+// write route existing at all (a route-table question, so no assumption about its error contract).
 const probeRun = await plannedRun('an arming probe');
 const READY = (await get(`/api/runs/${probeRun}/prompts`)).statusCode === 200;
-const PENDING = pending(READY, 'WS2-P3/P4: GET/PUT/DELETE /api/runs/:id/prompt');
+const PENDING = pending(READY, 'WS2-P3: GET /api/runs/:id/prompt|/prompts');
+const EDIT_READY = READY && app.hasRoute({ method: 'PUT', url: '/api/runs/:id/prompt' });
+const PENDING_EDIT = pending(EDIT_READY, 'WS2-P4: PUT/DELETE /api/runs/:id/prompt');
 
 // ── P3: read ────────────────────────────────────────────────────────────────────────────────────
 
@@ -167,7 +171,7 @@ test('THE CONTRACT: the previewed prompt is byte-identical to the prompt on the 
 
 // ── P4: edit ────────────────────────────────────────────────────────────────────────────────────
 
-test('PUT /prompt writes an override sidecar, flips source to "override", and renders nothing', PENDING, async () => {
+test('PUT /prompt writes an override sidecar, flips source to "override", and renders nothing', PENDING_EDIT, async () => {
   const runId = await plannedRun();
   const jobId = (await get(`/api/runs/${runId}/prompts`)).json().prompts[0].jobId;
   const before = fal.requests.length;
@@ -185,7 +189,7 @@ test('PUT /prompt writes an override sidecar, flips source to "override", and re
   assert.ok(after.prompt.includes(edited), 'the user\'s words are in the prompt');
 });
 
-test('an override NEVER loses the system pins — the words are the user\'s, the contract is ours', PENDING, async () => {
+test('an override NEVER loses the system pins — the words are the user\'s, the contract is ours', PENDING_EDIT, async () => {
   const runId = await plannedRun();
   const { prompts } = (await get(`/api/runs/${runId}/prompts`)).json();
   const jobId = prompts[0].jobId;
@@ -196,7 +200,7 @@ test('an override NEVER loses the system pins — the words are the user\'s, the
   assert.ok(after.prompt.includes('just this sentence'));
 });
 
-test('an over-budget edit is REJECTED with the numbers, never silently truncated', PENDING, async () => {
+test('an over-budget edit is REJECTED with the numbers, never silently truncated', PENDING_EDIT, async () => {
   const runId = await plannedRun();
   const { prompts } = (await get(`/api/runs/${runId}/prompts`)).json();
   const jobId = prompts[0].jobId;
@@ -207,7 +211,7 @@ test('an over-budget edit is REJECTED with the numbers, never silently truncated
   assert.equal((await get(`/api/runs/${runId}/prompt?job=${jobId}`)).json().source, 'plan', 'nothing was saved');
 });
 
-test('DELETE /prompt discards the override and restores the agents\' text exactly', PENDING, async () => {
+test('DELETE /prompt discards the override and restores the agents\' text exactly', PENDING_EDIT, async () => {
   const runId = await plannedRun();
   const { prompts } = (await get(`/api/runs/${runId}/prompts`)).json();
   const jobId = prompts[0].jobId;
@@ -221,7 +225,7 @@ test('DELETE /prompt discards the override and restores the agents\' text exactl
   assert.equal(Buffer.compare(Buffer.from(restored.prompt, 'utf8'), Buffer.from(original, 'utf8')), 0);
 });
 
-test('an override SURVIVES a revise, and the fingerprint marks it stale so the user is told', PENDING, async () => {
+test('an override SURVIVES a revise, and the fingerprint marks it stale so the user is told', PENDING_EDIT, async () => {
   const runId = await plannedRun();
   const { prompts } = (await get(`/api/runs/${runId}/prompts`)).json();
   const jobId = prompts[0].jobId;
@@ -237,7 +241,7 @@ test('an override SURVIVES a revise, and the fingerprint marks it stale so the u
   assert.ok(after.planPrompt, 'the NEW plan text is offered alongside, so "Refresh plan" has something to load');
 });
 
-test('an override reaches the wire, and is snapshotted into the take dir at enqueue', PENDING, async () => {
+test('an override reaches the wire, and is snapshotted into the take dir at enqueue', PENDING_EDIT, async () => {
   const runId = await plannedRun();
   const { prompts } = (await get(`/api/runs/${runId}/prompts`)).json();
   const jobId = prompts[0].jobId;
@@ -258,7 +262,7 @@ test('an override reaches the wire, and is snapshotted into the take dir at enqu
   assert.ok(JSON.stringify(JSON.parse(fs.readFileSync(snap, 'utf8'))).includes(marker));
 });
 
-test('a past take\'s prompt is served "as sent" and can never be edited', PENDING, async () => {
+test('a past take\'s prompt is served "as sent" and can never be edited', PENDING_EDIT, async () => {
   const runId = await plannedRun();
   await post(`/api/runs/${runId}/render`, { mode: 'full' });
   const run = await waitForStatus(runId, ['review', 'error'], 120000);
@@ -274,7 +278,7 @@ test('a past take\'s prompt is served "as sent" and can never be edited', PENDIN
   assert.equal(r.statusCode, 409, 'past takes are immutable — the UI offers "Use this draft" instead');
 });
 
-test('an override for a job the plan no longer has is KEPT and reported as orphaned', PENDING, async () => {
+test('an override for a job the plan no longer has is KEPT and reported as orphaned', PENDING_EDIT, async () => {
   const runId = await plannedRun();
   const sidecarPath = path.join(runsDir, runId, 'prompt-overrides.json');
   const jobId = (await get(`/api/runs/${runId}/prompts`)).json().prompts[0].jobId;
@@ -288,7 +292,7 @@ test('an override for a job the plan no longer has is KEPT and reported as orpha
   assert.ok(!all.prompts.some((p) => p.jobId === 'K9'), 'but it is not rendered either');
 });
 
-test('a prompt-override SSE event is emitted on save and on discard', PENDING, async () => {
+test('a prompt-override SSE event is emitted on save and on discard', PENDING_EDIT, async () => {
   const runId = await plannedRun();
   const jobId = (await get(`/api/runs/${runId}/prompts`)).json().prompts[0].jobId;
 
