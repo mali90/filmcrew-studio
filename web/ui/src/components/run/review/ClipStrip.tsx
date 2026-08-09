@@ -68,9 +68,6 @@ function Connector({ kind, size }: { kind: ConnectorKind; size: TileSize }) {
   );
 }
 
-const clipStateOf = (job: JobView, run: RunDetail): SegmentClipState =>
-  (job.error ? 'failed' : !job.clipExists && run.status === 'rendering' ? 'rendering' : 'done');
-
 export function ClipStrip({ run, jobs, takeCountFor, onSeek }: {
   run: RunDetail;
   jobs: JobView[];
@@ -91,7 +88,11 @@ export function ClipStrip({ run, jobs, takeCountFor, onSeek }: {
   const entryFor = (job: JobView, i: number): ContinuityEntry | null =>
     (byJobId.size ? byJobId.get(job.jobId) ?? null : entries[i] ?? null);
 
-  const states = jobs.map((job) => clipStateOf(job, run));
+  // Mirrors JobCards: the first clip that is neither on disk nor failed is the one actually
+  // rendering — the ones behind it are queued, and a sweep on a queued clip would be a lie.
+  const activeIdx = run.status === 'rendering' ? jobs.findIndex((j) => !j.clipExists && !j.error) : -1;
+  const states: SegmentClipState[] = jobs.map((job, i) =>
+    (job.error ? 'failed' : i === activeIdx ? 'rendering' : 'done'));
   const kinds = jobs.map((job, i) => (i === 0 ? null : jointKindOf(entryFor(job, i))));
 
   /** The sentence for one tile: how it joins backwards, and how the next clip joins to it. */
