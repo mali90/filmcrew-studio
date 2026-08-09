@@ -139,4 +139,41 @@ describe('ReviewStage', () => {
     // K1 is on the agents' words, so it wears nothing.
     expect(within(screen.getByTestId('segment-tile-K1')).queryByLabelText('prompt edited')).not.toBeInTheDocument();
   });
+
+  // Spec D25 — a reopened run looks exactly like one that never left review, so the banner slot has
+  // to say why the user is back and what is still on disk.
+  it('a reopened run carries the re-entry notice in the banner slot, and never toasts it', () => {
+    const run = makeRun('review');
+    run.manifest!.approved = { cut: 'c1', final: '/abs/out/ocean-final.mp4', upscaled: false, at: '2026-07-04T10:05:00.000Z' };
+    run.manifest!.reopenedAt = '2026-07-04T11:00:00.000Z';
+
+    const { container } = renderReview(<Stage run={run} />);
+
+    const notice = screen.getByTestId('reopened-notice');
+    expect(notice).toHaveClass('border', 'border-line', 'bg-surface-1');
+    const text = notice.textContent ?? '';
+    expect(text).toMatch(/^Reopened for changes\./);
+    expect(text).toMatch(/ocean-final\.mp4 is still on disk/);
+    expect(text).toMatch(/approving again writes a new final and keeps the old one/);
+
+    // the notice sits above the video, in the slot the probe banner uses — not over it
+    expect(notice.compareDocumentPosition(screen.getByTestId('master-video')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    // Don't #11: this is standing state, not an event — a toast would expire exactly when needed
+    expect(document.querySelector('[aria-live="polite"]')?.childElementCount ?? 0).toBe(0);
+    expect(container.textContent).not.toMatch(/free/i);
+  });
+
+  it('a run that was delivered again since the reopen shows no notice', () => {
+    const run = makeRun('review');
+    run.manifest!.reopenedAt = '2026-07-04T11:00:00.000Z';
+    run.manifest!.approved = { cut: 'c1', final: '/abs/out/ocean-final.mp4', upscaled: false, at: '2026-07-04T12:00:00.000Z' };
+    renderReview(<Stage run={run} />);
+    expect(screen.queryByTestId('reopened-notice')).not.toBeInTheDocument();
+  });
+
+  it('a run that was never delivered shows no notice', () => {
+    renderReview(<Stage run={makeRun('review')} />);
+    expect(screen.queryByTestId('reopened-notice')).not.toBeInTheDocument();
+  });
 });

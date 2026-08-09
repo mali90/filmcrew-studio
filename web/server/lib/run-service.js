@@ -461,9 +461,21 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
 
   /**
    * Tell every open tab that a prompt edit landed. Free and local — no render, no spend — so this
-   * broadcasts a fact, never a cost.
+   * broadcasts a fact, never a cost. It also files the edit as takes-adjacent lineage: the words a
+   * render is about to send changed, which is exactly what the History panel exists to show, and
+   * `takes[].promptSource` only says a take DID render an override, never when the decision was
+   * made. Best effort on purpose — a CLI-created run has no manifest, and the edit is already
+   * saved by the time we get here, so failing to note it must never fail the edit.
    */
   function promptOverrideChanged(runId, { jobId, action, source, stale = false }) {
+    const kind = action === 'discarded' ? 'prompt-discard' : 'prompt-edit';
+    try {
+      updateManifest(dirFor(runId), (m) => {
+        m.history = Array.isArray(m.history) ? m.history : [];
+        m.history.push({ id: `${kind}-${m.history.filter((h) => h?.kind === kind).length + 1}`, kind, job: jobId, at: now().toISOString() });
+        return m;
+      });
+    } catch { /* no manifest (a CLI run) — the event below is still the fact that matters */ }
     bus.emit(runId, { type: 'prompt-override', jobId, action, source, stale: !!stale });
   }
 

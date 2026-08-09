@@ -68,8 +68,10 @@ export interface Manifest {
   /** Every delivery this run has made, oldest first. `replacedBy` names the entry that superseded
    *  it — the file itself is never deleted, so an older final stays downloadable. */
   finals?: { id: string; cut: string | null; final: string; upscaled: boolean; at: string; replacedBy?: string }[];
-  /** Lifecycle markers for the History panel to list beside takes/cuts/revisions (so far: reopens). */
-  history?: { id: string; kind: 'reopen'; final?: string; at: string }[];
+  /** Lifecycle markers for the History panel to list beside takes/cuts/revisions: reopens, and the
+   *  prompt edits that change which words the NEXT render sends (`job` names the segment). Saving
+   *  or discarding an edit is a local file write — these rows record a change of intent, not spend. */
+  history?: { id: string; kind: 'reopen' | 'prompt-edit' | 'prompt-discard'; job?: string; final?: string; at: string }[];
   lastError: RunError | null;
   activeJob: { kind: ActionKind; pid: number; startedAt: string; queueId?: string } | null;
   jobClips?: Record<string, string>;

@@ -17,6 +17,16 @@
   path simply works again. Reopening is refused while a paid upscale is still running (that job is
   writing the very file being delivered) and on a run that was never approved. The reopen itself
   costs nothing at all: one line written to the run's manifest, no render, no model call.
+  On screen, the way back is in the deliver card itself rather than behind an overflow menu:
+  *Make changes* asks once, and the entire question is about what does **not** happen — it names
+  your file and says it stays on disk and stays downloadable. A run that has delivered more than
+  once shows which final is on screen and what it replaced (`final-2 · replaced final-1`), with
+  every earlier file one click away under *Earlier finals*. Coming back in, the run explains itself
+  where you land instead of in a toast that expires six seconds later: a standing notice above the
+  stage names the file still on disk, and the approve button reads *Replace final* with the same
+  promise underneath it. The history panel gains a leading glyph column and the rows that are not
+  renders — what was delivered and whether it was upscaled, when the run was reopened, and every
+  prompt edit or discard along the way.
 - **Re-rendering one segment now shows you what it will do to its two joins, in plain words, before
   it spends anything.** Picking a clip in the review strip (or the rail's *Re-render one segment*
   row — both open the same dialog and post to the same endpoint) shows the neighbour it would start

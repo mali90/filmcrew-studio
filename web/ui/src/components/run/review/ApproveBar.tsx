@@ -1,5 +1,9 @@
 // The rail's bottom card: an optional Topaz upscale toggle (priced) and the approve action.
 // Approving without upscale is free — assembly already happened; approve only finalizes.
+//
+// On a REOPENED run the same action delivers a second time, so it says so: "Replace final" is a
+// truthful promise only because replacing costs nothing and destroys nothing — the file the user
+// already has stays on disk, named in the caption (spec D26).
 import { useId, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import type { RunDetail } from '../../../../../shared/api-types';
@@ -9,6 +13,7 @@ import { useToast } from '../../ui/Toast';
 import { usd } from '../../../lib/format';
 import { PaidButton } from './PaidButton';
 import { UnknownPriceNote } from '../../ui/UnknownPriceNote';
+import { reopenedFinal } from './lib';
 
 export function ApproveBar({ run, cutId = null }: { run: RunDetail; cutId?: string | null }) {
   const { toast } = useToast();
@@ -48,9 +53,19 @@ export function ApproveBar({ run, cutId = null }: { run: RunDetail; cutId?: stri
   // the real intent so the button, label, price and payload never disagree with the checkbox.
   const effectiveUpscale = upscale && !alreadyHD;
 
+  // The delivered file this run reopened from — null on a run that was never delivered, and null
+  // again the moment a newer approval supersedes it. It is what turns "Approve" into "Replace
+  // final", and the only thing allowed to name a filename in this card.
+  const reopened = reopenedFinal(run.manifest);
+
   const approve = useMutation({
     mutationFn: () => api.approve(run.id, effectiveUpscale, submitCut),
-    onSuccess: () => toast({ kind: 'success', text: effectiveUpscale ? 'Approved — upscaling now.' : 'Approved — finalizing now.' }),
+    onSuccess: () => toast({
+      kind: 'success',
+      text: effectiveUpscale
+        ? (reopened ? 'Replacing the final — upscaling now.' : 'Approved — upscaling now.')
+        : (reopened ? 'Replacing the final — the old one stays on disk.' : 'Approved — finalizing now.'),
+    }),
     onError: (e) => toast({ kind: 'error', text: e instanceof ApiClientError ? `${e.message} — ${e.hint}` : e.message }),
   });
 
@@ -58,7 +73,7 @@ export function ApproveBar({ run, cutId = null }: { run: RunDetail; cutId?: stri
   // so the toggle may be priceable, unknown, or (already HD) irrelevant.
   const unknownPrice = upscaleEstimate.data?.unknownPrice ?? null;
 
-  const label = `Approve${effectiveUpscale ? ' & upscale' : ''}`;
+  const label = `${reopened ? 'Replace final' : 'Approve'}${effectiveUpscale ? ' & upscale' : ''}`;
 
   return (
     <section className="rounded-r3 border border-line border-t-line-strong bg-surface-1 p-4">
@@ -112,9 +127,15 @@ export function ApproveBar({ run, cutId = null }: { run: RunDetail; cutId?: stri
 
       {effectiveUpscale && unknownPrice && <UnknownPriceNote hint={unknownPrice.hint} />}
 
+      {/* "Approving is free" is dropped the moment the upscale is on — that variant bills Topaz.
+          The reopened wording names the file so "replace" can never be read as "delete". */}
       <p className="mt-2 text-caption text-ink-muted">
-        {effectiveUpscale ? '' : 'Approving is free. '}Assembly already happened — approve only finalizes
-        (and optionally upscales).
+        {effectiveUpscale ? '' : 'Approving is free. '}
+        {reopened ? (
+          <>This writes a new final; <span className="font-mono">{reopened.fileName}</span> stays on disk.</>
+        ) : (
+          'Assembly already happened — approve only finalizes (and optionally upscales).'
+        )}
       </p>
     </section>
   );

@@ -1,5 +1,5 @@
 // Small pure helpers shared by the review/deliver components.
-import type { ContinuityEntry, ProductionSpec } from '../../../../../shared/api-types';
+import type { ContinuityEntry, Manifest, ProductionSpec } from '../../../../../shared/api-types';
 import type { PinStrength } from '../../../../../shared/render-models';
 
 export type { PinStrength };
@@ -148,4 +148,34 @@ export function boundaryPlanSentence({ jobId, prev, next, boundaries, pinStrengt
     ? `Nothing pins its start, so the join from ${prevId} stays a scene cut.`
     : `${jobId} opens the cut, so nothing pins its start.`;
   return `${head} It will ${pinStrength === 'native' ? 'end on' : 'aim to end on'} ${nextId}'s opening frame — that join is ${words}.`;
+}
+
+// ── Delivery lifecycle (WS2-P6) ──────────────────────────────────────────────────────────────────
+// Reopening a delivered run deletes nothing and unlinks nothing: `approved` and the file it points
+// at stay exactly where they are until a NEWER approval supersedes them. So "is this run back in
+// review?" is a question about two timestamps, and the answer must be drawn the same way here as
+// `finalizedFinal()` draws it in web/server/lib/run-scan.js — one rule, two sides.
+
+/** The final a reopened run still holds on disk, or null when the run was never reopened (or has
+ *  already been delivered again since). `fileName` is what the copy names, never a host path. */
+export function reopenedFinal(manifest: Manifest | null | undefined): { path: string; fileName: string; at: string } | null {
+  const reopenedAt = manifest?.reopenedAt;
+  const approved = manifest?.approved;
+  if (!reopenedAt || !approved?.final) return null;
+  if (String(approved.at ?? '') > String(reopenedAt)) return null; // delivered again since the reopen
+  return { path: approved.final, fileName: basename(approved.final), at: reopenedAt };
+}
+
+/** One delivery, ready to list: the id the manifest gave it, its on-disk name and a media URL that
+ *  still resolves — an older final is never deleted, so it stays downloadable forever. */
+export interface DeliveredFinal {
+  id: string; fileName: string; url: string; upscaled: boolean; at: string; replacedBy?: string;
+}
+
+/** This run's deliveries, oldest first, with the current one last. Empty for a run delivered before
+ *  `finals` existed — absence means "no history recorded", never "nothing was delivered". */
+export function deliveredFinals(manifest: Manifest | null | undefined): DeliveredFinal[] {
+  return (manifest?.finals ?? [])
+    .filter((f) => f?.final)
+    .map((f) => ({ id: f.id, fileName: basename(f.final), url: outMediaUrl(f.final), upscaled: !!f.upscaled, at: f.at, replacedBy: f.replacedBy }));
 }

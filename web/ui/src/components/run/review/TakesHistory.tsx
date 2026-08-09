@@ -1,12 +1,18 @@
-// The quiet lineage list: revisions, takes and cuts interleaved chronologically, so the user can
-// read how the current cut came to be. Dense, mono ids, timeAgo on the right.
-import { useMemo } from 'react';
+// The quiet lineage list: revisions, takes, cuts, deliveries and the lifecycle markers between them,
+// interleaved chronologically, so the user can read how the current cut came to be. Dense, mono ids,
+// timeAgo on the right.
+//
+// A leading glyph column marks the rows that are not routine work (spec D27): a delivery, a reopen,
+// a prompt edit. The ordinary take/cut/revision rows keep the column's width and stay blank — the
+// marked rows are the ones a reader scans for, and giving every row an icon would hide them again.
+import { useMemo, type ReactNode } from 'react';
+import { BadgeCheck, PenLine } from 'lucide-react';
 import type { RunDetail } from '../../../../../shared/api-types';
 import { AGENTS } from '../../../../../shared/api-types';
 import { usd, timeAgo } from '../../../lib/format';
 import { truncate } from './lib';
 
-interface HistoryItem { key: string; text: string; at: string }
+interface HistoryItem { key: string; text: string; at: string; glyph?: ReactNode }
 
 type Cut = NonNullable<RunDetail['manifest']>['cuts'][number];
 
@@ -18,6 +24,25 @@ function stitchLabel(cut: Cut) {
   }
   if (cut.stitcher === 'concat') return 'stitched — hard cut at each seam (local, free)';
   return 'stitched';
+}
+
+/** The row for one lifecycle marker, or null for a kind this build does not draw yet — a manifest
+ *  written by a newer server must never break the panel that reads it. */
+function markerRow(h: NonNullable<NonNullable<RunDetail['manifest']>['history']>[number]): HistoryItem | null {
+  if (h.kind === 'reopen') {
+    return { key: `hist-${h.id}`, text: 'reopened for changes', at: h.at, glyph: <PenLine size={11} className="text-status-warn" aria-hidden /> };
+  }
+  // A prompt edit changes the words the NEXT render will send — free to save, and no clip moved.
+  if (h.kind === 'prompt-edit' || h.kind === 'prompt-discard') {
+    const what = h.kind === 'prompt-edit' ? 'prompt edited' : 'prompt edit discarded';
+    return {
+      key: `hist-${h.id}`,
+      text: h.job ? `${h.job} ${what}` : what,
+      at: h.at,
+      glyph: <PenLine size={11} className="text-accent" aria-hidden />,
+    };
+  }
+  return null;
 }
 
 export function TakesHistory({ run }: { run: RunDetail }) {
@@ -42,6 +67,15 @@ export function TakesHistory({ run }: { run: RunDetail }) {
         text: `${c.id} · ${stitchLabel(c)}`,
         at: c.createdAt,
       })),
+      // Deliveries (WS2-P6). Absent on runs delivered before `finals` existed, which is why nothing
+      // is derived from `approved` here: a missing history is "not recorded", not "never delivered".
+      ...(m.finals ?? []).map((f) => ({
+        key: `final-${f.id}`,
+        text: `${f.id} · delivered${f.upscaled ? ' · upscaled' : ''}`,
+        at: f.at,
+        glyph: <BadgeCheck size={11} className="text-status-done" aria-hidden />,
+      })),
+      ...(m.history ?? []).map(markerRow).filter((x): x is HistoryItem => x !== null),
     ];
     return all.sort((a, b) => a.at.localeCompare(b.at));
   }, [run.manifest]);
@@ -55,7 +89,10 @@ export function TakesHistory({ run }: { run: RunDetail }) {
         <ul className="mt-2 flex flex-col gap-1.5">
           {items.map((item) => (
             <li key={item.key} className="flex items-baseline justify-between gap-3 text-dense text-ink-secondary">
-              <span className="min-w-0 truncate font-mono">{item.text}</span>
+              <span className="flex min-w-0 items-baseline gap-1.5">
+                <span className="flex w-[11px] shrink-0 justify-center self-center">{item.glyph}</span>
+                <span className="min-w-0 truncate font-mono">{item.text}</span>
+              </span>
               <span className="tnum shrink-0 text-caption text-ink-muted">{timeAgo(item.at)}</span>
             </li>
           ))}

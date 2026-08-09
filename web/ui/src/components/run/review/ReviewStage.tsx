@@ -9,7 +9,7 @@ import type { RunDetail } from '../../../../../shared/api-types';
 import { api, ApiClientError } from '../../../api/client';
 import { useToast } from '../../ui/Toast';
 import { timeAgo } from '../../../lib/format';
-import { jobSeconds, outMediaUrl } from './lib';
+import { jobSeconds, outMediaUrl, reopenedFinal } from './lib';
 import { ClipStrip } from './ClipStrip';
 import { PaidButton } from './PaidButton';
 import { usePlanPrompts } from './PromptSheet';
@@ -34,6 +34,11 @@ export function ReviewStage({ run, cutId, setCutId }: {
     : selected?.master ? outMediaUrl(selected.master) : undefined;
 
   const isProbe = run.manifest?.takes.at(-1)?.mode === 'probe';
+  // A run that came back here from the deliver card looks identical to one that never left — so the
+  // banner slot says why the user is here and what is still on disk (spec D25). It is a standing
+  // fact about the run's state, not an event, so it is written on the page and never toasted
+  // (Don't #11): a toast would vanish six seconds after the one moment it was needed.
+  const reopened = reopenedFinal(run.manifest);
   const fullEstimate = useQuery({
     queryKey: ['estimate', run.id, 'full'],
     queryFn: () => api.estimate(run.id, { mode: 'full' }),
@@ -70,6 +75,15 @@ export function ReviewStage({ run, cutId, setCutId }: {
 
   return (
     <section className="relative -mx-6 rounded-r3 bg-stage px-6 py-8" aria-label="Review stage">
+      {reopened && (
+        <div className="mb-5 rounded-r2 border border-line bg-surface-1 px-4 py-3" data-testid="reopened-notice">
+          <p className="text-dense text-ink">
+            Reopened for changes. <span className="font-mono">{reopened.fileName}</span> is still on disk — approving
+            again writes a new final and keeps the old one.
+          </p>
+        </div>
+      )}
+
       {isProbe && (
         <div className="mb-5 flex flex-wrap items-center gap-3 rounded-r2 border border-line bg-surface-1 px-4 py-3">
           <p className="text-dense text-ink">Probe take — first job only, low cost.</p>
