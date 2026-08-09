@@ -560,12 +560,19 @@ test('estimate: a Segmind-backed run answers 200 with an unknown price, never a 
 
   // The approve-time upscale rides the same run, and `auto` bills wherever a key actually exists:
   // with no Segmind key this install can only reach fal's Topaz, and that fal price is the honest
-  // one. Give it a Segmind key and the upscale moves home — where the rate is not on file.
+  // one. NOTE the estimate judges keys by the CHILD's precedence — this harness pins
+  // SEGMIND_API_KEY='' in childEnv (so a test can never bill the real API), and dotenv never
+  // overwrites an existing variable, so writing a key into .env changes NOTHING for the child and
+  // must change nothing for the estimate either. An EXPLICIT provider pick, however, short-circuits
+  // before any key check — that is how this run moves home, where the rate is not on file.
   const envFile = path.join(envRoot, '.env');
   const original = fs.readFileSync(envFile, 'utf8');
   try {
     assert.ok((await get(`/api/runs/${runId}/estimate?mode=upscale`)).json().totalUsd > 0, 'keyless-Segmind upscales on fal, at fal money');
     fs.writeFileSync(envFile, `${original}SEGMIND_API_KEY=seg-test-key\n`);
+    const stillFal = await get(`/api/runs/${runId}/estimate?mode=upscale`);
+    assert.ok(stillFal.json().totalUsd > 0, 'the childEnv pin wins exactly as it does in the spawned CLI');
+    fs.writeFileSync(envFile, `${original}UPSCALE_PROVIDER=segmind\n`);
     const up = await get(`/api/runs/${runId}/estimate?mode=upscale`);
     assert.equal(up.statusCode, 200, up.body);
     assert.equal(up.json().totalUsd, null);
