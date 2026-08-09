@@ -209,8 +209,8 @@ export function registerRunRoutes(app) {
       cascade: req.query.cascade === '1' || req.query.cascade === 'true',
       // Seedance is billed by pixel-seconds — price the resolution the render child will use, and
       // that knob is per model (2.5 reads SEEDANCE25_RESOLUTION and defaults to 720p, not 480p)
-      resolution: readRenderResolution(app.ctx.envRoot, run.backend),
-      probeResolution: readProbeResolution(app.ctx.envRoot, run.backend),
+      resolution: readRenderResolution(app.ctx.envRoot, run.backend, app.ctx.childEnv),
+      probeResolution: readProbeResolution(app.ctx.envRoot, run.backend, app.ctx.childEnv),
     });
   });
 

@@ -42,8 +42,8 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
   // Seedance price scales with resolution, and the knob is per model (2.5 has its own) — so the
   // ledger records what THIS run's backend will actually be billed for.
   const estOpts = (backend) => ({
-    resolution: readRenderResolution(envRoot ?? root, backend),
-    probeResolution: readProbeResolution(envRoot ?? root, backend),
+    resolution: readRenderResolution(envRoot ?? root, backend, childEnv),
+    probeResolution: readProbeResolution(envRoot ?? root, backend, childEnv),
   });
   const ringLogs = new Map();   // runId → ring log
   const watchers = new Map();   // runId → watcher

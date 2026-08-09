@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { estimateRender, estimateUpscale, jobSeconds, readRenderResolution, readSeedanceResolution, readUpscaleProvider } from '../../lib/estimator.js';
+import { estimateRender, estimateUpscale, jobSeconds, readProbeResolution, readRenderResolution, readSeedanceResolution, readUpscaleProvider } from '../../lib/estimator.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
 const golden = () => JSON.parse(fs.readFileSync(path.join(ROOT, 'examples/ocean-lighthouse/spec.json'), 'utf8'));
@@ -199,6 +199,19 @@ test('readRenderResolution: 2.5 reads its own knob and its own default; everythi
     assert.equal(readRenderResolution(dir, 'seedance-2.5@segmind'), '480p', '2.5 follows SEEDANCE25_RESOLUTION on either provider');
     assert.equal(readRenderResolution(dir, 'seedance-2.0@fal'), '1080p', 'and never crosses the two knobs');
     assert.equal(readSeedanceResolution(dir), '1080p', 'the old export still answers the old question');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('readRenderResolution/readProbeResolution: an injected childEnv var beats .env — dotenv never overwrites it in the render child', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-res-child-'));
+  try {
+    fs.writeFileSync(path.join(dir, '.env'), 'SEEDANCE_RESOLUTION=720p\nSEEDANCE_PROBE_RESOLUTION=720p\n');
+    const childEnv = { SEEDANCE_RESOLUTION: '480p', SEEDANCE_PROBE_RESOLUTION: '480p' };
+    assert.equal(readRenderResolution(dir, 'seedance-2.0@fal', childEnv), '480p', 'the child renders the injected tier — the estimate must quote it');
+    assert.equal(readProbeResolution(dir, 'seedance-2.0@fal', childEnv), '480p');
+    // an explicitly EMPTY injected var also blocks the .env value (dotenv leaves it empty), so the
+    // model default applies — exactly what config.js resolves to inside the child
+    assert.equal(readRenderResolution(dir, 'seedance-2.0@fal', { SEEDANCE_RESOLUTION: '' }), '480p');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 

@@ -156,9 +156,9 @@ function readEnvVar(envRoot, key, fallbackEnv) {
  *  default (720p — 480p is only its probe tier), everything else rides SEEDANCE_RESOLUTION (480p,
  *  the cheap path; approve's Topaz upscale lifts the master to 1080p). Seedance is billed by
  *  pixel-seconds, so reading the wrong knob quietly misprices the button. */
-export function readRenderResolution(envRoot, backend) {
+export function readRenderResolution(envRoot, backend, childEnv) {
   const is25 = typeof backend === 'string' && backend.includes('seedance-2.5');
-  return readEnvVar(envRoot, is25 ? 'SEEDANCE25_RESOLUTION' : 'SEEDANCE_RESOLUTION') || (is25 ? '720p' : '480p');
+  return readEnvVar(envRoot, is25 ? 'SEEDANCE25_RESOLUTION' : 'SEEDANCE_RESOLUTION', childEnv) || (is25 ? '720p' : '480p');
 }
 
 /** The short side the approve-time upscale will actually DELIVER: Segmind takes an explicit
@@ -173,13 +173,13 @@ export function readUpscaleTargetShortSide(envRoot, backend, childEnv) {
 
 /** The PROBE resolution the render child will use, per model — the same knob family as
  *  readRenderResolution. Estimates must read it too (see estimateRender's probe branch). */
-export function readProbeResolution(envRoot, backend) {
+export function readProbeResolution(envRoot, backend, childEnv) {
   const is25 = typeof backend === 'string' && backend.includes('seedance-2.5');
-  return readEnvVar(envRoot, is25 ? 'SEEDANCE25_PROBE_RESOLUTION' : 'SEEDANCE_PROBE_RESOLUTION') || '480p';
+  return readEnvVar(envRoot, is25 ? 'SEEDANCE25_PROBE_RESOLUTION' : 'SEEDANCE_PROBE_RESOLUTION', childEnv) || '480p';
 }
 
 /** Back-compat wrapper: the pre-2.5 callers that only ever meant SEEDANCE_RESOLUTION. */
-export const readSeedanceResolution = (envRoot) => readRenderResolution(envRoot, null);
+export const readSeedanceResolution = (envRoot, childEnv) => readRenderResolution(envRoot, null, childEnv);
 
 /** Which vendor the approve-time upscale will actually bill — the same rule as the engine's
  *  resolveUpscaleProvider (src/lib/upscale.js), re-derived here from the .env/child env because
