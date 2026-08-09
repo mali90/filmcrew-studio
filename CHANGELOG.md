@@ -3,6 +3,42 @@
 ## Unreleased
 
 ### Added
+- **Per-joint seam lineage — every clip now records which clip it continues from.** `prompts.json`
+  becomes `schema: 2` on both renderers and carries `seam_in { mode, frame, from: {take, job, clip} }`
+  and `seam_out { mode, frame, frameSource, to }`; `render.json` carries the same per job, and it
+  survives both the wholesale rewrite at the end of a render and a later `assemble --from`. Knowing
+  *that* a seam frame was used said nothing about **which clip** it came from, so a cut mixing take
+  2's first segment with take 1's second looked exactly like an intact chain — this is what the
+  seam-invisible stitcher needs to stop falling back to a hard cut on mixed timelines.
+- **Boundary frames are applied honestly, per model.** One decision (`chooseSeamMode`) now answers
+  "how is this clip pinned to its neighbours?" for the renderers, the prompt preview and the UI
+  copy: `native` (a real first/last-frame anchor — the only mode anything may call *seamless*),
+  `soft` (the frame rides as an extra reference image plus a prompt pin — near-seamless,
+  reference-guided), `none`, and the runtime-only `unsupported`. fal's Seedance endpoints can never
+  report native — they carry no frame anchors at all — and Segmind goes native only on a cast-less
+  segment, because its native slots exclude reference images. At the reference cap the closing pin
+  is dropped first, then the opening one, and only then a cast reference: identity outranks a hint.
+  Where the provider offers it and the clip feeds another segment we now keep the **generator's own
+  closing still** (`return_last_frame`) instead of an ffmpeg re-encode, recorded as `frameSource`.
+- **Kling's closing frame (`end_image_url`) ships with a one-shot fallback.** The input is
+  documented but unverified in practice, so a validation rejection naming it re-submits the
+  identical payload once without it and records `seam_out.mode: 'unsupported'` — anything else
+  propagates on the first attempt. fal bills per accepted submit, so nothing here retries blindly.
+- **`--first-frame-from` / `--last-frame-from` / `--prompt-overrides` on `render` and `render-job`.**
+  Point a boundary flag at a still and it is used as-is; point it at a **clip** and the frame that
+  touches this segment is grabbed (the neighbour's last frame for an opening pin, its first frame
+  for a closing pin). `--first-frame-from` beats the frame `--seam-from` would have derived. All
+  three are validated before anything is queued — a typo costs nothing.
+
+### Changed
+- A boundary frame that has to travel as a reference no longer **reserves** an image slot from the
+  cast: it is a droppable soft pin, so a full-cast job is valid again. An authored `last_frame` on
+  Segmind alongside cast references now soft-pins instead of failing validation, and `last_frame` no
+  longer requires `first_frame`.
+- The prompt builders moved into pure, config-free modules (`src/lib/prompt-compose.js`,
+  `src/lib/prompt-settings.js`), byte-for-byte identical to what shipped — `kling.js`/`seedance.js`
+  keep every export and become thin shims. This is what lets the web server show the exact bytes a
+  render will send without pulling a developer's `.env` into its import graph.
 - **Seam-invisible stitching.** A video over the model's window renders as several *chained* jobs —
   each seeded with the previous clip's last frame — and the local stitch now colour-matches every
   chained joint, drops the duplicated boundary frame (trimming one frame of audio to match) and

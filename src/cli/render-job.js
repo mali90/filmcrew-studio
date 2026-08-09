@@ -9,15 +9,24 @@
 //   --feedback "…"      per-take director note (Seedance prompt front matter; for Kling, revise
 //                       the spec instead: npm run revise)
 //   --probe             render this job at the probe resolution (Seedance 480p; Kling ignores it)
+//   --first-frame-from <path>  pin this job's OPENING frame. A still (.png/.jpg) is used as it is;
+//                       a CLIP has its LAST frame grabbed ("start where that clip ended"). Beats
+//                       the frame --seam-from would have derived.
+//   --last-frame-from <path>   pin this job's CLOSING frame. A still as it is; a CLIP has its
+//                       FIRST frame grabbed ("end where that clip begins").
+//   --prompt-overrides <file>  a prompt-overrides.json sidecar — parsed and validated before any
+//                       submit, then snapshotted into the take dir
 //
 // Prints JSON: { jobId, clip, staleDownstream } — staleDownstream lists jobs whose seams were
 // chained from the OLD take (re-render them too for a continuous seam).
 import path from 'node:path';
+import fs from 'node:fs';
 import config, { resolvePath } from '../../config.js';
 import log from '../lib/logger.js';
 import { parseArgs } from '../lib/args.js';
 import { readJson, newRunId } from '../lib/util.js';
 import { renderJob } from '../lib/pipeline.js';
+import { readPromptOverrides } from '../lib/prompt-overrides.js';
 
 const args = parseArgs();
 const str = (k) => (args[k] && args[k] !== true ? String(args[k]) : undefined);
@@ -31,6 +40,15 @@ async function main() {
   const take = str('take') === undefined ? 0 : Number(str('take'));
   if (!Number.isInteger(take) || take < 0) throw new Error(`--take must be a non-negative integer (got "${str('take')}").`);
 
+  // Boundary and override flags are checked BEFORE anything is queued, and before a run dir is even
+  // created: a typo must cost nothing, not a render and not a stray directory.
+  const overrides = str('prompt-overrides');
+  if (overrides) readPromptOverrides(resolvePath(overrides));
+  for (const flag of ['first-frame-from', 'last-frame-from']) {
+    const v = str(flag);
+    if (v && !fs.existsSync(resolvePath(v))) throw new Error(`--${flag}: no such file — ${v}`);
+  }
+
   const runDir = str('out') ? resolvePath(str('out')) : path.join(resolvePath(config.paths.runs), newRunId(`job-${jobId.toLowerCase()}`));
   const r = await renderJob(spec, jobId, {
     runDir,
@@ -38,6 +56,9 @@ async function main() {
     take,
     feedback: str('feedback'),
     seamFrom: str('seam-from'),
+    firstFrameFrom: str('first-frame-from'),
+    lastFrameFrom: str('last-frame-from'),
+    promptOverrides: overrides,
     lowRes: !!args.probe,
   });
 

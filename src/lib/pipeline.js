@@ -13,7 +13,8 @@ import { renderKlingJobFal } from './fal-kling.js';
 import { falAdapter } from './fal-seedance.js';
 import { segmindAdapter } from './segmind-seedance.js';
 import { renderSeedanceJob } from './render-seedance.js';
-import { assembleVideo, grabFrame, lastFrameOf } from './assemble.js';
+import { assembleVideo, grabFrame, lastFrameOf, firstFrameOf } from './assemble.js';
+import { readPromptOverrides, OVERRIDES_FILE } from './prompt-overrides.js';
 import { readContinuity } from './seamstitch.js';
 import { upscaleVideoTopaz, probeDims } from './upscale.js';
 
@@ -110,6 +111,42 @@ async function closingFrameFor(result, runDir, jobId) {
   return { frame, frameSource: frame ? 'ffmpeg' : null };
 }
 
+// A still is used as it is; anything else is treated as a CLIP to read a frame out of.
+const IS_STILL = /\.(png|jpe?g|webp)$/i;
+
+/**
+ * A `--first-frame-from` / `--last-frame-from` value → an actual still on disk.
+ *
+ * Pointing the flag at a CLIP is the useful case: the clip is where the neighbouring shot lives, so
+ * the frame that matters is the one TOUCHING this segment — the neighbour's LAST frame for an
+ * opening pin ("start where that clip ended") and its FIRST frame for a closing pin ("end where
+ * that clip begins"). Getting that backwards would pin the wrong end of the neighbour and pay for
+ * a clip that jumps twice.
+ * @param {'in'|'out'} end
+ */
+export async function resolveBoundaryFrame(input, { end, destDir }) {
+  const flag = end === 'in' ? '--first-frame-from' : '--last-frame-from';
+  const src = resolvePath(input);
+  if (!fs.existsSync(src)) throw new Error(`${flag}: no such file — ${input}`);
+  if (IS_STILL.test(src)) return src;
+  ensureDir(destDir);
+  const png = path.join(destDir, end === 'in' ? 'pin_first_frame.png' : 'pin_last_frame.png');
+  const got = end === 'in' ? await lastFrameOf(src, png) : await firstFrameOf(src, png);
+  if (!got) throw new Error(`${flag}: could not read a frame out of ${input} — pass a still (.png/.jpg) or a readable video.`);
+  return got;
+}
+
+/**
+ * Copy a validated overrides sidecar into the run dir, where it lives from now on
+ * (<runDir>/prompt-overrides.json). Validation already happened at the flag, so a bad file never
+ * reaches a submit; this only puts the good one where the run's own readers look for it.
+ */
+function snapshotPromptOverrides(file, runDir) {
+  if (!file) return;
+  const parsed = readPromptOverrides(resolvePath(file)); // re-validated: the file may have moved since
+  fs.writeFileSync(path.join(runDir, OVERRIDES_FILE), JSON.stringify(parsed, null, 2));
+}
+
 /** Where a seam frame really came from: the source take's own record of that job's clip. */
 async function seamSourceFor(takeDir, jobId) {
   const prior = await readJson(path.join(takeDir, 'render.json')).catch(() => null);
@@ -131,12 +168,13 @@ export function uniqueOutPath(dir, base) {
  *   `backend` overrides the spec/config backend; `take` (Seedance) varies a regen without a seed.
  * @returns {Promise<{runDir:string, master?:string, cover?:string, probe?:boolean, jobs:object[]}>}
  */
-export async function renderSpec(spec, { runDir, probe = false, upscale = false, backend, take, outName } = {}) {
+export async function renderSpec(spec, { runDir, probe = false, upscale = false, backend, take, outName, firstFrameFrom, lastFrameFrom, promptOverrides } = {}) {
   const be = resolveBackend(spec, backend);
   const v = validateSpec(spec, { upTo: 7, backend: be });
   if (!v.ok) throw new Error(`Spec failed validation:\n - ${v.errors.join('\n - ')}`);
   ensureDir(runDir);
   await writeJson(path.join(runDir, 'spec.json'), spec);
+  snapshotPromptOverrides(promptOverrides, runDir);
 
   const jobs = spec.kling.jobs;
   const toRender = probe ? jobs.slice(0, 1) : jobs;
@@ -152,6 +190,11 @@ export async function renderSpec(spec, { runDir, probe = false, upscale = false,
   const textToVideoKling = capsFor(be).family === 'kling' && !(spec.kling.elements?.length);
   const chain = config.kling.chainFrames && !probe && toRender.length > 1 && !textToVideoKling;
   if (textToVideoKling && !probe && toRender.length > 1) log.info('Kling text-to-video render — seam-chaining disabled (no reference frame); jobs render independently.');
+  // Explicit boundary pins bracket the RUN: the opening frame belongs to the first job it renders,
+  // the closing frame to the last. Resolved up front so a bad path costs nothing.
+  const openPin = firstFrameFrom ? await resolveBoundaryFrame(firstFrameFrom, { end: 'in', destDir: path.join(runDir, toRender[0].job_id) }) : null;
+  const closePin = lastFrameFrom ? await resolveBoundaryFrame(lastFrameFrom, { end: 'out', destDir: path.join(runDir, toRender[toRender.length - 1].job_id) }) : null;
+
   const results = [];
   const takeId = path.basename(runDir); // the lineage's "which take did this frame come from?"
   let startFrame; // previous job clip's last frame; undefined for the first job (unchanged behavior)
@@ -159,8 +202,10 @@ export async function renderSpec(spec, { runDir, probe = false, upscale = false,
   for (const [i, job] of toRender.entries()) {
     const seed = seedForJob(jobs.findIndex((j) => j.job_id === job.job_id), take ?? 0);
     const feedsNext = chain && i < toRender.length - 1;
-    const seamInFrom = startFrame && prev ? { take: takeId, job: prev.jobId, clip: prev.clip } : null;
-    const r = await RENDERERS[be].render({ job, spec, runDir, seed, lowRes: probe, startFrame, feedsNext, seamInFrom, nonce: take ?? 0 })
+    const openFrame = (i === 0 && openPin) ? openPin : startFrame;
+    const endFrame = (i === toRender.length - 1) ? closePin : null;
+    const seamInFrom = openFrame === startFrame && startFrame && prev ? { take: takeId, job: prev.jobId, clip: prev.clip } : null;
+    const r = await RENDERERS[be].render({ job, spec, runDir, seed, lowRes: probe, startFrame: openFrame, endFrame, feedsNext, seamInFrom, nonce: take ?? 0 })
       .catch((e) => { log.error(`[${job.job_id}] failed: ${e.message}`); return { jobId: job.job_id, error: e.message }; });
     results.push(r);
     // The previous job's sidecar was written before THIS clip existed: stamp where its closing frame
@@ -176,7 +221,7 @@ export async function renderSpec(spec, { runDir, probe = false, upscale = false,
       const { frame, frameSource } = await closingFrameFor(r, runDir, job.job_id);
       startFrame = frame;
       if (r.seamOut) { r.seamOut.frame = frame ?? r.seamOut.frame; r.seamOut.frameSource = frameSource; }
-      stampSeamOut(runDir, job.job_id, { frame, frameSource });
+      stampSeamOut(runDir, job.job_id, frame ? { frame, frameSource } : { frameSource });
       if (startFrame) log.info(`[${job.job_id}] seam frame -> ${startFrame} (${frameSource}; start of next job)`);
       else log.warn(`[${job.job_id}] could not extract last frame for seam continuity; the next job starts fresh.`);
     }
@@ -207,7 +252,7 @@ export async function renderSpec(spec, { runDir, probe = false, upscale = false,
  * @param {{runDir:string, backend?:string, take?:number, feedback?:string, seamFrom?:string, lowRes?:boolean}} opts
  * @returns {Promise<{jobId:string, clip:string, totalDuration:number, segments:number, backend:string, staleDownstream:string[]}>}
  */
-export async function renderJob(spec, jobId, { runDir, backend, take = 0, feedback, seamFrom, lowRes = false } = {}) {
+export async function renderJob(spec, jobId, { runDir, backend, take = 0, feedback, seamFrom, lowRes = false, firstFrameFrom, lastFrameFrom, promptOverrides } = {}) {
   const be = resolveBackend(spec, backend);
   // Structural pass first, so an invalid spec fails with the full validation report rather than a
   // job-lookup error.
@@ -237,12 +282,22 @@ export async function renderJob(spec, jobId, { runDir, backend, take = 0, feedba
   // and planSeamRefs gives it up before it gives up a paid identity reference.
   ensureDir(runDir);
   await writeJson(path.join(runDir, 'spec.json'), spec);
+  snapshotPromptOverrides(promptOverrides, runDir);
+
+  // An EXPLICIT pin beats the frame --seam-from would have derived: the user pointed at the clip
+  // this segment must join, and that is a stronger statement than "whatever the last take ended on".
+  const jobDir = path.join(runDir, job.job_id);
+  if (firstFrameFrom) {
+    startFrame = await resolveBoundaryFrame(firstFrameFrom, { end: 'in', destDir: jobDir });
+    seamInFrom = null; // a hand-picked still has no take/job/clip of its own to point back at
+  }
+  const endFrame = lastFrameFrom ? await resolveBoundaryFrame(lastFrameFrom, { end: 'out', destDir: jobDir }) : null;
 
   const staleDownstream = downstreamJobs(spec, jobId);
 
   log.step(`Render job — ${jobId} — ${RENDERERS[be].label}${take ? ` [take ${take}]` : ''}`);
   const r = await RENDERERS[be].render({
-    job, spec, runDir, seed: seedForJob(idx, take), lowRes, startFrame, seamInFrom,
+    job, spec, runDir, seed: seedForJob(idx, take), lowRes, startFrame, endFrame, seamInFrom,
     feedsNext: config.kling.chainFrames && staleDownstream.length > 0, nonce: take, feedback,
   });
 
@@ -251,7 +306,7 @@ export async function renderJob(spec, jobId, { runDir, backend, take = 0, feedba
   if (config.kling.chainFrames) {
     const { frame, frameSource } = await closingFrameFor(r, runDir, job.job_id);
     if (r.seamOut) { r.seamOut.frame = frame ?? r.seamOut.frame; r.seamOut.frameSource = frameSource; }
-    stampSeamOut(runDir, job.job_id, { frame, frameSource });
+    stampSeamOut(runDir, job.job_id, frame ? { frame, frameSource } : { frameSource });
     if (!frame) log.warn(`could not extract ${jobId}'s last frame — downstream jobs will chain from the PREVIOUS take's seam.`);
   }
 
