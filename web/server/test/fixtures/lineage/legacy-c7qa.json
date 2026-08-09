@@ -1,0 +1,34 @@
+{
+  "_comment": [
+    "A run rendered BEFORE WS2-P1: prompts.json is schema:1, so no seamIn/seamOut was ever written.",
+    "Every run already on a user's disk looks like this, and the review UI must still say something",
+    "truthful about it. The derivation replays take history — 'K2 was rendered in t1, so its seam",
+    "frame came from whatever K1 was current in t1' — and marks the whole answer confidence:'derived'",
+    "so the badge reads 'join unknown' (dashed connector) rather than claiming a link it cannot see.",
+    "The cut here mixes takes exactly like b1nx, so a derivation that ignores take history would",
+    "wrongly report a continuation."
+  ],
+  "runId": "c7qa",
+  "backend": "kling-o3@fal",
+  "takes": [
+    {
+      "take": "t1",
+      "at": "2026-05-11T08:00:00.000Z",
+      "jobs": [
+        { "jobId": "K1", "clip": "/runs/c7qa/renders/t1/K1/clip.mp4", "startFrame": null },
+        { "jobId": "K2", "clip": "/runs/c7qa/renders/t1/K2/clip.mp4", "startFrame": "seam:last_frame.png" }
+      ]
+    },
+    {
+      "take": "t2",
+      "at": "2026-05-11T09:15:00.000Z",
+      "jobs": [
+        { "jobId": "K1", "clip": "/runs/c7qa/renders/t2/K1/clip.mp4", "startFrame": null }
+      ]
+    }
+  ],
+  "cut": [
+    { "jobId": "K1", "take": "t2" },
+    { "jobId": "K2", "take": "t1" }
+  ]
+}

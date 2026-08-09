@@ -1,0 +1,49 @@
+{
+  "_comment": [
+    "Shape of run b1nx (2026-07, forensics in the plan's Research facts). THE case the continuity",
+    "rule exists for: K1 was re-rendered in take t2, but the cut still uses t1's K2 — which was",
+    "conditioned on the OLD K1's last frame. The clips LOOK chained (K2 does open on a K1 last",
+    "frame) and every naive check passes, but the frame it opens on no longer exists in the cut.",
+    "Anything that reports this as a continuation will hand it to a colour-matching stitcher and",
+    "produce a visible jump the user was told would be seamless.",
+    "Ids only — no filesystem paths leave the server (see serializeContinuity)."
+  ],
+  "runId": "b1nx",
+  "backend": "kling-o3@fal",
+  "takes": [
+    {
+      "take": "t1",
+      "at": "2026-07-02T10:00:00.000Z",
+      "jobs": [
+        {
+          "jobId": "K1",
+          "clip": "/runs/b1nx/renders/t1/K1/clip.mp4",
+          "seamIn": { "mode": "none", "frame": null, "from": null },
+          "seamOut": { "mode": "soft", "frame": "/runs/b1nx/renders/t1/K1/last_frame.png", "to": { "take": "t1", "job": "K2", "clip": "/runs/b1nx/renders/t1/K2/clip.mp4" } }
+        },
+        {
+          "jobId": "K2",
+          "clip": "/runs/b1nx/renders/t1/K2/clip.mp4",
+          "seamIn": { "mode": "soft", "frame": "/runs/b1nx/renders/t1/K1/last_frame.png", "from": { "take": "t1", "job": "K1", "clip": "/runs/b1nx/renders/t1/K1/clip.mp4" } },
+          "seamOut": { "mode": "none", "frame": null, "to": null }
+        }
+      ]
+    },
+    {
+      "take": "t2",
+      "at": "2026-07-02T11:30:00.000Z",
+      "jobs": [
+        {
+          "jobId": "K1",
+          "clip": "/runs/b1nx/renders/t2/K1/clip.mp4",
+          "seamIn": { "mode": "none", "frame": null, "from": null },
+          "seamOut": { "mode": "soft", "frame": "/runs/b1nx/renders/t2/K1/last_frame.png", "to": null }
+        }
+      ]
+    }
+  ],
+  "cut": [
+    { "jobId": "K1", "take": "t2" },
+    { "jobId": "K2", "take": "t1" }
+  ]
+}

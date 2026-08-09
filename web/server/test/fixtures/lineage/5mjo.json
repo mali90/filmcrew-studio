@@ -1,0 +1,35 @@
+{
+  "_comment": [
+    "Shape of run 5mjo: three earlier takes, then t4 re-rendered the whole chain K1→K2→K3 in one",
+    "pass. The cut is entirely t4, every seam source is the clip that really precedes it, so all",
+    "joints are continuations and the seamless stitcher may run on all of them.",
+    "This is the fixture that stops the rule from being trivially satisfied by 'always false'."
+  ],
+  "runId": "5mjo",
+  "backend": "seedance-2.0@fal",
+  "takes": [
+    {
+      "take": "t3",
+      "at": "2026-06-28T09:00:00.000Z",
+      "jobs": [
+        { "jobId": "K1", "clip": "/runs/5mjo/renders/t3/K1/clip.mp4", "seamIn": { "mode": "none", "frame": null, "from": null }, "seamOut": { "mode": "soft", "frame": "/runs/5mjo/renders/t3/K1/last_frame.png", "to": { "take": "t3", "job": "K2", "clip": "/runs/5mjo/renders/t3/K2/clip.mp4" } } },
+        { "jobId": "K2", "clip": "/runs/5mjo/renders/t3/K2/clip.mp4", "seamIn": { "mode": "soft", "frame": "/runs/5mjo/renders/t3/K1/last_frame.png", "from": { "take": "t3", "job": "K1", "clip": "/runs/5mjo/renders/t3/K1/clip.mp4" } }, "seamOut": { "mode": "soft", "frame": "/runs/5mjo/renders/t3/K2/last_frame.png", "to": { "take": "t3", "job": "K3", "clip": "/runs/5mjo/renders/t3/K3/clip.mp4" } } },
+        { "jobId": "K3", "clip": "/runs/5mjo/renders/t3/K3/clip.mp4", "seamIn": { "mode": "soft", "frame": "/runs/5mjo/renders/t3/K2/last_frame.png", "from": { "take": "t3", "job": "K2", "clip": "/runs/5mjo/renders/t3/K2/clip.mp4" } }, "seamOut": { "mode": "none", "frame": null, "to": null } }
+      ]
+    },
+    {
+      "take": "t4",
+      "at": "2026-06-28T14:20:00.000Z",
+      "jobs": [
+        { "jobId": "K1", "clip": "/runs/5mjo/renders/t4/K1/clip.mp4", "seamIn": { "mode": "none", "frame": null, "from": null }, "seamOut": { "mode": "soft", "frame": "/runs/5mjo/renders/t4/K1/last_frame.png", "to": { "take": "t4", "job": "K2", "clip": "/runs/5mjo/renders/t4/K2/clip.mp4" } } },
+        { "jobId": "K2", "clip": "/runs/5mjo/renders/t4/K2/clip.mp4", "seamIn": { "mode": "soft", "frame": "/runs/5mjo/renders/t4/K1/last_frame.png", "from": { "take": "t4", "job": "K1", "clip": "/runs/5mjo/renders/t4/K1/clip.mp4" } }, "seamOut": { "mode": "soft", "frame": "/runs/5mjo/renders/t4/K2/last_frame.png", "to": { "take": "t4", "job": "K3", "clip": "/runs/5mjo/renders/t4/K3/clip.mp4" } } },
+        { "jobId": "K3", "clip": "/runs/5mjo/renders/t4/K3/clip.mp4", "seamIn": { "mode": "soft", "frame": "/runs/5mjo/renders/t4/K2/last_frame.png", "from": { "take": "t4", "job": "K2", "clip": "/runs/5mjo/renders/t4/K2/clip.mp4" } }, "seamOut": { "mode": "none", "frame": null, "to": null } }
+      ]
+    }
+  ],
+  "cut": [
+    { "jobId": "K1", "take": "t4" },
+    { "jobId": "K2", "take": "t4" },
+    { "jobId": "K3", "take": "t4" }
+  ]
+}
