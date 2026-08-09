@@ -4,13 +4,13 @@
 //   node src/cli/doctor.js --json    # machine-readable (the web app's health/doctor endpoints)
 // The check logic lives in src/lib/preflight.js (shared with the init wizard); this is a thin
 // CLI wrapper that prints the report and sets the exit code.
-import { runChecks, formatChecks, hardFailures, SOFT } from '../lib/preflight.js';
+import { runChecks, formatChecks, hardFailures, isSoft } from '../lib/preflight.js';
 
 async function main() {
   const checks = await runChecks();
   const hard = hardFailures(checks);
   if (process.argv.includes('--json')) {
-    const rows = checks.map((c) => ({ ...c, soft: SOFT.some((s) => c.label.startsWith(s)) }));
+    const rows = checks.map((c) => ({ ...c, soft: isSoft(c) }));
     process.stdout.write(JSON.stringify({ checks: rows, hard: hard.length, platform: process.platform }, null, 2) + '\n');
   } else {
     process.stdout.write(formatChecks(checks));

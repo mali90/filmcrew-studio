@@ -177,7 +177,11 @@ export interface ModelsResponse {
   liveError?: 'no-key' | 'cli-only' | 'fetch-failed';
 }
 
-export type CheckId = 'fal-key' | 'backend' | 'voices' | 'voice-clips' | 'llm' | 'ffmpeg' | 'ffprobe' | 'references';
+// `soft` is decided per check by the doctor (not by the id): a missing SEGMIND_API_KEY blocks the
+// person whose default backend renders on Segmind and merely informs everyone else.
+export type CheckId =
+  | 'fal-key' | 'segmind-key' | 'render-assets' | 'backend'
+  | 'voices' | 'voice-clips' | 'llm' | 'ffmpeg' | 'ffprobe' | 'references';
 export interface DoctorReport {
   checks: { id: CheckId; ok: boolean; label: string; hint: string; soft: boolean }[];
   hard: number;
