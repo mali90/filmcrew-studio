@@ -143,6 +143,25 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
   const startFrameSrc = job.first_frame || startFrame || null;
   const maxImages = caps.maxImages - (startFrameSrc && firstFrameIsRef(caps, 1) ? 1 : 0);
   const groups = characterGroups(job, spec);
+
+  // The combined budget (fal 2.5 takes 50 across images+audio+video, no per-kind caps) must ALSO
+  // fail before any asset leaves the machine: each per-kind check can admit what the shared budget
+  // rejects, and the arg builder's own capped() only fires after every reference has been uploaded.
+  // Counted exactly as the builder will see it — kept image refs, the demoted opening frame, and
+  // the fitted voice clips (video refs are never authored today). audioRefsFor is hoisted here for
+  // that count: it is local ffmpeg work (fit/transcode into the take dir), no upload — and the gate
+  // mirrors section 2's (planned refs or an opening frame, audio on, non-native voiceMode).
+  const plannedImages = Math.min(groups.reduce((n, g) => n + g.els.length, 0), maxImages);
+  const voiceRefs = ((plannedImages > 0 || startFrameSrc) && sdCfg.generateAudio && knobs.voiceMode !== 'native')
+    ? await audioRefsFor(job, spec, dir, caps) : [];
+  if (caps.maxCombinedRefs != null) {
+    const demoted = startFrameSrc && firstFrameIsRef(caps, plannedImages) ? 1 : 0;
+    const combined = plannedImages + demoted + voiceRefs.length;
+    if (combined > caps.maxCombinedRefs) {
+      throw new Error(`${nameOf(caps)} accepts at most ${caps.maxCombinedRefs} references in total (images + audio + video) — ${combined} supplied.`);
+    }
+  }
+
   const imageUrls = [];
   const imageRefs = []; // sidecar legend
   const refGroups = [];
@@ -193,8 +212,8 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
   // 2. Voice refs (@AudioN), only when audio is on AND voiceMode keeps the clip. In 'native' mode we
   //    attach NO clip and let the model voice the written line natively (see config.seedance.voiceMode).
   //    A text-to-video job (no image refs) also voices natively: the endpoint requires audio refs to
-  //    ride ≥1 image/video ref, so with no images we attach no clip.
-  const voiceRefs = ((refCount || firstFrameUrl) && sdCfg.generateAudio && knobs.voiceMode !== 'native') ? await audioRefsFor(job, spec, dir, caps) : [];
+  //    ride ≥1 image/video ref, so with no images we attach no clip. The refs themselves were fitted
+  //    up top (pre-upload combined-budget check) — only the uploads happen here.
   const audioUrls = [];
   const audioIdx = new Map();
   for (const r of voiceRefs) {
