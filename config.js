@@ -102,6 +102,27 @@ const config = {
     topazMaxFactor: numEnv('FAL_TOPAZ_MAX_FACTOR', 4),    // Topaz supports up to 4× per pass
   },
 
+  // ── Segmind render transport (the second provider; async v2 queue, `x-api-key` auth) ──
+  //    Models are addressed by SLUG, not by a fal-style endpoint path: POST {baseUrl}/v2/<slug>.
+  //    A Segmind-only install (no fal key at all) renders AND upscales here — see docs/PROVIDERS.md.
+  segmind: {
+    apiKey: process.env.SEGMIND_API_KEY || '',
+    baseUrl: (process.env.SEGMIND_BASE_URL || 'https://api.segmind.com').replace(/\/+$/, ''),
+    // Model slugs — copy them verbatim from each model's page on segmind.com; don't guess.
+    seedance25Slug: process.env.SEGMIND_SEEDANCE25_SLUG || 'seedance-2.5',
+    seedance20Slug: process.env.SEGMIND_SEEDANCE20_SLUG || 'seedance-2.0',
+    topazSlug: process.env.SEGMIND_TOPAZ_SLUG || 'topaz-video-upscale',
+    // How a local reference reaches Segmind. 'data-uri' inlines it (no other service involved, so a
+    // Segmind-only setup works with NO fal key); 'fal-storage' reuses fal's CDN + the cloud-refs
+    // cache, which keeps the POST body small but needs FAL_KEY. Default follows what you have.
+    uploadMode: process.env.SEGMIND_UPLOAD_MODE
+      || ((process.env.FAL_KEY || process.env.FAL_API_KEY) ? 'fal-storage' : 'data-uri'),
+    // POST attempts ONLY, and only before a request_id exists: once Segmind has accepted a job, a
+    // resubmit is a SECOND BILLABLE RENDER, so src/lib/segmind.js never re-POSTs (polls retry freely).
+    maxRetries: numEnv('SEGMIND_MAX_RETRIES', 3),
+    retryBackoffMs: numEnv('SEGMIND_RETRY_BACKOFF_MS', 8000), // base backoff between submits (× attempt)
+  },
+
   // ── Kling 3.0 Omni defaults (model hard caps are NOT user-tunable above the limits) ──
   kling: {
     model: process.env.KLING_MODEL || 'kling-v3-omni', // kling-v3-omni | kling-video-o1
