@@ -11,6 +11,7 @@ import { validateSpec } from './spec-schema.js';
 import { BACKEND_IDS, LEGACY_BACKENDS, capsFor, demotesOpeningFrame, normalizeBackend } from './render-models.js';
 import { renderKlingJobFal } from './fal-kling.js';
 import { falAdapter } from './fal-seedance.js';
+import { segmindAdapter } from './segmind-seedance.js';
 import { renderSeedanceJob } from './render-seedance.js';
 import { assembleVideo, grabFrame, lastFrameOf } from './assemble.js';
 import { readContinuity } from './seamstitch.js';
@@ -20,7 +21,7 @@ import { upscaleVideoTopaz, probeDims } from './upscale.js';
 // plus one line here. The generalized renderer then runs with EACH ENTRY'S OWN caps, so a sibling
 // model (seedance-2.5@fal) or a sibling provider (seedance-2.0@segmind) can never silently render
 // through another entry's limits or transport.
-const SEEDANCE_ADAPTERS = { fal: falAdapter };
+const SEEDANCE_ADAPTERS = { fal: falAdapter, segmind: segmindAdapter };
 
 // Render backends — one entry per renderable `<model>@<provider>`, all honoring the same per-job
 // contract ({ job, spec, runDir, seed, lowRes, startFrame, nonce }) → { jobId, clip, totalDuration,

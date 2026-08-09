@@ -8,10 +8,12 @@
 //     knobs (style, avoid, textRule, voiceMode, uploadMode, promptMaxBytes, probeResolution) are
 //     NOT caps — they stay config-sourced here, exactly as they were.
 //   - `adapter` carries the provider TRANSPORT: `assetUrl(absPath, mode, {cache})` turns a local
-//     file into something the provider can fetch, `generate(args, {endpoint, destDir, timeoutMs})`
-//     runs the job and returns downloaded output paths. Adapters are DEFINED BY THE PROVIDER
-//     BINDING, not here — fal's lives in fal-seedance.js — so this file imports no transport and
-//     `import('./render-seedance.js')` never pulls fal (or, later, segmind) into the graph.
+//     file into something the provider can fetch, and `generate(args, {endpoint, destDir,
+//     timeoutMs, onMeta})` runs the job and returns downloaded output paths, optionally reporting a
+//     receipt (request id, cost, credits left) through `onMeta`. Adapters are DEFINED BY THE
+//     PROVIDER BINDING, not here — fal's lives in fal-seedance.js, Segmind's in
+//     segmind-seedance.js — so this file imports no transport and `import('./render-seedance.js')`
+//     pulls neither provider's client into the graph.
 //
 // Model behaviour that used to be hardcoded for fal Seedance 2.0 and is now data:
 //   - Inputs are FLAT refs, not elements: image refs (≤ caps.maxImages → @Image1..N in the prompt)
@@ -40,8 +42,8 @@ import { slug } from './util.js';
 const oneMp4 = (outs) => outs.find((p) => /\.(mp4|mov|webm)$/i.test(p)) ?? outs[0];
 
 /**
- * Resolve one of the caps' endpoint KEY NAMES against the provider's config block. The registry
- * stores key names rather than endpoints so it can stay import-free (see render-models.js).
+ * Resolve one of the caps' route KEY NAMES against the provider's config block. The registry stores
+ * key names rather than values so it can stay import-free (see render-models.js).
  */
 function endpointFor(caps, key) {
   const block = config[caps.provider] ?? {};
@@ -49,6 +51,13 @@ function endpointFor(caps, key) {
   if (!endpoint) throw new Error(`${caps.id}: no endpoint configured for "${key}" — set it in the ${caps.provider} config block.`);
   return endpoint;
 }
+
+/**
+ * The config key naming where this model's job is sent. Providers address a model differently — fal
+ * by ENDPOINT PATH (`endpointKey`), Segmind by MODEL SLUG (`slugKey`) — and both resolve out of the
+ * provider's own config block, so the renderer needs no branch on provider name.
+ */
+const routeKey = (caps) => caps.endpointKey ?? caps.slugKey;
 
 /**
  * Voice refs for the job's speakers: [{ speaker, clip }] from the registry's mint-time clips,
@@ -206,6 +215,10 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
     generateAudio: sdCfg.generateAudio,
     totalDuration,
     seed,
+    // Where the model offers it (Segmind), ask for the clip's final frame: it comes back with the
+    // video and is saved beside it, so the run keeps the provider's own seam image rather than only
+    // an ffmpeg grab. Models without the flag drop it in the builder (caps.supportsReturnLastFrame).
+    returnLastFrame: true,
   }, caps);
   // No image inputs AT ALL → text-to-video (Casting attached nothing relevant); rides at probe
   // resolution too. A native-slot first frame keeps refCount at 0 but is still an image the model
@@ -215,37 +228,57 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
   const textToVideo = refCount === 0 && !firstFrameUrl;
   const endpointKey = (textToVideo && caps.textEndpointKey)
     ? caps.textEndpointKey
-    : (lowRes ? (caps.probeEndpointKey ?? caps.endpointKey) : caps.endpointKey);
+    : (lowRes ? (caps.probeEndpointKey ?? routeKey(caps)) : routeKey(caps));
   const endpoint = endpointFor(caps, endpointKey);
 
   log.step(`[${job.job_id}] ${caps.providerLabel} ${caps.label} ${textToVideo ? 'text-to-video' : 'reference-to-video'}${lowRes ? ' [probe]' : ''} — ${shotPrompts.length} shot(s), ${args.duration}s, ${refCount} image ref(s)${audioUrls.length ? `, ${audioUrls.length} voice ref(s)` : ''}, ${args.resolution} ${args.aspect_ratio}`);
 
-  try {
-    fs.writeFileSync(path.join(dir, 'prompts.json'), JSON.stringify({
-      job_id: job.job_id,
-      backend: caps.id, // the canonical `<model>@<provider>` — same vocabulary as spec.render_backend
-      // and render.json, so the sidecar answers "which MODEL produced this clip?" once two Seedance
-      // models ship (the family token could not).
-      endpoint,
-      aspect_ratio: args.aspect_ratio,
-      resolution: args.resolution,
-      duration_s: args.duration,
-      generate_audio: args.generate_audio,
-      // The seed, recorded honestly either way: `seed` is what was SENT (so a take can be
-      // reproduced), `seed_unused` is the record of a seed an endpoint would 422 on (fal's 2.0).
-      // Exactly one of them is ever non-null.
-      seed: caps.supportsSeed ? (seed ?? null) : null,
-      seed_unused: caps.supportsSeed ? null : (seed ?? null),
-      nonce,
-      start_frame: startFrameSrc ? startFrameSource : null,
-      image_refs: imageRefs,
-      audio_refs: voiceRefs.map((r, i) => ({ ref: refLabel(caps, 'Audio', i + 1), speaker: r.speaker, clip: r.clip })),
-      prompt,
-      shot_prompts: shotPrompts,
-    }, null, 2));
-  } catch { /* sidecar is best-effort */ }
+  const sidecarPath = path.join(dir, 'prompts.json');
+  const sidecar = {
+    job_id: job.job_id,
+    backend: caps.id, // the canonical `<model>@<provider>` — same vocabulary as spec.render_backend
+    // and render.json, so the sidecar answers "which MODEL produced this clip?" once two Seedance
+    // models ship (the family token could not).
+    endpoint,
+    aspect_ratio: args.aspect_ratio,
+    resolution: args.resolution,
+    duration_s: args.duration,
+    generate_audio: args.generate_audio,
+    // The seed, recorded honestly either way: `seed` is what was SENT (so a take can be
+    // reproduced), `seed_unused` is the record of a seed an endpoint would 422 on (fal's 2.0).
+    // Exactly one of them is ever non-null.
+    seed: caps.supportsSeed ? (seed ?? null) : null,
+    seed_unused: caps.supportsSeed ? null : (seed ?? null),
+    nonce,
+    start_frame: startFrameSrc ? startFrameSource : null,
+    image_refs: imageRefs,
+    audio_refs: voiceRefs.map((r, i) => ({ ref: refLabel(caps, 'Audio', i + 1), speaker: r.speaker, clip: r.clip })),
+    prompt,
+    shot_prompts: shotPrompts,
+  };
+  // Written BEFORE the job is submitted (a render that fails still leaves the prompt behind) and
+  // rewritten if the transport hands back a receipt — hence best-effort on both passes.
+  const writeSidecar = () => {
+    try { fs.writeFileSync(sidecarPath, JSON.stringify(sidecar, null, 2)); } catch { /* sidecar is best-effort */ }
+  };
+  writeSidecar();
 
-  const outs = await adapter.generate(args, { endpoint, destDir: dir, timeoutMs: 1200000 });
+  // `onMeta` is the provider's receipt for a PAID job — Segmind returns a request id plus the
+  // cost/credits ledger, which lands in the sidecar as soon as the job completes (before the output
+  // download, so a failed download still leaves the record of what was bought). fal issues no
+  // receipt and never calls this, so fal sidecars keep exactly today's keys.
+  const outs = await adapter.generate(args, {
+    endpoint,
+    destDir: dir,
+    timeoutMs: 1200000,
+    onMeta: (meta) => {
+      if (!meta) return;
+      sidecar.request_id = meta.requestId ?? null;
+      sidecar.cost_usd = meta.cost ?? null;
+      sidecar.remaining_credits = meta.remainingCredits ?? null;
+      writeSidecar();
+    },
+  });
   const clip = oneMp4(outs);
   log.info(`[${job.job_id}] clip -> ${clip}`);
   return { jobId: job.job_id, clip, totalDuration, segments: shotPrompts.length };

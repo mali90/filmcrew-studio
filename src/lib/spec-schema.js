@@ -149,7 +149,12 @@ function validateJobs(spec, P, elementIds, caps, enforceModelAspects = false, ch
       else if (sk.content_prompt.length > maxSegChars) P.push(`${at}: shot ${id} content_prompt exceeds ${maxSegChars} chars`);
       total += Math.max(1, Math.round(Number(sk?.duration) || Number(shotById[id]?.duration_s) || 4));
     });
-    if (total > maxSeconds) P.push(`${at}: total ${total}s exceeds the ${maxSeconds}s/job cap (move a shot to another job)`);
+    // The cap is named after the (model, provider) pair that rejected the job — the same model
+    // takes 15s/job on Segmind's 2.0 and 30s on its 2.5, so a bare "15s/job cap" leaves the planner
+    // guessing which window it missed. The number stays first (long-standing wording), and the
+    // backend-less SUPERSET reading carries no provider, so it names no pair.
+    const capOwner = `${caps.label}${caps.providerLabel ? ` on ${caps.providerLabel}` : ''}`;
+    if (total > maxSeconds) P.push(`${at}: total ${total}s exceeds the ${maxSeconds}s/job cap for ${capOwner} (move a shot to another job)`);
     // Naming the model matters here: the floor is 4s on Seedance 2.0 and 1s (i.e. never fires) on
     // Kling, so "under Seedance 2.0's 4s/job minimum" tells the planner which window it missed.
     if (total < minSeconds) P.push(`${at}: total ${total}s is under ${caps.label}'s ${minSeconds}s/job minimum (merge a shot into this job)`);

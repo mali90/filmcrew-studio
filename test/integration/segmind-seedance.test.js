@@ -76,7 +76,10 @@ test('seedance-2.5@segmind: slug route, spaced refs, numbered shots, INT duratio
     assert.equal(body.duration, 13);
     assert.equal(body.seed, 70000);
     assert.equal(body.return_last_frame, true, 'asked for, so the next job can chain from it');
-    assert.equal(body.resolution, '720p');
+    // Probes ride the cheap tier on every provider (SEEDANCE25_PROBE_RESOLUTION); 720p is 2.5's
+    // FULL-render default and rides the same knobs block as on fal.
+    assert.equal(body.resolution, '480p');
+    assert.equal(config.seedance25.resolution, '720p');
     assert.equal(body.aspect_ratio, '9:16');
 
     assert.equal(body.reference_images.length, 1, 'Segmind\'s own key name — the golden spec\'s single element');
@@ -144,8 +147,10 @@ test('seedance-2.0@segmind: its own slug, "Cut to:" connectors, 1080p, and its 1
     spec.render_backend = 'seedance-2.0@segmind';
     spec.seedance = { resolution: '1080p' }; // 2.0 on Segmind goes to 1080p/4k; 2.5 stops at 720p
     const before = sg.requests.length;
-    const r = await renderSpec(spec, { runDir: dir, probe: true });
-    assert.equal(r.backend, 'seedance-2.0@segmind');
+    // a FULL render, not a probe: the spec's resolution pin is exactly what --probe overrides
+    const r = await renderSpec(spec, { runDir: dir });
+    assert.ok(r.master && fs.existsSync(r.master));
+    assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'render.json'), 'utf8')).backend, 'seedance-2.0@segmind');
 
     const submit = submitsSince(before)[0];
     assert.equal(submit.path, '/v2/seedance-2.0');
