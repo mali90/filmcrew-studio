@@ -88,7 +88,21 @@ export function registerSetupRoutes(app) {
 
   app.post('/api/setup/validate-segmind', async (req) => {
     const { validateSegmind } = await import(path.join(root, 'src/lib/segmind.js'));
-    return validateSegmind(String(req.body?.apiKey ?? ''));
+    // Probe the MODEL the user picked, at its CONFIGURED slug: validating the default 2.5 slug for
+    // a 2.0 setup would let a bad SEGMIND_SEEDANCE20_SLUG pass setup and fail on the first paid
+    // render — and a customized 2.5 slug reject a perfectly valid 2.0 pick.
+    let slug;
+    try {
+      const { normalizeBackend } = await import(path.join(root, 'src/lib/render-models.js'));
+      const { model, provider } = normalizeBackend(String(req.body?.backend ?? ''));
+      if (provider === 'segmind') {
+        const { get } = await envSettings.read();
+        slug = model === 'seedance-2.0'
+          ? (get('SEGMIND_SEEDANCE20_SLUG') || 'seedance-2.0')
+          : (get('SEGMIND_SEEDANCE25_SLUG') || 'seedance-2.5');
+      }
+    } catch { /* no/invalid backend sent — validateSegmind's default slug stands */ }
+    return validateSegmind(String(req.body?.apiKey ?? ''), slug ? { slug } : undefined);
   });
 
   // Model list for the Keys/wizard dropdown: always the curated catalog (default + alternatives);

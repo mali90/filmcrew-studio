@@ -133,13 +133,17 @@ const priceKeys = () => Object.keys(PRICES).filter((k) => PRICES[k] && typeof PR
 /** One value out of <envRoot>/.env, read as DATA (never sourced) — the settings page writes that
  *  file and the render child reads it, so it is what the estimate has to price. */
 function readEnvVar(envRoot, key, fallbackEnv) {
+  // The CHILD's precedence, mirrored exactly: a variable already present in the spawned process's
+  // env (childEnv — even an explicit empty string) wins, because dotenv never overwrites an
+  // existing variable. Reading .env first here would quote one provider while the render child
+  // actually bills another.
+  if (fallbackEnv && Object.hasOwn(fallbackEnv, key)) return String(fallbackEnv[key] ?? '').trim();
   try {
     const text = fs.readFileSync(path.join(envRoot, '.env'), 'utf8');
     const m = text.match(new RegExp(`^\\s*${key}\\s*=\\s*("([^"]*)"|'([^']*)'|[^\\s#]+)`, 'm'));
-    const v = (m?.[2] ?? m?.[3] ?? m?.[1] ?? '').trim();
-    if (v) return v;
-  } catch { /* no .env yet — fall through to the child env */ }
-  return String(fallbackEnv?.[key] ?? '').trim();
+    return (m?.[2] ?? m?.[3] ?? m?.[1] ?? '').trim();
+  } catch { /* no .env yet */ }
+  return '';
 }
 
 /** The render resolution the CHILD will use, per MODEL: Seedance 2.5 has its own knob and its own

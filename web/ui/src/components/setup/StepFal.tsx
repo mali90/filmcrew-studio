@@ -53,7 +53,7 @@ export function StepFal({ state, dispatch }: { state: WizardState; dispatch: Dis
   const validateSegmind = async () => {
     dispatch({ type: 'patch', patch: { segmindCheck: { state: 'checking' } } });
     try {
-      const r = await api.validateSegmind(state.segmindKey);
+      const r = await api.validateSegmind(state.segmindKey, state.backend);
       dispatch({
         type: 'patch',
         patch: {
