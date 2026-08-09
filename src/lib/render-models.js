@@ -28,6 +28,10 @@ export const PROVIDERS = {
 export const RENDER_MODELS = {
   'kling-o3': {
     label: 'Kling 3.0 Omni',
+    // The picker's compact spelling. A model whose full label already fits a segment omits it, and
+    // every caller falls back to `label` — so this is a display detail, never a second name: the UI
+    // reads it from HERE rather than keeping its own segment table (CreateHero.registry.test.tsx).
+    shortLabel: 'Kling',
     family: 'kling',
     castLimit: 1, // one starred cast member — Kling takes a single elements set per job
     aspects: ['16:9', '9:16', '1:1'],

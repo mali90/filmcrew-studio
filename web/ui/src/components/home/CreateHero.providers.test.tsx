@@ -175,6 +175,56 @@ describe('CreateHero — caps follow the (model, provider) pair', () => {
     await screen.findByText('run page web-prov-1');
     expect(seen.body?.aspect).toBe(aspectsFor('seedance-2.0@fal')[0]);
   });
+
+  it('a model switch that costs BOTH a cast and a ratio says so in ONE status line', async () => {
+    server.use(http.get('/api/cast/characters', () => HttpResponse.json(CAST_FIVE)));
+    const seen = capturePost();
+    renderHome();
+    await pickModel('Seedance 2.5');
+    const cast = await screen.findByRole('group', { name: 'Starring' });
+    for (const name of ['keeper', 'gull', 'crab', 'whale']) {
+      await userEvent.click(within(cast).getByRole('button', { name }));
+    }
+    const aspects = screen.getByRole('radiogroup', { name: 'Aspect ratio' });
+    await userEvent.click(within(aspects).getByRole('radio', { name: '21:9' }));
+
+    await pickModel('Kling');
+    // one line, both drops: a second status region would make the user hunt for the other half
+    const notes = await screen.findAllByRole('status');
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toHaveTextContent('21:9');
+    expect(notes[0]).toHaveTextContent(/gull/);
+    expect(within(cast).getByRole('button', { name: 'keeper' })).toHaveAttribute('aria-pressed', 'true');
+    expect(within(cast).getByRole('button', { name: 'gull' })).toHaveAttribute('aria-pressed', 'false');
+
+    await userEvent.type(screen.getByLabelText('Your idea, in one line'), 'a keeper alone{Enter}');
+    await screen.findByText('run page web-prov-1');
+    expect(seen.body?.cast).toEqual(['keeper']);                        // kling stars one
+    expect(seen.body?.aspect).toBe(aspectsFor('kling-o3@fal')[0]);      // and cannot render 21:9
+  });
+
+  it('a provider switch between endpoints with the SAME caps trims nothing and says nothing', async () => {
+    server.use(http.get('/api/cast/characters', () => HttpResponse.json(CAST_FIVE)));
+    const seen = capturePost();
+    renderHome();
+    await pickModel('Seedance 2.5');
+    const cast = await screen.findByRole('group', { name: 'Starring' });
+    for (const name of ['keeper', 'gull', 'crab', 'whale']) {
+      await userEvent.click(within(cast).getByRole('button', { name }));
+    }
+    const aspects = screen.getByRole('radiogroup', { name: 'Aspect ratio' });
+    await userEvent.click(within(aspects).getByRole('radio', { name: '21:9' }));
+
+    await userEvent.click(within(providerGroup()).getByRole('radio', { name: 'Segmind' }));
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(within(aspects).getByRole('radio', { name: '21:9' })).toHaveAttribute('aria-checked', 'true');
+
+    await userEvent.type(screen.getByLabelText('Your idea, in one line'), 'four of them{Enter}');
+    await screen.findByText('run page web-prov-1');
+    expect(seen.body?.backend).toBe('seedance-2.5@segmind');
+    expect(seen.body?.cast).toEqual(['keeper', 'gull', 'crab', 'whale']);
+    expect(seen.body?.aspect).toBe('21:9');
+  });
 });
 
 describe('CreateHero — honest money copy', () => {

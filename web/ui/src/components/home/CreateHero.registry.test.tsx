@@ -17,13 +17,20 @@ import type { GlobalLive } from '../../hooks/useGlobalEvents';
 import { ToastProvider } from '../ui/Toast';
 import HomePage from '../../pages/Home';
 import { aspectsForBackend, castCapFor } from './CreateHero';
-import { ALL_BACKENDS, RENDER_MODELS, aspectsFor, castLimitFor, normalizeBackend } from '../../../../../src/lib/render-models.js';
+import { ALL_BACKENDS, PROVIDERS, RENDER_MODELS, aspectsFor, castLimitFor, normalizeBackend } from '../../../../../src/lib/render-models.js';
 
 const globalLive = vi.hoisted(() => ({ state: { active: [], queued: [], lastRunStatus: null } as GlobalLive }));
 vi.mock('../../hooks/useGlobalEvents', () => ({ useGlobalEvents: () => globalLive.state }));
 
-const MODELS = RENDER_MODELS as Record<string, { label: string }>;
-const labelOf = (backend: string) => MODELS[normalizeBackend(backend).model]!.label;
+const MODELS = RENDER_MODELS as Record<string, { label: string; shortLabel?: string; providers: Record<string, unknown> }>;
+const PROVIDER_LABELS = PROVIDERS as Record<string, { label: string }>;
+// A bare model id is not a backend id, so resolve it the way the registry itself does.
+const modelOf = (value: string) => (MODELS[value] ? value : normalizeBackend(value).model);
+const labelOf = (backend: string) => MODELS[modelOf(backend)]!.label;
+/** What a segment must be captioned: the registry's compact spelling, falling back to its full label. */
+const segmentLabelOf = (model: string) => MODELS[model]!.shortLabel ?? MODELS[model]!.label;
+/** The models the picker may offer at all: a model with no provider entry can render nothing. */
+const OFFERED = Object.keys(MODELS).filter((id) => Object.keys(MODELS[id]!.providers).length > 0);
 
 function RunProbe() {
   const { id } = useParams();
@@ -78,6 +85,35 @@ describe('CreateHero — the registry is the only cap table', () => {
       expect(screen.getByText(`Starring — up to ${castLimitFor(backend)} for ${labelOf(backend)}`)).toBeInTheDocument();
     }
   });
+
+  it('the model segments ARE the registry\'s renderable models, captioned by the registry', async () => {
+    renderHome();
+    const group = await screen.findByRole('radiogroup', { name: 'Render backend' });
+    expect(within(group).getAllByRole('radio').map((r) => r.textContent)).toEqual(OFFERED.map(segmentLabelOf));
+  });
+
+  it('the Provider control lists exactly the registry\'s providers for the selected model', async () => {
+    renderHome();
+    for (const model of OFFERED) {
+      await userEvent.click(screen.getByRole('radio', { name: segmentLabelOf(model) }));
+      const providers = Object.keys(MODELS[model]!.providers);
+
+      // one place to render it → no control at all, and the page says where it runs
+      if (providers.length === 1) {
+        expect(screen.queryByRole('radiogroup', { name: 'Provider' })).not.toBeInTheDocument();
+        expect(screen.getByText(new RegExp(`${PROVIDER_LABELS[providers[0]!]!.label} only`, 'i'))).toBeInTheDocument();
+      } else {
+        const group = screen.getByRole('radiogroup', { name: 'Provider' });
+        expect(within(group).getAllByRole('radio').map((r) => r.textContent))
+          .toEqual(providers.map((p) => PROVIDER_LABELS[p]!.label));
+      }
+
+      // and the ratios on screen are that (model, provider) pair's, never a hand-kept list
+      const aspects = screen.getByRole('radiogroup', { name: 'Aspect ratio' });
+      expect(within(aspects).getAllByRole('radio').map((r) => r.getAttribute('aria-label')))
+        .toEqual(aspectsFor(`${model}@${providers[0]}`));
+    }
+  });
 });
 
 describe('CreateHero — server defaults are registry-validated', () => {
@@ -87,7 +123,7 @@ describe('CreateHero — server defaults are registry-validated', () => {
     })));
     const seen = capturePost();
     renderHome();
-    await vi.waitFor(() => expect(screen.getByRole('radio', { name: 'Seedance' })).toHaveAttribute('aria-checked', 'true'));
+    await vi.waitFor(() => expect(screen.getByRole('radio', { name: 'Seedance 2.0' })).toHaveAttribute('aria-checked', 'true'));
 
     const group = screen.getByRole('radiogroup', { name: 'Aspect ratio' });
     expect(within(group).getAllByRole('radio').map((r) => r.getAttribute('aria-label'))).toEqual(aspectsFor('seedance-2.0@fal'));

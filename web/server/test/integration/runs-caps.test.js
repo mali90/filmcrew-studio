@@ -104,6 +104,26 @@ test('POST /api/runs accepts legacy AND compound backend ids, rejects anything e
   assert.equal(runCount(), before, 'a rejected backend spawns nothing and writes no run dir');
 });
 
+test('every id the UI picker can post is accepted — one create per registry backend', async () => {
+  // The create page composes `<model>@<provider>` from the SAME registry this route validates
+  // against, so every pair it can produce must be creatable; a pair the registry does not declare
+  // (a provider that model does not run on) must be refused before anything spawns.
+  const { BACKEND_IDS, capsFor } = await import('../../../../src/lib/render-models.js');
+  for (const id of BACKEND_IDS) {
+    const res = await create({ backend: id, aspect: capsFor(id).aspects[0] });
+    assert.equal(res.statusCode, 201, `${id}: ${res.body}`);
+  }
+
+  const before = runCount();
+  for (const bogus of ['kling-o3@segmind', 'seedance-2.5@runway', 'seedance-3.0@fal']) {
+    const res = await create({ backend: bogus, aspect: '16:9' });
+    assert.equal(res.statusCode, 400, `${bogus}: ${res.body}`);
+    assert.match(res.json().error, /Unknown render backend/);
+    assert.ok(res.json().hint.includes('seedance-2.5@segmind'), `the 400 for ${bogus} names the real ids`);
+  }
+  assert.equal(runCount(), before, 'a backend nothing can render spawns nothing and writes no run dir');
+});
+
 test('POST /api/runs persists a MEMBER of ALL_BACKENDS, never the raw spelling', async () => {
   // " seedance " normalizes fine at the gate, but the manifest must store a value the estimator's
   // exact price-table lookup accepts — persisting the raw spelling would fail every estimate and
