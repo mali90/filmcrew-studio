@@ -32,6 +32,12 @@ const childEnv = {
   FAL_KLING_ENDPOINT: 'submit', FAL_SEEDANCE_ENDPOINT: 'seedance-submit', FAL_SEEDANCE_PROBE_ENDPOINT: 'seedance-probe',
   SEEDANCE_UPLOAD_MODE: 'data-uri',
   VIDEO_WIDTH: '128', VIDEO_HEIGHT: '128', VIDEO_FPS: '15', VIDEO_INTERPOLATE: 'false',
+  // Render children run with cwd = the real repo, so `import 'dotenv/config'` loads the DEVELOPER'S
+  // .env for any variable childEnv leaves unset (dotenv never overrides an existing key). fal is
+  // already pinned to its mock above; Segmind must be too, or a machine that happens to carry a
+  // SEGMIND_API_KEY would send a test render to api.segmind.com and be billed for it. An empty key
+  // also keeps `hasSegmindKey` false, which is what the upscale-provider assertions below rely on.
+  SEGMIND_API_KEY: '', SEGMIND_BASE_URL: 'http://127.0.0.1:1',
 };
 
 const envRoot = path.join(tmpRoot, 'envroot');
@@ -592,4 +598,39 @@ test('estimate: a 2.5@fal run prices the resolution SEEDANCE25_RESOLUTION select
     fs.writeFileSync(envFile, `${original}SEEDANCE_RESOLUTION=480p\n`);
     assert.equal((await totalFor()).totalUsd, at720.totalUsd, '2.5 falls back to its own 720p default');
   } finally { fs.writeFileSync(envFile, original); }
+});
+
+// A take on a provider that publishes no rate still SPENT money. The ledger's `estUsd: null` alone
+// is ambiguous — a local assemble records null too, and that one really was free — so an unpriced
+// take is FLAGGED. Getting this wrong is how a run page ends up implying a paid Segmind render cost
+// nothing. The ledger row is written at enqueue, so this asserts it without spending a child's time
+// rendering (childEnv carries no Segmind key, so the child fails fast and reaches no network).
+test('the cost ledger records an unpriced take as spend-with-no-rate, never as free', async () => {
+  const { runId } = (await post('/api/runs', { idea: 'a bell buoy in the dark', backend: 'seedance-2.5@segmind', aspect: '16:9', durationS: null })).json();
+  await waitForStatus(runId, 'plan-ready');
+
+  const res = await post(`/api/runs/${runId}/render`, { mode: 'full' });
+  assert.equal(res.statusCode, 202, res.body);
+  assert.equal(res.json().estUsd, null, 'the API answers honestly rather than quoting a made-up figure');
+
+  try {
+    const { manifest } = (await get(`/api/runs/${runId}`)).json().run;
+    const row = manifest.costLedger.at(-1);
+    assert.equal(row.action, 'full');
+    assert.equal(row.estUsd, null);
+    assert.equal(row.unpriced, true, 'flagged, so a null here can never be read as "this step was free"');
+    assert.match(row.note, /no published rate|estimate unavailable/i);
+    assert.ok(!/\bfree\b/i.test(row.note), 'the note must never call a paid render free');
+    assert.equal(manifest.takes.at(-1).estUsd, null, 'and the take agrees with its ledger row');
+
+    // the contrast that gives `unpriced` its meaning: a priced backend records a real number
+    const priced = (await post('/api/runs', { idea: 'the same idea on fal', backend: 'seedance-2.5@fal', aspect: '16:9', durationS: null })).json().runId;
+    await waitForStatus(priced, 'plan-ready');
+    await post(`/api/runs/${priced}/render`, { mode: 'full' });
+    try {
+      const pRow = (await get(`/api/runs/${priced}`)).json().run.manifest.costLedger.at(-1);
+      assert.ok(pRow.estUsd > 0, 'fal 2.5 publishes its rate, so the ledger carries a figure');
+      assert.ok(!pRow.unpriced, 'and is not flagged');
+    } finally { await post(`/api/runs/${priced}/cancel`, {}); }
+  } finally { await post(`/api/runs/${runId}/cancel`, {}); }
 });

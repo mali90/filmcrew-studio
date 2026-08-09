@@ -228,6 +228,59 @@ test('caps WITHOUT maxCombinedRefs are unaffected — only per-kind caps bite (f
   assert.throws(() => buildSeedanceArgs({ ...BASE, imageUrls: urls(10, 'i') }, FAL20), /9/);
 });
 
+// ── 8. The SHIPPED registry entries, not hand-written stand-ins ─────────────
+// Every fixture above is written out by hand, which is what proves the builder is data-driven — but
+// it proves nothing about what a paid render actually sends unless the caps that SHIP behave the
+// same way. These four run the real `capsFor()` bundles through the same builder.
+const SG25 = capsFor('seedance-2.5@segmind');
+const SG20 = capsFor('seedance-2.0@segmind');
+const FAL25 = capsFor('seedance-2.5@fal');
+
+test('the hand-written fal-2.5 fixture has not drifted from the entry that ships', () => {
+  // If this fails, section 7's combined-budget proof is about a model nobody renders on.
+  for (const k of ['maxImages', 'maxAudioRefs', 'maxVideoRefs', 'maxCombinedRefs', 'durationType', 'minSeconds', 'maxSeconds', 'supportsSeed']) {
+    assert.deepEqual(FAL25[k], CAPS_25_FAL[k], k);
+  }
+  assert.deepEqual(FAL25.argMap, CAPS_25_FAL.argMap);
+});
+
+test('seedance-2.5@segmind: its PUBLISHED per-kind caps bite (30 images, 10 audios, 10 videos)', () => {
+  const ok = buildSeedanceArgs({ ...BASE, imageUrls: urls(30, 'i'), audioUrls: urls(10, 'a'), videoUrls: urls(10, 'v'), resolution: '720p' }, SG25);
+  assert.equal(ok.reference_images.length, 30, 'Segmind key names, straight off the registry');
+  assert.equal(ok.reference_audios.length, 10);
+  assert.equal(ok.reference_videos.length, 10);
+
+  assert.throws(() => buildSeedanceArgs({ ...BASE, imageUrls: urls(31, 'i'), resolution: '720p' }, SG25), /30/);
+  assert.throws(() => buildSeedanceArgs({ ...BASE, audioUrls: urls(11, 'a'), resolution: '720p' }, SG25), /10/);
+});
+
+test('seedance-2.5@segmind has NO combined budget — 50 refs across kinds is legal here, unlike fal', () => {
+  // The two entries for the SAME model genuinely differ: fal budgets references across modalities,
+  // Segmind publishes per-kind limits. Collapsing them onto one rule would either reject a legal
+  // Segmind job or let a fal job through to a 422 with every reference already uploaded.
+  const fifty = { ...BASE, imageUrls: urls(30, 'i'), audioUrls: urls(10, 'a'), videoUrls: urls(10, 'v'), resolution: '720p' };
+  assert.equal(SG25.maxCombinedRefs, undefined, 'no combined budget is declared for Segmind');
+  const args = buildSeedanceArgs(fifty, SG25);
+  assert.equal(args.reference_images.length + args.reference_audios.length + args.reference_videos.length, 50);
+  // …and the same 50 on fal 2.5 sits exactly ON its budget, so one more is the throw
+  assert.throws(() => buildSeedanceArgs({ ...fifty, imageUrls: urls(31, 'i') }, FAL25), /50/);
+});
+
+test('seedance-2.0@segmind is the tighter model: 9 images, 3 audios, 3 videos, 4–15s', () => {
+  const ok = buildSeedanceArgs({ ...BASE, imageUrls: urls(9, 'i'), audioUrls: urls(3, 'a'), videoUrls: urls(3, 'v'), resolution: '1080p' }, SG20);
+  assert.equal(ok.reference_images.length, 9);
+  assert.equal(typeof ok.duration, 'number', 'Segmind takes an INT duration on both models');
+
+  assert.throws(() => buildSeedanceArgs({ ...BASE, imageUrls: urls(10, 'i'), resolution: '1080p' }, SG20), /9/);
+  assert.throws(() => buildSeedanceArgs({ ...BASE, audioUrls: urls(4, 'a'), resolution: '1080p' }, SG20), /3/);
+  // 2.5's 30s window must not leak onto 2.0 just because they share a provider. The builder CLAMPS
+  // (the loud rejection is validateJobs' job, before any spend) — so the shipped window is what
+  // decides whether a 20s intent goes out as 20 or as 15.
+  assert.equal(buildSeedanceArgs({ ...BASE, totalDuration: 20, resolution: '1080p' }, SG20).duration, 15);
+  assert.equal(buildSeedanceArgs({ ...BASE, totalDuration: 20, resolution: '720p' }, SG25).duration, 20);
+  assert.equal(buildSeedanceArgs({ ...BASE, totalDuration: 2, resolution: '1080p' }, SG20).duration, 4, 'and the 4s floor is shared');
+});
+
 test('the builder is pure — it mutates neither the intent nor the caps', () => {
   const intent = { ...BASE, imageUrls: ['i1'], firstFrameUrl: 'seam.png' };
   const capsSnapshot = JSON.stringify(FAL20);

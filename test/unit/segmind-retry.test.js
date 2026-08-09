@@ -34,7 +34,7 @@ const { runSegmind, submitSegmind } = await import('../../src/lib/segmind.js');
 const posts = (from) => sg.requests.slice(from).filter((q) => q.method === 'POST');
 const ARGS = { prompt: 'a harbour at dawn', duration: 5 };
 
-test.afterEach(() => { Object.assign(sg.opts, { submitFailTimes: 0, statusFailOnce: false, validationFail: false, insufficientCredits: false, failed: false, contentPolicy: false, expired: false, processingHits: 0, submitHang: false }); });
+test.afterEach(() => { Object.assign(sg.opts, { submitFailTimes: 0, statusFailOnce: false, validationFail: false, insufficientCredits: false, failed: false, contentPolicy: false, expired: false, processingHits: 0, submitHang: false, authFail: false, unknownSlug: false }); });
 test.after(async () => { await sg.close(); });
 
 // ── THE billing guard ───────────────────────────────────────────────────────
@@ -123,13 +123,46 @@ test('a submit that keeps failing gives up at SEGMIND_MAX_RETRIES with the provi
 // ── deterministic failures: never retried, always actionable ────────────────
 test('a 422 submit is a bad request — reported once, with its detail, never retried', async () => {
   const before = sg.requests.length;
+  const queuedBefore = sg.queued.length;
   sg.opts.validationFail = true;
   await assert.rejects(runSegmind('seedance-2.5', ARGS), (e) => {
     assert.match(e.message, /duration must be between 4 and 30/, 'the provider detail survives to the user');
     return true;
   });
   assert.equal(posts(before).length, 1, 'a deterministic rejection is not made cheaper by asking again');
-  assert.equal(sg.queued.length, sg.queued.length, 'nothing queued');
+  assert.equal(sg.queued.length, queuedBefore, 'a rejected submit queued nothing, so nothing was billed');
+});
+
+test('a REJECTED key (401/403) stops at one attempt and names the var to fix', async () => {
+  // Every authenticated route answers 401 here, which is what a stale or mistyped key looks like.
+  // Burning SEGMIND_MAX_RETRIES on it wastes the user's time; worse, a retry loop on an auth error
+  // is how a transport ends up hammering a provider it has already been told to go away by.
+  const before = sg.requests.length;
+  const queuedBefore = sg.queued.length;
+  sg.opts.authFail = true;
+  await assert.rejects(runSegmind('seedance-2.5', ARGS), (e) => {
+    assert.match(e.message, /SEGMIND_API_KEY/, 'the env var to fix is named');
+    assert.match(e.message, /segmind\.com/i, 'and where to check the key');
+    assert.match(e.message, /401|403/, 'with the status that says "your key", not "our fault"');
+    return true;
+  });
+  assert.equal(posts(before).length, 1, 'asking the same rejected key again cannot help');
+  assert.equal(sg.queued.length, queuedBefore, 'nothing was queued behind a rejected key');
+});
+
+test('a 404 on SUBMIT reads as a bad slug/base url and names the slug settings — never retried', async () => {
+  // A 404 here is configuration, not weather: a wrong SEGMIND_*_SLUG or a SEGMIND_BASE_URL pointing
+  // somewhere else. It must not be confused with the 404 a POLL gets, which means "record expired".
+  const before = sg.requests.length;
+  sg.opts.unknownSlug = true;
+  await assert.rejects(runSegmind('seedance-2.5', ARGS), (e) => {
+    assert.match(e.message, /404/);
+    assert.match(e.message, /slug/i);
+    assert.match(e.message, /SEGMIND_SEEDANCE25_SLUG|SEGMIND_TOPAZ_SLUG/, 'the settings that produce it are named');
+    assert.ok(!/expire/i.test(e.message), 'a submit 404 is NOT the ~1h record expiry — that is the poll case');
+    return true;
+  });
+  assert.equal(posts(before).length, 1, 'a model that does not exist will not exist on the second ask either');
 });
 
 test('406 says INSUFFICIENT CREDITS, points at where to top up, and is never retried', async () => {
