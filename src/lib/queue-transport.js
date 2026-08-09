@@ -8,6 +8,7 @@
 // import ever changed.
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import log from './logger.js'; // zero imports of its own — the config-free promise above still holds
 import { fetchRetry, writeBuffer, ensureDir } from './util.js';
 
 const MIME = {
@@ -57,31 +58,54 @@ export function contentPolicyError(err, endpoint, provider = 'fal') {
   return new Error(`${provider} ${endpoint}: the generated video was flagged by content moderation as sensitive (content_policy_violation) — usually a false positive on a benign prompt. Revise the plan to rephrase it (LLM only, no render spend), or retry to re-roll. [${String(err?.message ?? '').slice(0, 160)}]`);
 }
 
-/** Pull every downloadable file URL out of a queue result ({ video:{url} } and common variants). */
-export function resultFileUrls(result) {
-  const urls = [];
-  const push = (v) => { if (v?.url) urls.push(v.url); };
+/**
+ * Every downloadable file in a queue result, tagged with whether the JOB depends on it.
+ * `optional: true` marks a courtesy artifact: something the provider threw in that we would like but
+ * that is reproducible locally, so failing to fetch it must never discard the paid render.
+ */
+function resultFiles(result) {
+  const files = [];
+  const push = (v, optional = false) => { if (v?.url) files.push({ url: v.url, optional }); };
   push(result?.video);
   for (const v of result?.videos ?? []) push(v);
   // A provider that was asked for its own closing still (`return_last_frame`) returns it alongside
   // the video. It downloads to <job>/last_frame.png — the exact file every downstream seam reads —
-  // so the generator's own pixels replace an ffmpeg re-encode of them.
-  push(result?.last_frame);
-  if (typeof result?.url === 'string') urls.push(result.url);
-  return urls;
+  // so the generator's own pixels replace an ffmpeg re-encode of them. OPTIONAL by construction:
+  // the same frame can always be grabbed off the finished clip with ffmpeg (see
+  // pipeline.closingFrameFor), and the video is what was paid for.
+  push(result?.last_frame, true);
+  if (typeof result?.url === 'string') files.push({ url: result.url, optional: false });
+  return files;
 }
 
-/** Download every file url in a completed queue result to destDir (shared by the video backends). */
+/** Pull every downloadable file URL out of a queue result ({ video:{url} } and common variants). */
+export function resultFileUrls(result) {
+  return resultFiles(result).map((f) => f.url);
+}
+
+/**
+ * Download every file url in a completed queue result to destDir (shared by the video backends).
+ * A required file that will not download is a hard error; an OPTIONAL one is skipped with a warning
+ * on stderr — the clip is already generated and billed, and throwing it away over a missing courtesy
+ * still would cost the user a whole re-render to recover something ffmpeg can produce for free.
+ */
 export async function downloadResultFiles(result, destDir, label) {
-  const urls = resultFileUrls(result);
-  if (!urls.length) throw new Error(`${label} job produced no video url: ${JSON.stringify(result).slice(0, 400)}`);
+  const files = resultFiles(result);
+  if (!files.some((f) => !f.optional)) {
+    throw new Error(`${label} job produced no video url: ${JSON.stringify(result).slice(0, 400)}`);
+  }
   ensureDir(destDir);
   const paths = [];
-  for (const [i, url] of urls.entries()) {
-    const res = await fetchRetry(url, {}, { retries: 3 });
-    if (!res.ok) throw new Error(`${label} output download failed (${url.slice(0, 80)}): HTTP ${res.status}`);
+  for (const [i, { url, optional }] of files.entries()) {
     const base = (() => { try { return path.basename(new URL(url).pathname) || `out_${i + 1}.mp4`; } catch { return `out_${i + 1}.mp4`; } })();
-    paths.push(await writeBuffer(path.join(destDir, base.replace(/[/\\]/g, '_')), Buffer.from(await res.arrayBuffer())));
+    try {
+      const res = await fetchRetry(url, {}, { retries: 3 });
+      if (!res.ok) throw new Error(`${label} output download failed (${url.slice(0, 80)}): HTTP ${res.status}`);
+      paths.push(await writeBuffer(path.join(destDir, base.replace(/[/\\]/g, '_')), Buffer.from(await res.arrayBuffer())));
+    } catch (e) {
+      if (!optional) throw e;
+      log.warn(`${label}: could not download the optional ${base} (${String(e?.message ?? e).slice(0, 120)}) — falling back to a local frame grab.`);
+    }
   }
   return paths;
 }

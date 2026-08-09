@@ -30,6 +30,13 @@
   for a closing pin). `--first-frame-from` beats the frame `--seam-from` would have derived. All
   three are validated before anything is queued — a typo costs nothing.
 
+### Fixed
+- A provider's **closing still is a courtesy, not the purchase**: a `return_last_frame` image that is
+  advertised and then fails to download (an expired CDN record) no longer throws away the render it
+  came with. The clip has already been generated and billed by that point, and the same frame is
+  reproducible locally, so the download is skipped with a warning and the seam frame is grabbed with
+  ffmpeg instead (`seam_out.frameSource: 'ffmpeg'`). A missing **video** is still a hard error.
+
 ### Changed
 - A boundary frame that has to travel as a reference no longer **reserves** an image slot from the
   cast: it is a droppable soft pin, so a full-cast job is valid again. An authored `last_frame` on

@@ -40,6 +40,10 @@ const readBody = (req) => new Promise((r) => { let b = ''; req.on('data', (c) =>
  *     cost / remainingCredits — the terminal body's metrics
  *     upscaledBytes     — the bytes the Topaz download serves (default: videoBytes), so a test can
  *                         hand back an audio-less clip and prove the source audio is re-muxed on
+ *     omitLastFrame     — a job that ASKED for return_last_frame gets no `last_frame` back at all
+ *     lastFrameBytes    — the bytes the closing-still download serves (default: 'PROVIDER-PNG')
+ *     lastFrameFail     — the `last_frame` url is advertised but answers 404 (expired CDN record):
+ *                         the paid clip must still land, with the frame grabbed locally instead
  * @returns {Promise<{baseUrl:string, requests:object[], queued:object[], opts:object, close:()=>Promise<void>}>}
  */
 export async function startSegmindServer({ videoBytes = Buffer.from('FAKE-MP4'), opts = {} } = {}) {
@@ -61,6 +65,10 @@ export async function startSegmindServer({ videoBytes = Buffer.from('FAKE-MP4'),
     // reproduces Topaz handing back a clip whose audio track it dropped.
     if (u.pathname.startsWith('/dl/')) {
       if (u.pathname.endsWith('last_frame.png')) {
+        // `lastFrameFail` is the provider that ADVERTISED its closing still and then cannot serve it
+        // (an expired CDN record is the common one). The clip is already generated and billed, so
+        // this must degrade to an ffmpeg grab — never fail the render.
+        if (opts.lastFrameFail) { res.writeHead(404); return res.end('gone'); }
         res.writeHead(200, { 'content-type': 'image/png' });
         return res.end(opts.lastFrameBytes ?? Buffer.from('PROVIDER-PNG'));
       }

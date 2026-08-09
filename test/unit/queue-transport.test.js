@@ -11,10 +11,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { neutralizeDotenv } from '../helpers/env.js';
 neutralizeDotenv();
+// logger.js snapshots LOG_LEVEL at import, and one case below asserts that a skipped optional
+// download is REPORTED — pin the level so an ambient LOG_LEVEL=error cannot silently pass it.
+process.env.LOG_LEVEL = 'info';
 
 const qt = await import('../../src/lib/queue-transport.js');
 const fal = await import('../../src/lib/fal.js');
@@ -82,6 +86,69 @@ test('downloadResultFiles keeps its exact no-output error string', async () => {
     );
     assert.deepEqual(fs.readdirSync(dir), [], 'nothing is written when there is nothing to download');
   } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// A result carrying ONLY the optional closing still is still a job with no video — the courtesy
+// artifact must never satisfy the "produced a video" check.
+test('a last_frame with no video url is NOT a downloadable job', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-qt-lf-'));
+  try {
+    await assert.rejects(
+      () => qt.downloadResultFiles({ status: 'COMPLETED', last_frame: { url: 'http://127.0.0.1:1/last_frame.png' } }, dir, 'Segmind seedance'),
+      /Segmind seedance job produced no video url: /,
+    );
+    assert.deepEqual(fs.readdirSync(dir), [], 'an unreachable optional url is not even attempted');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The paid artifact is the CLIP. `return_last_frame` is a courtesy: the same frame is always
+// reproducible with ffmpeg off the finished clip (pipeline.closingFrameFor), so an expired or 404
+// still must degrade to that grab — never discard a render the user has already been billed for.
+test('an undownloadable last_frame is skipped, not fatal — the clip still lands', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-qt-opt-'));
+  const server = http.createServer((req, res) => {
+    if (req.url.endsWith('last_frame.png')) { res.writeHead(404); return res.end('gone'); }
+    res.writeHead(200, { 'content-type': 'video/mp4' });
+    return res.end(Buffer.from('FAKE-MP4'));
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const stderr = [];
+  const write = process.stderr.write.bind(process.stderr);
+  process.stderr.write = (chunk, ...rest) => { stderr.push(String(chunk)); return write(chunk, ...rest); };
+  try {
+    const paths = await qt.downloadResultFiles(
+      { video: { url: `${base}/dl/out.mp4` }, last_frame: { url: `${base}/dl/last_frame.png` } },
+      dir, 'Segmind seedance',
+    );
+    assert.deepEqual(paths.map((p) => path.basename(p)), ['out.mp4'], 'the clip downloaded; the courtesy still did not');
+    assert.equal(fs.existsSync(path.join(dir, 'last_frame.png')), false, 'no truncated/empty frame is left behind');
+    assert.ok(stderr.join('').includes('last_frame.png'), 'the skip is reported, never silent');
+  } finally {
+    process.stderr.write = write;
+    await new Promise((r) => server.close(r));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The mirror image: a VIDEO that will not download is still fatal. Nothing about the optional path
+// may soften the required one.
+test('an undownloadable VIDEO is still fatal', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-qt-req-'));
+  const server = http.createServer((_req, res) => { res.writeHead(404); res.end('gone'); });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    await assert.rejects(
+      () => qt.downloadResultFiles({ video: { url: `${base}/dl/out.mp4` } }, dir, 'fal Kling'),
+      /fal Kling output download failed .*HTTP 404/,
+    );
+  } finally {
+    await new Promise((r) => server.close(r));
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

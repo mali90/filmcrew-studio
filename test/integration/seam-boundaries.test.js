@@ -228,6 +228,27 @@ test('return_last_frame absent from the response → ffmpeg grab, recorded as fr
   } finally { sg.opts.omitLastFrame = false; cleanup(); }
 });
 
+// The nastier half of the same fallback: the provider ADVERTISED a closing still and then could not
+// serve it (an expired CDN record). The clip is generated and BILLED by then, so a 404 on a courtesy
+// artifact must never throw the render away — it degrades to the ffmpeg grab, exactly like absence.
+test('a last_frame url that will not download → the paid clip survives, frameSource "ffmpeg"', PENDING_FF, async () => {
+  const { dir, cleanup } = mkTmp('sb-rlf-404');
+  sg.opts.lastFrameFail = true;
+  try {
+    const spec = specWith({ backend: 'seedance-2.0@segmind', castCount: 1 });
+    spec.kling.jobs = [
+      { job_id: 'K1', shots: ['S1'], elements: ['e1'] },
+      { job_id: 'K2', shots: ['S2'], elements: ['e1'] },
+    ];
+    const r = await renderSpec(spec, { runDir: dir });
+    assert.ok(r.jobs.every((j) => !j.error), `a courtesy download must not fail a paid render: ${JSON.stringify(r.jobs.map((j) => j.error))}`);
+    const seam = path.join(dir, 'K1', 'last_frame.png');
+    assert.ok(fs.existsSync(seam), 'the seam file still appears — the chain must not break');
+    assert.notEqual(fs.readFileSync(seam).toString(), 'PROVIDER-PNG', 'these are ffmpeg pixels, not the provider’s');
+    assert.equal(sidecar(dir, 'K1').seam_out.frameSource, 'ffmpeg', 'record which frame we actually used');
+  } finally { sg.opts.lastFrameFail = false; cleanup(); }
+});
+
 test('fal never requests return_last_frame (its caps do not declare it)', PENDING, async () => {
   const { dir, cleanup } = mkTmp('sb-rlf-fal');
   try {
