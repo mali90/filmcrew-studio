@@ -67,6 +67,7 @@ export function ReviewStage({ run, cutId, setCutId }: {
             variant="secondary"
             size="sm"
             costUsd={fullEstimate.data?.totalUsd ?? null}
+            costUnknown={Boolean(fullEstimate.data?.unknownPrice)}
             loading={fullRender.isPending}
             onPaidClick={() => fullRender.mutate()}
           >

@@ -46,12 +46,17 @@ function validateProject(p, P) {
   if (p.cast !== undefined && !isArr(p.cast)) P.push('project.cast must be an array when present');
 }
 
-function validateShotScript(s, i, P) {
+// A shot can never be longer than one GENERATION of the model that will render it (a job holds at
+// least one shot), so the per-shot ceiling is the model's own job window — 15s on Kling and Seedance
+// 2.0, 30s on Seedance 2.5. With no backend named it is the superset's widest, so a spec planned for
+// a long-window model still round-trips through a validator that was told nothing about the model.
+function validateShotScript(s, i, P, caps) {
   const at = `shots[${i}]`;
+  const maxSeconds = caps?.maxSeconds ?? MAX_JOB_SECONDS;
   if (!s || typeof s !== 'object') return P.push(`${at}: not an object`);
   if (!nonEmpty(s.shot_id)) P.push(`${at}.shot_id missing`);
   if (!nonEmpty(s.beat)) P.push(`${at}.beat missing`);
-  if (!isNum(s.duration_s) || s.duration_s < 1 || s.duration_s > MAX_JOB_SECONDS) P.push(`${at}.duration_s must be 1–${MAX_JOB_SECONDS}`);
+  if (!isNum(s.duration_s) || s.duration_s < 1 || s.duration_s > maxSeconds) P.push(`${at}.duration_s must be 1–${maxSeconds}`);
 }
 
 function validateContent(s, i, P) {
@@ -144,7 +149,12 @@ function validateJobs(spec, P, elementIds, caps, enforceModelAspects = false, ch
       else if (sk.content_prompt.length > maxSegChars) P.push(`${at}: shot ${id} content_prompt exceeds ${maxSegChars} chars`);
       total += Math.max(1, Math.round(Number(sk?.duration) || Number(shotById[id]?.duration_s) || 4));
     });
-    if (total > maxSeconds) P.push(`${at}: total ${total}s exceeds the ${maxSeconds}s/job cap (move a shot to another job)`);
+    // The cap is named after the (model, provider) pair that rejected the job — the same model
+    // takes 15s/job on Segmind's 2.0 and 30s on its 2.5, so a bare "15s/job cap" leaves the planner
+    // guessing which window it missed. The number stays first (long-standing wording), and the
+    // backend-less SUPERSET reading carries no provider, so it names no pair.
+    const capOwner = `${caps.label}${caps.providerLabel ? ` on ${caps.providerLabel}` : ''}`;
+    if (total > maxSeconds) P.push(`${at}: total ${total}s exceeds the ${maxSeconds}s/job cap for ${capOwner} (move a shot to another job)`);
     // Naming the model matters here: the floor is 4s on Seedance 2.0 and 1s (i.e. never fires) on
     // Kling, so "under Seedance 2.0's 4s/job minimum" tells the planner which window it missed.
     if (total < minSeconds) P.push(`${at}: total ${total}s is under ${caps.label}'s ${minSeconds}s/job minimum (merge a shot into this job)`);
@@ -170,6 +180,14 @@ function validateJobs(spec, P, elementIds, caps, enforceModelAspects = false, ch
     if (job.first_frame !== undefined && !nonEmpty(job.first_frame)) P.push(`${at}.first_frame must be a non-empty path when present`);
     if (job.last_frame !== undefined && !nonEmpty(job.last_frame)) P.push(`${at}.last_frame must be a non-empty path when present`);
     if (job.last_frame && !job.first_frame) P.push(`${at}: last_frame requires first_frame (the Kling first/last node needs a first frame)`);
+    // Where the native first/last mode EXCLUDES reference images (Segmind), an authored last_frame
+    // can only be honored on a ref-less job — the renderer refuses the mix only after every upload
+    // completed, so reject it here where the planner can still repair the spec for free. (An
+    // omitted/empty job.elements inherits the whole roster, so count what will actually be sent.)
+    const mixRefs = (job.elements ?? []).length || elementIds.size;
+    if (nonEmpty(job.last_frame) && caps.firstFrameExcludesRefs && mixRefs > 0) {
+      P.push(`${at}: last_frame needs ${caps.label}'s native first/last mode, and this job's ${mixRefs} reference image(s) occupy it — drop last_frame or the job's references`);
+    }
   });
 }
 
@@ -244,7 +262,7 @@ export function validateSpec(spec, { upTo = 7, backend, chainFrames = true } = {
   }
   if (upTo >= 1) {
     if (!isArr(spec.shots) || spec.shots.length < 1) P.push('shots must be a non-empty array');
-    shots.forEach((s, i) => validateShotScript(s, i, P));
+    shots.forEach((s, i) => validateShotScript(s, i, P, caps));
   }
   if (upTo >= 2) shots.forEach((s, i) => validateContent(s, i, P));
   if (upTo >= 3) shots.forEach((s, i) => validateCamera(s, i, P));

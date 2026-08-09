@@ -180,7 +180,7 @@ export function AttentionBanner({ run }: { run: RunDetail }) {
                 <p className="w-full text-dense text-ink-secondary">
                   The render was interrupted before any clip finished. You can start it again, or discard the run.
                 </p>
-                <Button variant="secondary" loading={resuming} costUsd={fullQ.data?.totalUsd ?? null} onClick={() => void resume()}>
+                <Button variant="secondary" loading={resuming} costUsd={fullQ.data?.totalUsd ?? null} costUnknown={Boolean(fullQ.data?.unknownPrice)} onClick={() => void resume()}>
                   Resume: re-render
                 </Button>
                 <Button variant="destructive" onClick={() => setConfirmDiscard(true)}>Discard</Button>

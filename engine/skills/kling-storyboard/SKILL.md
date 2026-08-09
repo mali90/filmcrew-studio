@@ -22,7 +22,7 @@ like one scene. Trim ruthlessly to stay under 512 characters.
 
 ## Caps (hard limits, per generation/job)
 - ≤6 storyboard segments (shots) per job
-- ≤15 seconds total per job
+- job seconds: within the "Hard caps" line of the project context — the ceiling is the RENDERING MODEL's own (15s on some models, 30s on others)
 - ≤512 characters per segment
 - reference images per job: the number in the project context's "Hard caps" line (the rendering model's own; on chained Seedance jobs one slot of it belongs to the seam frame — see "Reference budget")
 
@@ -36,7 +36,7 @@ registered voice) makes that character speak in its persistent minted voice.
 ## Multi-shot vs single-shot
 - **Multi-shot** (default): several shots cut together inside one generation — tight, continuous.
 - **Single-shot**: one shot per generation — use for one sustained continuous take. Either way, a
-  video longer than 15s (or more than 6 shots) is split across multiple jobs and stitched in order.
+  video longer than the model's per-job ceiling (or over its shots cap) is split across multiple jobs and stitched in order.
 
 ## The same spec also renders on Seedance 2.0
 Everything above is written for Kling, but the spec is backend-neutral and the Seedance backend

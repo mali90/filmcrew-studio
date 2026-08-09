@@ -9,12 +9,23 @@ type Check = DoctorReport['checks'][number];
 /** The hint shown under a FAILED row, in the app's own vocabulary. */
 export function webHint(c: Check, context: 'wizard' | 'settings'): string {
   switch (c.id) {
-    case 'fal-key': return 'The render key is missing or invalid.';
+    case 'fal-key':
+      // Soft ⇒ nothing in this setup renders, upscales or uploads on fal (a Segmind-only install).
+      return c.soft
+        ? 'Optional here — nothing in your setup runs on fal. You’d need it to mint character voices, or to switch to a fal backend.'
+        : 'The render key is missing or invalid.';
+    case 'segmind-key':
+      return c.soft
+        ? 'Optional here — you’d need it only if you switch a run to a Segmind backend.'
+        : 'Your render backend runs on Segmind. Add SEGMIND_API_KEY to .env — get one from segmind.com (Console → API keys).';
+    case 'render-assets':
+      return 'Segmind fetches your reference images from fal storage, which needs a fal key. Add one, or set SEGMIND_UPLOAD_MODE=data-uri in .env to send the references inline instead — that path needs no fal account.';
     case 'llm':
       if (/CLI/i.test(c.label)) return 'The planner CLI didn’t respond — it may not be installed or logged in.';
       if (/valid/.test(c.label)) return 'That planner isn’t one this app knows.';
       return 'No working key saved for the planner.';
     case 'backend': return 'That render backend isn’t one this app knows.';
+    case 'upscale-provider': return 'UPSCALE_PROVIDER in .env isn’t a provider this app knows. Use auto (upscale wherever the run rendered), fal, or segmind.';
     case 'ffmpeg': return 'Not found on this machine. It assembles your clips into the finished video.';
     case 'ffprobe': return 'Ships with ffmpeg — the install above covers it.';
     case 'references':
@@ -31,7 +42,13 @@ export function webHint(c: Check, context: 'wizard' | 'settings'): string {
   }
 }
 
-/** Which wizard step (or settings card) owns the fix for a hard check. */
+/**
+ * Which wizard step (or settings card) owns the fix for a hard check. A check belongs here ONLY
+ * when the app really can fix it in place — `segmind-key` and `render-assets` are deliberately
+ * absent, because neither the wizard's key step nor the Keys card has a Segmind field or an upload-
+ * mode control yet; a "Fix key" button that lands on a form without the field is worse than the
+ * hint, which names the .env variable to set. Add the entries the moment those controls exist.
+ */
 export const FIX_TARGET: Partial<Record<CheckId, { step: 'llm' | 'fal' | 'backend'; wizardLabel: string; settingsLabel: string; settingsAnchor: string }>> = {
   'fal-key': { step: 'fal', wizardLabel: 'Fix key', settingsLabel: 'Fix in Keys', settingsAnchor: 'keys-heading' },
   llm: { step: 'llm', wizardLabel: 'Fix planner', settingsLabel: 'Fix in Keys', settingsAnchor: 'keys-heading' },

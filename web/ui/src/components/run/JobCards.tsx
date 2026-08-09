@@ -93,7 +93,7 @@ function JobCard({ run, job, state, now }: { run: RunDetail; job: JobView; state
           </>
         )}
         {state === 'failed' && (
-          <Button variant="secondary" size="sm" loading={retrying} costUsd={estQ.data?.totalUsd ?? null} onClick={() => void retry()}>
+          <Button variant="secondary" size="sm" loading={retrying} costUsd={estQ.data?.totalUsd ?? null} costUnknown={Boolean(estQ.data?.unknownPrice)} onClick={() => void retry()}>
             Retry {job.jobId}
           </Button>
         )}

@@ -31,6 +31,49 @@ export function firstFrameIsRef(caps, refCount) {
   return Boolean(caps.firstFrameExcludesRefs) && refCount > 0;
 }
 
+/**
+ * The per-clip audio window this model will accept, in seconds, given how many voice refs share the
+ * job's combined budget. Two independent limits fold into one answer:
+ *   - `caps.audioPerClipS = [minS, maxS]` — the model's own per-clip rule. Segmind's Seedance 2.5
+ *     rejects a reference clip shorter than 2s outright (HTTP 422 on a paid submit), so the SHORT
+ *     end has to be expressible; a model that declares no window has no minimum at all.
+ *   - `caps.audioBudgetS` — the COMBINED budget, split evenly across the refs (today's math).
+ * Exported so the renderer can size its ffmpeg re-cut from the same numbers the decision came from.
+ * @param {object} caps
+ * @param {number} refCount  voice refs sharing the budget
+ * @returns {{minS:number, maxS:number}}  maxS may be Infinity (no opinion)
+ */
+export function audioWindowFor(caps, refCount = 1) {
+  const n = Math.max(1, Math.round(Number(refCount) || 1));
+  const win = Array.isArray(caps?.audioPerClipS) ? caps.audioPerClipS : null;
+  const minS = win ? Math.max(0, Number(win[0]) || 0) : 0;
+  const winMax = Number(win?.[1]);
+  const budget = Number(caps?.audioBudgetS);
+  const share = Number.isFinite(budget) ? Math.floor(budget / n) : Infinity;
+  return { minS, maxS: Math.min(Number.isFinite(winMax) ? winMax : Infinity, share) };
+}
+
+/**
+ * What to do with ONE voice reference clip of `durationS` seconds: send it untouched, re-cut it to
+ * the window's ceiling, or leave it behind entirely. PURE — no ffprobe, no ffmpeg, no fs — so the
+ * policy is unit-testable and the renderer keeps only the I/O.
+ *
+ * An UNKNOWN duration (a failed probe → NaN/0) is always kept: the renderer's long-standing
+ * "send it as-is and let the provider complain" fallback must survive a model gaining a minimum.
+ * @param {number} durationS
+ * @param {object} caps
+ * @param {{refCount?:number}} [opts]
+ * @returns {'keep'|'cut'|'drop'}
+ */
+export function fitAudioRef(durationS, caps, { refCount = 1 } = {}) {
+  const dur = Number(durationS);
+  if (!Number.isFinite(dur) || dur <= 0) return 'keep';
+  const { minS, maxS } = audioWindowFor(caps, refCount);
+  if (dur < minS) return 'drop';
+  if (dur > maxS) return 'cut';
+  return 'keep';
+}
+
 /** Reject an unlisted enum value loudly, naming the model's legal set (no cap ⇒ no opinion). */
 function oneOf(caps, kind, value, allowed) {
   if (!allowed?.length || allowed.includes(value)) return value;
@@ -97,6 +140,10 @@ export function buildSeedanceArgs(intent, caps) {
   capped(caps, 'image references', images.length, caps.maxImages);
   capped(caps, 'audio references', audios.length, caps.maxAudioRefs);
   capped(caps, 'video references', videos.length, caps.maxVideoRefs);
+  // Some models budget references ACROSS modalities instead of per kind (fal's Seedance 2.5 takes 50
+  // combined and declares no per-kind cap at all). Checked after the per-kind caps so the more
+  // specific message wins, and counting the demoted opening frame — it is already in `images`.
+  capped(caps, 'references in total (images + audio + video)', images.length + audios.length + videos.length, caps.maxCombinedRefs);
 
   const args = {
     prompt: intent.prompt,
@@ -121,4 +168,4 @@ export function buildSeedanceArgs(intent, caps) {
   return args;
 }
 
-export default { buildSeedanceArgs, firstFrameIsRef };
+export default { buildSeedanceArgs, firstFrameIsRef, fitAudioRef, audioWindowFor };

@@ -224,3 +224,21 @@ test('the voice-ref cap is caps.maxAudioRefs, and the error names THIS model', a
     } finally { cleanup(); }
   } finally { unmint(); }
 });
+
+test('the combined-ref budget rejects BEFORE any upload — per-kind caps admit what the shared budget refuses', async () => {
+  // 3 image refs, each within maxImages (30) — but a 2-ref combined budget must abort the job
+  // while every reference is still on disk, not after a full round of storage uploads.
+  const spec = specWith({ elements: [
+    { id: 'a', role: 'subject', image: PNG_A },
+    { id: 'b', role: 'subject', image: PNG_B },
+    { id: 'c', role: 'subject', image: SEAM },
+  ] });
+  await assert.rejects(
+    run({ spec }, { ...CAPS_25, maxCombinedRefs: 2 }),
+    (e) => {
+      assert.match(e.message, /at most 2 references in total/);
+      assert.equal(e.adapter.calls.assetUrl.length, 0, 'no reference left the machine');
+      return true;
+    },
+  );
+});

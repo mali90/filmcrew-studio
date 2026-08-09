@@ -32,6 +32,10 @@ export function CheckRow({ check, context, platform, refetching, failedRechecks,
   const [panelOpen, setPanelOpen] = useState(wizard && check.id === 'ffmpeg'); // the wizard auto-expands the only unfixable-in-web check
   const target = FIX_TARGET[check.id];
   const soft = check.soft;
+  // Most soft rows are cast work (add refs, mint voices) and point at Cast. A soft PROVIDER key is
+  // soft for a different reason — you simply don't render there — so it gets no Cast affordance;
+  // its hint already says what it would buy.
+  const castSoft = soft && (check.id === 'references' || check.id === 'voices' || check.id === 'voice-clips');
 
   return (
     <li className="flex items-start gap-2.5">
@@ -78,7 +82,7 @@ export function CheckRow({ check, context, platform, refetching, failedRechecks,
             ? <Button variant="quiet" size="sm" onClick={() => onFix?.(target.step)}>{target.wizardLabel}</Button>
             : <Button variant="quiet" size="sm" onClick={() => onAnchor?.(target.settingsAnchor)}>{target.settingsLabel}</Button>
         )}
-        {!check.ok && soft && (
+        {!check.ok && castSoft && (
           wizard
             ? <span className="text-caption text-ink-faint">later, on the Cast page</span>
             : <Link to="/cast" className="text-caption text-accent transition-colors duration-[120ms] hover:text-accent-hover">Open Cast</Link>

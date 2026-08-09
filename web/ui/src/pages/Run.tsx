@@ -7,7 +7,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import type { RunDetail } from '../../../shared/api-types';
 import { api } from '../api/client';
 import { useRunEvents } from '../api/useRunEvents';
-import { seconds, usd } from '../lib/format';
+import { seconds, spendLabel } from '../lib/format';
 import { PhaseStrip } from '../components/run/PhaseStrip';
 import { AgentRail } from '../components/run/AgentRail';
 import { SpecInspector } from '../components/run/SpecInspector';
@@ -20,13 +20,12 @@ import { ReviewStage, ChangeRequestPanel, ApproveBar, TakesHistory, FinalCard } 
 /** The rail's calm fact sheet while clips render. */
 function RunFacts({ run }: { run: RunDetail }) {
   const ledger = run.manifest?.costLedger ?? [];
-  const spentUsd = ledger.reduce((acc, e) => acc + (e.estUsd ?? 0), 0);
   const facts: [string, string][] = [
     ['backend', run.backend ?? '—'],
     ['aspect', run.aspect ?? '—'],
     ['duration', seconds(run.durationS)],
     ['takes', String(run.manifest?.takes?.length ?? 0)],
-    ['est. cost so far', usd(spentUsd)],
+    ['est. cost so far', spendLabel(ledger)],
   ];
   return (
     <section aria-label="Run facts" className="rounded-r3 border border-line bg-surface-1 p-4">

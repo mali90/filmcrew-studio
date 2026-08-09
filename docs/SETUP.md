@@ -170,7 +170,10 @@ that first job.
 ```
 npm run upscale -- --in out/ocean-lighthouse.mp4
 ```
-optional `--factor <1-4>` (auto-picks to reach ~1080p when omitted), optional `--model Proteus`.
+optional `--provider fal|segmind|auto` (default `auto` — whichever provider the run rendered on, else
+whichever has a key). `--factor <1-4>` (auto-picks to reach ~1080p when omitted) and `--model Proteus`
+are **fal-only**; Segmind's Topaz takes a target resolution instead (`UPSCALE_TARGET_RESOLUTION`,
+default `1080p`) and keeps the source frame rate.
 
 > You can also run `node src/cli/engine.js …` directly instead of `npm run …`.
 
@@ -212,6 +215,11 @@ reopen** the terminal. Re-check with `node -v`, `ffmpeg -version`.
 
 **`npm run doctor` reports failures** — read the line; it names the problem (a blank key, a provider
 picked without its key/CLI login, ffmpeg off PATH). Fix that item and re-run.
+
+**`npm run doctor` fails `render-assets` on a Segmind setup** — `SEGMIND_UPLOAD_MODE=fal-storage`
+uploads your reference images to fal's CDN for Segmind to download, so it needs a `FAL_KEY`. Either
+set one, or set `SEGMIND_UPLOAD_MODE=data-uri` to send the references inline and keep the install
+fal-free. (Caught here on purpose: otherwise it fails on the first upload of your first render.)
 
 **`.env` not filled in** — make sure you created `.env` (not just `.env.example`), values have no
 spaces around `=`, no quotes, no `<...>` brackets, no trailing spaces, and you **saved**.

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { ROOT } from './fixtures.js';
 
 const BLANK_KEYS = {
-  FAL_KEY: '', FAL_API_KEY: '',
+  FAL_KEY: '', FAL_API_KEY: '', SEGMIND_API_KEY: '',
   LLM_API_KEY: '', ANTHROPIC_API_KEY: '', OPENAI_API_KEY: '', GEMINI_API_KEY: '',
 };
 

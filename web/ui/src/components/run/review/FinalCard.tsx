@@ -5,12 +5,12 @@ import { useNavigate } from 'react-router-dom';
 import { Download, Plus } from 'lucide-react';
 import type { RunDetail } from '../../../../../shared/api-types';
 import { Button } from '../../ui/Button';
-import { seconds, usd } from '../../../lib/format';
+import { seconds, spendLabel } from '../../../lib/format';
 
 export function FinalCard({ run }: { run: RunDetail }) {
   const navigate = useNavigate();
 
-  const totalEstUsd = (run.manifest?.costLedger ?? []).reduce((sum, e) => sum + (e.estUsd ?? 0), 0);
+  const spendText = spendLabel(run.manifest?.costLedger ?? []);
   const title = run.title ?? 'Your video';
   // the on-disk basename ("<slug>-<id>-final.mp4") is the download's filename
   const fileName = run.finalFsPath?.split('/').pop() ?? `${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.mp4`;
@@ -45,7 +45,7 @@ export function FinalCard({ run }: { run: RunDetail }) {
         </div>
         <div>
           <dt className="text-caption text-ink-muted">Total estimated cost</dt>
-          <dd className="tnum text-dense text-ink">{usd(totalEstUsd)}</dd>
+          <dd className="tnum text-dense text-ink">{spendText}</dd>
         </div>
       </dl>
 

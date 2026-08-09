@@ -56,7 +56,8 @@ describe('Home — create hero', () => {
     await userEvent.type(screen.getByLabelText('Your idea, in one line'), 'a tiny robot gardener');
     await userEvent.click(screen.getByRole('button', { name: /plan it/i }));
     await screen.findByText('run page web-20260704-xy99');
-    expect(body).toEqual({ idea: 'a tiny robot gardener', backend: 'kling', aspect: '9:16', durationS: null });
+    // the picker works in canonical `<model>@<provider>` pairs, so that is what the POST carries
+    expect(body).toEqual({ idea: 'a tiny robot gardener', backend: 'kling-o3@fal', aspect: '9:16', durationS: null });
   });
 
   it('Custom duration flows the number into durationS (Enter in the idea submits)', async () => {
@@ -88,14 +89,14 @@ describe('Home — create hero', () => {
     }));
     renderHome();
     await userEvent.type(screen.getByLabelText('Your idea, in one line'), 'a fox in the snow');
-    await userEvent.click(screen.getByRole('radio', { name: 'Seedance' }));
+    await userEvent.click(screen.getByRole('radio', { name: 'Seedance 2.0' }));
     await userEvent.click(screen.getByRole('radio', { name: 'Custom' }));
     expect(posts).toBe(0); // choosing options is never a submit
 
     await userEvent.click(screen.getByRole('button', { name: /plan it/i }));
     await screen.findByText('run page web-noaccident-1');
     expect(posts).toBe(1); // only the explicit Plan it creates the run
-    expect(body?.backend).toBe('seedance');
+    expect(body?.backend).toBe('seedance-2.0@fal');
   });
 
   it('aspect tiles select like radios and the choice reaches the payload', async () => {

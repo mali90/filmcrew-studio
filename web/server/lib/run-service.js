@@ -10,7 +10,7 @@ import { newManifest, writeManifest, readManifest, updateManifest } from './web-
 import { scanRun, listRuns, defaultIsAlive } from './run-scan.js';
 import { createRingLog } from './ring-log.js';
 import { watchRun } from './artifact-watch.js';
-import { estimateRender, readSeedanceResolution } from './estimator.js';
+import { estimateRender, readProbeResolution, readRenderResolution, readUpscaleProvider } from './estimator.js';
 import { safeChild } from './paths.js';
 // config-FREE import: run-service is loaded eagerly by app.js, and the demo/e2e server sets FAL_BASE_URL
 // only AFTER its static import chain — importing anything that pulls config.js here would snapshot the
@@ -28,9 +28,23 @@ const CONTENT_POLICY_REVISE_FEEDBACK = [
 const CLI = (root, name) => path.join(root, 'src/cli', name);
 const slugify = (s) => String(s ?? 'video').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'video';
 const readJson = (p) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; } };
+// A take whose provider publishes no rate still SPENT money — the ledger records estUsd:null (as the
+// Topaz row already does) and says why, so a null never reads as "this one was free".
+const ledgerLine = (est) => ({
+  estUsd: est.totalUsd,
+  note: est?.unknownPrice ? 'estimate unavailable — no published rate for this backend' : 'estimate',
+  // `unpriced` separates the two meanings of estUsd:null — "this spent money at a rate nobody
+  // publishes" (flagged) from "this step really was free", like a local assemble (not flagged).
+  ...(est?.unknownPrice ? { unpriced: true } : {}),
+});
 
 export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr, bus, isAlive = defaultIsAlive, now = () => new Date() }) {
-  const estOpts = () => ({ resolution: readSeedanceResolution(envRoot ?? root) }); // seedance price scales with resolution
+  // Seedance price scales with resolution, and the knob is per model (2.5 has its own) — so the
+  // ledger records what THIS run's backend will actually be billed for.
+  const estOpts = (backend) => ({
+    resolution: readRenderResolution(envRoot ?? root, backend, childEnv),
+    probeResolution: readProbeResolution(envRoot ?? root, backend, childEnv),
+  });
   const ringLogs = new Map();   // runId → ring log
   const watchers = new Map();   // runId → watcher
   const announced = new Map();  // runId → Set<artifact rel> already sent to clients — persists across watcher restarts so a spec block is never lost to a startup race nor re-announced
@@ -384,10 +398,11 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     const takeDir = nextTakeDir(dir);
     const takeId = path.basename(takeDir);
     fs.mkdirSync(takeDir, { recursive: true }); // reserve the tN NOW — a queued sibling must not resolve to the same take
-    const est = estimateRender(spec, { backend: readManifest(dir)?.backend ?? 'kling', mode, ...estOpts() });
+    const backend = readManifest(dir)?.backend ?? 'kling';
+    const est = estimateRender(spec, { backend, mode, ...estOpts(backend) });
     updateManifest(dir, (m) => {
       m.takes.push({ id: takeId, mode, revision: m.revisions.at(-1)?.id ?? null, createdAt: now().toISOString(), estUsd: est.totalUsd });
-      m.costLedger.push({ ts: now().toISOString(), action: mode, estUsd: est.totalUsd, note: 'estimate' });
+      m.costLedger.push({ ts: now().toISOString(), action: mode, ...ledgerLine(est) });
       m.lastError = null;
       return m;
     });
@@ -440,7 +455,8 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     fs.mkdirSync(takeDir, { recursive: true });
     const downstream = jobs.slice(jobs.indexOf(jobId) + 1);
     const cascadeJobs = cascade ? downstream : [];
-    const est = estimateRender(spec, { backend: m?.backend ?? 'kling', mode: 'job', jobId, cascade, ...estOpts() });
+    const backend = m?.backend ?? 'kling';
+    const est = estimateRender(spec, { backend, mode: 'job', jobId, cascade, ...estOpts(backend) });
     // Seam-in: renderJob wants <seamFrom>/<prevJob>/last_frame.png. The trustworthy source is the
     // take dir that produced the PREVIOUS job's newest clip (manifest.jobClips) — the latest cut's
     // dir may be a composed cut or a single-job take that never held the neighbour's frame.
@@ -454,7 +470,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     }
     updateManifest(dir, (mm) => {
       mm.takes.push({ id: takeId, mode: 'job', jobId, cascade, revision: mm.revisions.at(-1)?.id ?? null, createdAt: now().toISOString(), estUsd: est.totalUsd, feedback: feedback ?? null });
-      mm.costLedger.push({ ts: now().toISOString(), action: `rerender ${jobId}${cascade ? ' + downstream' : ''}`, estUsd: est.totalUsd, note: 'estimate' });
+      mm.costLedger.push({ ts: now().toISOString(), action: `rerender ${jobId}${cascade ? ' + downstream' : ''}`, ...ledgerLine(est) });
       mm.lastError = null;
       return mm;
     });
@@ -539,7 +555,13 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     // a free-lane assemble appending a newer cut mid-upscale must not relabel THIS final onto it.
     pendingApprove.set(runId, chosen?.id ?? cuts.at(-1)?.id ?? null);
     updateManifest(dir, (m) => {
-      m.costLedger.push({ ts: now().toISOString(), action: 'upscale', estUsd: null, note: 'topaz per-clip — see estimate' });
+      // `unpriced` is reserved for a provider with NO published rate: fal's Topaz has one (the
+      // estimate endpoint quotes it per-clip), so flagging it too would label a priced spend
+      // "not on file" on every fal-upscaled run.
+      const upscaleProvider = readUpscaleProvider(envRoot ?? root, m.backend, childEnv);
+      m.costLedger.push(upscaleProvider === 'fal'
+        ? { ts: now().toISOString(), action: 'upscale', estUsd: null, note: 'topaz per-clip — see estimate' }
+        : { ts: now().toISOString(), action: 'upscale', estUsd: null, unpriced: true, note: 'estimate unavailable — no published rate for this provider' });
       m.lastError = null;
       return m;
     });

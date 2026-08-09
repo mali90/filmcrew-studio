@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { isRunId, safeChild } from '../lib/paths.js';
-import { estimateRender, estimateUpscale, jobSeconds, readSeedanceResolution } from '../lib/estimator.js';
+import { estimateRender, estimateUpscale, jobSeconds, readProbeResolution, readRenderResolution, readUpscaleProvider, readUpscaleTargetShortSide } from '../lib/estimator.js';
 // The registry is the ONE static import this server takes from the host src/ tree. It is safe
 // precisely because it has zero imports and reads no env (test/unit/render-models.test.js pins
 // that), so it cannot drag config.js — and a developer's real .env — into web/server's static
@@ -177,10 +177,14 @@ export function registerRunRoutes(app) {
     const mode = String(req.query.mode ?? 'full');
     if (mode === 'upscale') {
       const cut = req.query.cut;
+      // Topaz runs on either provider now — price the one this run's approve would actually bill,
+      // and say what short side it will DELIVER (the UI's "already HD" gate rides on it).
+      const upscaleOpts = { provider: readUpscaleProvider(app.ctx.envRoot, run.backend, app.ctx.childEnv) };
+      const targetShortSide = readUpscaleTargetShortSide(app.ctx.envRoot, run.backend, app.ctx.childEnv);
       // no cut ⇒ the latest render (approve's default): price every job in the current spec
       if (!cut) {
         const clips = (run.spec.kling?.jobs ?? []).map((j) => ({ jobId: j.job_id, seconds: jobSeconds(run.spec, j.job_id) }));
-        return estimateUpscale(clips);
+        return { ...estimateUpscale(clips, upscaleOpts), targetShortSide };
       }
       // a specific cut upscales exactly the clips in ITS take dir, priced by THAT take's own saved
       // spec (a pre-revision cut may rename jobs or change durations) and only jobs that actually
@@ -196,15 +200,17 @@ export function registerRunRoutes(app) {
       const clips = ((readTakeJson('render.json')?.jobs) ?? [])
         .filter((j) => j.clip) // only jobs Topaz will actually process
         .map((j) => { const jobId = j.jobId ?? j.job; return { jobId, seconds: jobSeconds(takeSpec, jobId) }; });
-      return estimateUpscale(clips);
+      return { ...estimateUpscale(clips, upscaleOpts), targetShortSide };
     }
     return estimateRender(run.spec, {
       backend: run.backend ?? 'kling',
       mode,
       jobId: req.query.jobId,
       cascade: req.query.cascade === '1' || req.query.cascade === 'true',
-      // Seedance is billed by pixel-seconds — price the resolution the render child will use
-      resolution: readSeedanceResolution(app.ctx.envRoot),
+      // Seedance is billed by pixel-seconds — price the resolution the render child will use, and
+      // that knob is per model (2.5 reads SEEDANCE25_RESOLUTION and defaults to 720p, not 480p)
+      resolution: readRenderResolution(app.ctx.envRoot, run.backend, app.ctx.childEnv),
+      probeResolution: readProbeResolution(app.ctx.envRoot, run.backend, app.ctx.childEnv),
     });
   });
 

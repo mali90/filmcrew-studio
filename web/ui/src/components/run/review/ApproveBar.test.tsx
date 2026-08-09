@@ -19,13 +19,44 @@ function captureApprove() {
 }
 
 describe('ApproveBar', () => {
+  // ── Topaz on a provider that publishes no rate ────────────────────────────
+  // The upscale now runs wherever the run rendered, and Segmind prices none of it. Approving with
+  // upscale must still be possible — with the caution in prose instead of a fabricated figure.
+  it('an unpriced upscale stays approvable and says so in words, never in dollars', async () => {
+    const captured = captureApprove();
+    server.use(http.get('/api/runs/:id/estimate', () => HttpResponse.json({
+      perJob: [{ jobId: 'K1', seconds: 9, usd: null }],
+      totalUsd: null,
+      currency: 'USD',
+      label: 'estimate',
+      unknownPrice: { provider: 'segmind', hint: 'Segmind does not publish a per-second rate — check segmind.com/models/topaz-video-upscale/pricing.' },
+    })));
+    markPaidConfirmed();
+    renderReview(<ApproveBar run={makeRun('review')} />);
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /upscale/i }));
+    const approve = await screen.findByRole('button', { name: /Approve & upscale/ });
+    await waitFor(() => expect(approve).toBeEnabled());
+
+    const note = await screen.findByText(/price not set/i);
+    expect(note.parentElement?.textContent ?? '').toMatch(/costs money/i);
+    expect(note.parentElement?.textContent ?? '').toMatch(/segmind\.com/i);
+    expect(screen.queryByText(/≈ \$/)).not.toBeInTheDocument();   // no figure anywhere on the card
+    expect(screen.queryByText(/≈—/)).not.toBeInTheDocument();     // and no em-dash masquerading as one
+
+    fireEvent.click(approve);
+    await waitFor(() => expect(captured.body).toEqual({ upscale: true }));
+  });
+
   it('an already-1080p master disables the paid upscale with the reason stated', async () => {
     const run = makeRun('review');
     run.manifest!.cuts = [{ id: 'c1', take: 't1', master: '/abs/out/x.mp4', shortSide: 1080, createdAt: 'now' }];
     renderReview(<ApproveBar run={run} />);
     const checkbox = screen.getByRole('checkbox');
     expect(checkbox).toBeDisabled();
-    expect(screen.getByText(/already 1080p — there's nothing to upscale/i)).toBeInTheDocument();
+    // The threshold and label follow the estimate's delivered target (default ~1080p when the
+    // endpoint reports none) — a 4k target would keep this same cut upscalable.
+    expect(screen.getByText(/already 1080p — at or above the 1080p target/i)).toBeInTheDocument();
     // no price is advertised for a no-op
     expect(screen.queryByText(/≈/)).not.toBeInTheDocument();
     // approve itself stays available (it is free)

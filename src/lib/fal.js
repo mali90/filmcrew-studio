@@ -16,11 +16,13 @@ import { getCloudRef, setCloudRef } from './cloud-refs.js';
 // queue-transport.js. They are RE-EXPORTED here (same function objects, `isTransientError` under its
 // historic name `isTransientFalError`) so every existing `from './fal.js'` import is unchanged.
 import {
+  mimeFor, fileToDataUri,
   resultFileUrls, downloadResultFiles,
   isValidationError, isTransientError as isTransientFalError, isContentPolicyError, contentPolicyError,
 } from './queue-transport.js';
 
 export {
+  fileToDataUri,
   resultFileUrls, downloadResultFiles,
   isValidationError, isTransientFalError, isContentPolicyError, contentPolicyError,
 };
@@ -30,19 +32,6 @@ const FAL = config.fal;
 function falHeaders(extra = {}) {
   if (!FAL.apiKey) throw new Error('FAL_KEY not set (get one at https://fal.ai/dashboard/keys and put it in .env).');
   return { Authorization: `Key ${FAL.apiKey}`, ...extra };
-}
-
-const MIME = {
-  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp',
-  '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.m4a': 'audio/mp4', '.aac': 'audio/aac',
-  '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.webm': 'video/webm',
-};
-const mimeFor = (p) => MIME[path.extname(p).toLowerCase()] || 'application/octet-stream';
-
-/** Inline a local file as a base64 data URI (fal url-fields accept these — no extra round-trip). */
-export async function fileToDataUri(filePath) {
-  const buf = await fs.readFile(filePath);
-  return `data:${mimeFor(filePath)};base64,${buf.toString('base64')}`;
 }
 
 /** Upload a local file to fal's CDN and return its public URL (used when FAL_UPLOAD_MODE=storage).

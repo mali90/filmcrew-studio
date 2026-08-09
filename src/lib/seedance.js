@@ -88,6 +88,7 @@ function identityClause(refGroups) {
  *   textClause?: string,                          // replaces the strict no-on-screen-text default
  *   feedback?: string,                            // free-form director note (regen feedback)
  *   nonce?: number,                               // >0 → "Alternate take N" variation directive (Seedance accepts no seed)
+ *   shotSyntax?: 'connectors'|'numbered',         // how the model wants shots joined (caps.shotSyntax; default 'connectors')
  *   maxBytes?: number,                            // whole-prompt byte budget (config.seedance.promptMaxBytes)
  * }} opts
  * @returns {{ prompt:string, shotPrompts:string[], totalDuration:number, speakers:string[] }}
@@ -103,10 +104,16 @@ export function buildSeedanceJobPrompt(job, spec, opts = {}) {
     return shot;
   });
 
-  // Per-shot blocks, joined by transition-aware connectors (nothing truncated per shot).
+  // Per-shot blocks, joined the way this MODEL writes a multi-shot prompt (nothing truncated per
+  // shot). 'connectors' (Seedance 2.0) chains them with transition words; 'numbered' (Seedance 2.5
+  // on every provider) numbers them and drops the connectors, which is that model's documented
+  // syntax. `shotPrompts` below stays the RAW blocks either way — the joining is not part of a
+  // shot's authored prose, and the sidecar/preview contract depends on that.
+  const numbered = opts.shotSyntax === 'numbered';
   const blocks = shots.map((shot, i) => shotBlock(shot, spec, { audioOn, isFirstInJob: i === 0 }));
   const trans = Object.fromEntries((spec?.assembly?.transitions ?? []).map((t) => [t.after_shot, t.type]));
   const joined = blocks.map((b, i) => {
+    if (numbered) return `${i === 0 ? '' : '\n'}Shot ${i + 1}: ${b}`;
     if (i === 0) return b;
     const word = TRANSITION_WORDS[trans[shots[i - 1].shot_id]] ?? 'Cut to:';
     return `\n${word} ${b}`;
@@ -160,17 +167,32 @@ export function buildSeedanceJobPrompt(job, spec, opts = {}) {
   return { prompt, shotPrompts: blocks, totalDuration, speakers };
 }
 
-/** Effective per-spec Seedance settings (resolution/aspect/audio), spec values over config defaults. */
-export function seedanceConfigFor(spec) {
+/**
+ * The MODEL'S OWN user-tunable block (`config[caps.knobsKey]`), or null. Seedance 2.5 renders at
+ * different resolutions than 2.0 and bills differently, so it carries its own settings block while
+ * everything it does NOT redeclare keeps falling back to `config.seedance`. Own-property lookup
+ * only: a caps bundle naming '__proto__' must never reach an inherited object.
+ * @param {{knobsKey?:string}} [caps]
+ */
+export const modelKnobs = (caps) =>
+  (caps?.knobsKey && Object.hasOwn(config, caps.knobsKey) ? config[caps.knobsKey] : null);
+
+/**
+ * Effective per-spec Seedance settings (resolution/aspect/audio), spec values over config defaults.
+ * @param {object} spec  the Production Spec
+ * @param {object} [caps]  capsFor('<model>@<provider>') — picks up that model's own knobs block
+ */
+export function seedanceConfigFor(spec, caps) {
   const k = spec?.kling ?? {};
   return {
     // NOT k.resolution: the kling block is written by the agents from KLING defaults (its enum
     // can't even express 480p) — letting it override would silently render/bill Seedance at the
-    // Kling resolution. An explicit spec.seedance.resolution pin wins; else the user's setting.
-    resolution: spec?.seedance?.resolution || config.seedance.resolution,
+    // Kling resolution. An explicit spec.seedance.resolution pin wins; else THIS MODEL's setting
+    // (SEEDANCE25_RESOLUTION for 2.5), else the shared Seedance one.
+    resolution: spec?.seedance?.resolution || modelKnobs(caps)?.resolution || config.seedance.resolution,
     aspectRatio: k.aspect_ratio || config.kling.aspectRatio,
     generateAudio: seedanceAudioOn(spec),
   };
 }
 
-export default { buildSeedanceJobPrompt, seedanceConfigFor, clampBytes, HOOK_PREFIX, TRANSITION_WORDS };
+export default { buildSeedanceJobPrompt, seedanceConfigFor, modelKnobs, clampBytes, HOOK_PREFIX, TRANSITION_WORDS };

@@ -179,6 +179,108 @@ test('more image refs than the model accepts is a loud throw, not a silent 422 r
   assert.equal(buildSeedanceArgs({ ...BASE, imageUrls: atCap }, FAL20).image_urls.length, 9);
 });
 
+// ── 7. maxCombinedRefs — fal Seedance 2.5's single cross-modality budget ────
+// fal's 2.5 reference endpoint declares NO per-modality caps at all: it accepts up to 50 REFERENCE
+// INPUTS COMBINED (images + videos + audios). A per-kind cap cannot express that — 30 images and 30
+// audios each pass their own check and the submit still 422s after every reference has been
+// uploaded and paid for in bandwidth. So the budget is its own cap, checked after the per-kind ones.
+const CAPS_25_FAL = {
+  id: 'seedance-2.5@fal', model: 'seedance-2.5', provider: 'fal', family: 'seedance',
+  label: 'Seedance 2.5', providerLabel: 'fal',
+  minSeconds: 4, maxSeconds: 30, durationType: 'string',
+  maxImages: 50, maxAudioRefs: 10, maxVideoRefs: 50, maxCombinedRefs: 50,
+  resolutions: ['480p', '720p'], defaultResolution: '720p',
+  aspects: ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'],
+  nativeFirstFrame: false, nativeLastFrame: false,
+  supportsSeed: true, refStyle: 'bracket', shotSyntax: 'numbered',
+  argMap: { images: 'image_urls', audios: 'audio_urls', videos: 'video_urls', firstFrame: null, lastFrame: null },
+};
+const urls = (n, p = 'u') => Array.from({ length: n }, (_, i) => `${p}${i}`);
+
+test('maxCombinedRefs: 50 references across all three modalities build; 51 is a loud throw', () => {
+  const at50 = { ...BASE, imageUrls: urls(30, 'i'), videoUrls: urls(10, 'v'), audioUrls: urls(10, 'a'), resolution: '720p' };
+  const args = buildSeedanceArgs(at50, CAPS_25_FAL);
+  assert.equal(args.image_urls.length + args.video_urls.length + args.audio_urls.length, 50);
+
+  assert.throws(() => buildSeedanceArgs({ ...at50, imageUrls: urls(31, 'i') }, CAPS_25_FAL), (e) => {
+    assert.match(e.message, /51/, 'the message states how many were supplied');
+    assert.match(e.message, /50/, 'and the cap it broke');
+    assert.match(e.message, /Seedance 2\.5 on fal/, 'named by nameOf(caps) — never a hardcoded model name');
+    return true;
+  });
+});
+
+test('maxCombinedRefs counts the DEMOTED first frame — it is an image ref like any other', () => {
+  const at50 = { ...BASE, imageUrls: urls(30, 'i'), videoUrls: urls(10, 'v'), audioUrls: urls(10, 'a'), resolution: '720p' };
+  assert.throws(() => buildSeedanceArgs({ ...at50, firstFrameUrl: 'seam.png' }, CAPS_25_FAL), /50/);
+  // one slot held back and the seam frame lands LAST, after the cast refs (the prompt pin's target)
+  const fits = buildSeedanceArgs({ ...at50, imageUrls: urls(29, 'i'), firstFrameUrl: 'seam.png' }, CAPS_25_FAL);
+  assert.equal(fits.image_urls.at(-1), 'seam.png');
+  assert.equal(fits.image_urls.length + fits.video_urls.length + fits.audio_urls.length, 50);
+});
+
+test('caps WITHOUT maxCombinedRefs are unaffected — only per-kind caps bite (fal 2.0 today)', () => {
+  // 9 images + 3 audios = 12 combined; fal 2.0 declares no combined budget, so this must build.
+  const args = buildSeedanceArgs({ ...BASE, imageUrls: urls(9, 'i'), audioUrls: urls(3, 'a') }, FAL20);
+  assert.equal(args.image_urls.length, 9);
+  assert.equal(args.audio_urls.length, 3);
+  // and a per-kind cap still bites on its own
+  assert.throws(() => buildSeedanceArgs({ ...BASE, imageUrls: urls(10, 'i') }, FAL20), /9/);
+});
+
+// ── 8. The SHIPPED registry entries, not hand-written stand-ins ─────────────
+// Every fixture above is written out by hand, which is what proves the builder is data-driven — but
+// it proves nothing about what a paid render actually sends unless the caps that SHIP behave the
+// same way. These four run the real `capsFor()` bundles through the same builder.
+const SG25 = capsFor('seedance-2.5@segmind');
+const SG20 = capsFor('seedance-2.0@segmind');
+const FAL25 = capsFor('seedance-2.5@fal');
+
+test('the hand-written fal-2.5 fixture has not drifted from the entry that ships', () => {
+  // If this fails, section 7's combined-budget proof is about a model nobody renders on.
+  for (const k of ['maxImages', 'maxAudioRefs', 'maxVideoRefs', 'maxCombinedRefs', 'durationType', 'minSeconds', 'maxSeconds', 'supportsSeed']) {
+    assert.deepEqual(FAL25[k], CAPS_25_FAL[k], k);
+  }
+  assert.deepEqual(FAL25.argMap, CAPS_25_FAL.argMap);
+});
+
+test('seedance-2.5@segmind: its PUBLISHED per-kind caps bite (30 images, 10 audios, 10 videos)', () => {
+  const ok = buildSeedanceArgs({ ...BASE, imageUrls: urls(30, 'i'), audioUrls: urls(10, 'a'), videoUrls: urls(10, 'v'), resolution: '720p' }, SG25);
+  assert.equal(ok.reference_images.length, 30, 'Segmind key names, straight off the registry');
+  assert.equal(ok.reference_audios.length, 10);
+  assert.equal(ok.reference_videos.length, 10);
+
+  assert.throws(() => buildSeedanceArgs({ ...BASE, imageUrls: urls(31, 'i'), resolution: '720p' }, SG25), /30/);
+  assert.throws(() => buildSeedanceArgs({ ...BASE, audioUrls: urls(11, 'a'), resolution: '720p' }, SG25), /10/);
+});
+
+test('seedance-2.5@segmind has NO combined budget — 50 refs across kinds is legal here, unlike fal', () => {
+  // The two entries for the SAME model genuinely differ: fal budgets references across modalities,
+  // Segmind publishes per-kind limits. Collapsing them onto one rule would either reject a legal
+  // Segmind job or let a fal job through to a 422 with every reference already uploaded.
+  const fifty = { ...BASE, imageUrls: urls(30, 'i'), audioUrls: urls(10, 'a'), videoUrls: urls(10, 'v'), resolution: '720p' };
+  assert.equal(SG25.maxCombinedRefs, undefined, 'no combined budget is declared for Segmind');
+  const args = buildSeedanceArgs(fifty, SG25);
+  assert.equal(args.reference_images.length + args.reference_audios.length + args.reference_videos.length, 50);
+  // …and the same 50 on fal 2.5 sits exactly ON its budget, so one more is the throw
+  assert.throws(() => buildSeedanceArgs({ ...fifty, imageUrls: urls(31, 'i') }, FAL25), /50/);
+});
+
+test('seedance-2.0@segmind is the tighter model: 9 images, 3 audios, 3 videos, 4–15s', () => {
+  const ok = buildSeedanceArgs({ ...BASE, imageUrls: urls(9, 'i'), audioUrls: urls(3, 'a'), videoUrls: urls(3, 'v'), resolution: '1080p' }, SG20);
+  assert.equal(ok.reference_images.length, 9);
+  assert.equal(typeof ok.duration, 'number', 'Segmind takes an INT duration on both models');
+
+  assert.throws(() => buildSeedanceArgs({ ...BASE, imageUrls: urls(10, 'i'), resolution: '1080p' }, SG20), /9/);
+  assert.throws(() => buildSeedanceArgs({ ...BASE, audioUrls: urls(4, 'a'), resolution: '1080p' }, SG20), /3/);
+  // 2.5's 30s window must not leak onto 2.0 just because they share a provider. The builder CLAMPS
+  // (the loud rejection is validateJobs' job, before any spend) — so the shipped window is what
+  // decides whether a 20s intent goes out as 20 or as 15.
+  assert.equal(buildSeedanceArgs({ ...BASE, totalDuration: 20, resolution: '1080p' }, SG20).duration, 15);
+  assert.equal(buildSeedanceArgs({ ...BASE, totalDuration: 20, resolution: '720p' }, SG25).duration, 20);
+  assert.equal(buildSeedanceArgs({ ...BASE, totalDuration: 2, resolution: '1080p' }, SG20).duration, 4, 'and the 4s floor is shared');
+});
+
 test('the builder is pure — it mutates neither the intent nor the caps', () => {
   const intent = { ...BASE, imageUrls: ['i1'], firstFrameUrl: 'seam.png' };
   const capsSnapshot = JSON.stringify(FAL20);

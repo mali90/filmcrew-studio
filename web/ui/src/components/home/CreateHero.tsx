@@ -6,27 +6,41 @@ import { useNavigate } from 'react-router-dom';
 import clsx from 'clsx';
 import { Mountain } from 'lucide-react';
 import type { Aspect, Backend } from '../../../../shared/api-types';
-import { ALL_BACKENDS, aspectsFor, castLimitFor, modelIdFor, modelLabelFor } from '../../../../shared/render-models';
+import {
+  ALL_BACKENDS, MODEL_IDS, aspectsFor, backendIdFor, canonicalBackendFor, castLimitFor,
+  modelIdFor, modelLabelFor, modelSegmentLabelFor, providerIdFor, providerLabelFor, providersFor,
+} from '../../../../shared/render-models';
 import { api, ApiClientError } from '../../api/client';
 import { Button } from '../ui/Button';
 import { SegmentedControl } from '../ui/SegmentedControl';
 
-// One hint per MODEL id, so a backend id and its legacy alias share one line of copy and a model
-// without bespoke copy still renders something true (never an exhaustive Record — the Backend union
-// grows every time a provider or model is added to the registry).
+// One hint per canonical `<model>@<provider>` id — the price is a property of the PAIR, not of the
+// model: the same Seedance renders on two bills. Copy only; every number below is a rate somebody
+// publishes, and a pair whose rate nobody publishes says exactly that (SEGMIND_HINT) instead of
+// borrowing its sibling's figure or pretending the render is free.
 const BACKEND_HINT: Record<string, string> = {
-  'kling-o3': 'Kling renders the richest motion at roughly $0.11 per second (~720p — approving can upscale the final to 1080p).',
-  'seedance-2.0': 'Seedance lip-syncs to your voice clips and renders at 480p for roughly $0.14 per second — approving can upscale the final to 1080p.',
+  'kling-o3@fal': 'Kling renders the richest motion at roughly $0.11 per second (~720p — approving can upscale the final to 1080p).',
+  'seedance-2.0@fal': 'Seedance lip-syncs to your voice clips and renders at 480p for roughly $0.14 per second — approving can upscale the final to 1080p.',
+  'seedance-2.5@fal': 'Seedance 2.5 takes up to four starring characters and renders 720p at roughly $0.47 per second (roughly $0.22 at 480p).',
 };
+// Segmind publishes no per-second rate for the models we drive, so no figure can be quoted honestly.
+const SEGMIND_HINT = 'Segmind publishes no per-second rate for this model, so the price is not on file yet — the render still costs money, and the run page will say so rather than guess a figure.';
 const hintFor = (backend: Backend) =>
-  BACKEND_HINT[modelIdFor(backend)] ?? `${modelLabelFor(backend)} — you’ll see its render price on the run page, before anything spends.`;
+  BACKEND_HINT[canonicalBackendFor(backend)]
+  ?? (providerIdFor(backend) === 'segmind'
+    ? SEGMIND_HINT
+    : `${modelLabelFor(backend)} — you’ll see its render price on the run page, before anything spends.`);
 
-// Backends the picker offers, by their legacy one-word ids: the shortest thing to send and what every
-// manifest already on disk says. The registry decides what each one *means* (caps, ratios, label).
-const BACKEND_SEGMENTS: { value: Backend; label: string; hint: string }[] = [
-  { value: 'kling', label: 'Kling', hint: '≈ $0.11 per second' },
-  { value: 'seedance', label: 'Seedance', hint: '≈ $0.14 per second at 480p' },
-];
+// The models on offer, straight from the registry and in its order: a model with no provider entry
+// cannot render, so it is not offered at all. Adding a model or a provider is a registry edit.
+const MODEL_SEGMENTS: { value: string; label: string }[] = MODEL_IDS
+  .filter((id) => providersFor(id).length > 0)
+  .map((id) => ({ value: id, label: modelSegmentLabelFor(id) }));
+
+/** A model on its first provider — the pair a fresh pick lands on. */
+const firstBackendOf = (model: string): Backend => backendIdFor(model, providersFor(model)[0]!.id);
+/** The registry's first renderable pair: what the page starts on until a saved default hydrates. */
+const DEFAULT_BACKEND: Backend = firstBackendOf(MODEL_SEGMENTS[0]!.value);
 
 // Tile silhouette per ratio — a lookup, not a list: which ratios are *offered* is per model
 // (aspectsFor(backend)), this only says what each one looks like.
@@ -64,7 +78,9 @@ export function CreateHero({ idea, onIdeaChange, ideaRef }: {
   ideaRef: RefObject<HTMLTextAreaElement>;
 }) {
   const navigate = useNavigate();
-  const [backend, setBackend] = useState<Backend>('kling');
+  // ONE canonical `<model>@<provider>` string is the whole selection — the two controls below are two
+  // views of it, and it is what the POST carries, so nothing downstream ever sees a pair.
+  const [backend, setBackend] = useState<Backend>(DEFAULT_BACKEND);
   const [aspect, setAspect] = useState<Aspect>('9:16');
   const [durationMode, setDurationMode] = useState<'auto' | 'custom'>('auto');
   const [customS, setCustomS] = useState(12);
@@ -75,6 +91,9 @@ export function CreateHero({ idea, onIdeaChange, ideaRef }: {
   const castCap = castCapFor(backend);
   const modelLabel = modelLabelFor(backend);
   const offeredAspects = aspectsForBackend(backend);
+  const model = modelIdFor(backend);
+  const provider = providerIdFor(backend);
+  const providerOptions = providersFor(model);
 
   // Server-side defaults seed the controls once — never overriding a choice already made. Both values
   // are validated against the registry rather than a hardcoded list, so a default of 'seedance-2.0@fal'
@@ -84,7 +103,9 @@ export function CreateHero({ idea, onIdeaChange, ideaRef }: {
     const d = defaults.data;
     if (!d || hydrated.current || touched.current) return;
     hydrated.current = true;
-    const nextBackend = ALL_BACKENDS.includes(d.backend as Backend) ? (d.backend as Backend) : backend;
+    // A saved default may be a legacy one-word id; the picker works in canonical pairs, so it is
+    // canonicalized here — the segment AND the provider then light up from the same string.
+    const nextBackend = ALL_BACKENDS.includes(d.backend as Backend) ? canonicalBackendFor(d.backend) : backend;
     const nextAspect = aspectsForBackend(nextBackend).includes(d.aspect as Aspect)
       ? (d.aspect as Aspect)
       : trimAspect(aspect, nextBackend);
@@ -111,15 +132,20 @@ export function CreateHero({ idea, onIdeaChange, ideaRef }: {
     });
   };
 
-  // Switching model re-applies its own limits to what is already picked, and says what it dropped —
-  // one status line for both trims, so the user never submits something the server will 400.
+  // Switching the model OR the provider re-applies the new pair's limits to what is already picked and
+  // says what it dropped — one status line for both trims, so the user never submits something the
+  // server will 400. Caps and ratios are per (model, provider), so a provider switch trims too.
   const chooseBackend = (next: Backend) => {
     touched.current = true;
     setBackend(next);
     const keptCast = trimCast(castSlugs, next);
     const dropped = castSlugs.slice(keptCast.length);
     const nextAspect = trimAspect(aspect, next);
-    const label = modelLabelFor(next);
+    // Name the PAIR when the model runs in more than one place — "Seedance 2.0 does not render 21:9"
+    // would be a lie about the model; it is this provider's endpoint that cannot.
+    const label = providersFor(next).length > 1
+      ? `${modelLabelFor(next)} on ${providerLabelFor(next)}`
+      : modelLabelFor(next);
     const cap = castCapFor(next);
     const notes = [
       dropped.length
@@ -131,6 +157,10 @@ export function CreateHero({ idea, onIdeaChange, ideaRef }: {
     if (nextAspect !== aspect) setAspect(nextAspect);
     setTrimNote(notes.join(' ') || null);
   };
+  // Keep the provider across a model switch when the new model runs there too; backendIdFor falls
+  // back to the model's first provider when it does not (picking Kling after Segmind lands on fal).
+  const chooseModel = (nextModel: string) => chooseBackend(backendIdFor(nextModel, provider));
+  const chooseProvider = (nextProvider: string) => chooseBackend(backendIdFor(model, nextProvider));
 
   // "Set in" picker — a single environment anchors the plan's look. Zero environments renders nothing.
   const environmentsQuery = useQuery({ queryKey: ['environments'], queryFn: api.environments });
@@ -281,17 +311,36 @@ export function CreateHero({ idea, onIdeaChange, ideaRef }: {
 
         <div className="flex flex-wrap items-start gap-x-8 gap-y-4">
           <div className="flex flex-col gap-1.5">
-            <span className="text-caption font-medium text-ink-muted">Backend</span>
+            {/* The control picks a MODEL; its accessible name stays "Render backend" because that is
+                what the pair it forms with the provider below actually sets. */}
+            <span className="text-caption font-medium text-ink-muted">Model</span>
             <SegmentedControl
               label="Render backend"
-              // a backend hydrated as `<model>@<provider>` still lights up its own segment
-              value={BACKEND_SEGMENTS.find((s) => modelIdFor(s.value) === modelIdFor(backend))?.value ?? backend}
-              onChange={chooseBackend}
-              segments={BACKEND_SEGMENTS}
+              value={model}
+              onChange={chooseModel}
+              segments={MODEL_SEGMENTS}
             />
-            <span className="tnum max-w-[260px] text-caption text-ink-muted">{hintFor(backend)}</span>
+            <span data-testid="backend-hint" className="tnum max-w-[260px] text-caption text-ink-muted">{hintFor(backend)}</span>
             {trimNote && (
               <span role="status" className="max-w-[260px] text-caption text-status-warn">{trimNote}</span>
+            )}
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <span className="text-caption font-medium text-ink-muted">Provider</span>
+            {providerOptions.length > 1 ? (
+              <SegmentedControl
+                label="Provider"
+                value={provider}
+                onChange={chooseProvider}
+                segments={providerOptions.map((p) => ({ value: p.id, label: p.label }))}
+              />
+            ) : (
+              // One place to render it: say so rather than showing a dead control or, worse, an
+              // option that would post a backend nothing in this build can render.
+              <span className="text-caption text-ink-muted">
+                {`${modelLabel} runs on ${providerOptions[0]!.label} only.`}
+              </span>
             )}
           </div>
 

@@ -78,8 +78,13 @@ describe('web/shared/api-types', () => {
     const aspects: Aspect[] = ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'];
     expect(aspects).toHaveLength(6);
     // legacy values must stay assignable — old manifests are never migrated
-    const backends: Backend[] = ['kling', 'seedance', 'kling-o3@fal', 'seedance-2.0@fal'];
-    expect(backends).toHaveLength(4);
+    const backends: Backend[] = [
+      'kling', 'seedance',                                   // legacy — old manifests are never migrated
+      'kling-o3@fal',
+      'seedance-2.0@fal', 'seedance-2.0@segmind',
+      'seedance-2.5@fal', 'seedance-2.5@segmind',
+    ];
+    expect(backends).toHaveLength(7);
   });
 });
 
@@ -129,7 +134,7 @@ describe('Home — cast caps', () => {
     withCast();
     renderHome();
     expect(await screen.findByText('Starring — up to 1 for Kling 3.0 Omni')).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('radio', { name: 'Seedance' }));
+    await userEvent.click(screen.getByRole('radio', { name: 'Seedance 2.0' }));
     expect(screen.getByText('Starring — up to 2 for Seedance 2.0')).toBeInTheDocument();
   });
 
@@ -158,7 +163,7 @@ describe('Home — cast caps', () => {
     withCast();
     const seen = capturePost();
     renderHome();
-    await userEvent.click(screen.getByRole('radio', { name: 'Seedance' }));
+    await userEvent.click(screen.getByRole('radio', { name: 'Seedance 2.0' }));
     const group = await screen.findByRole('group', { name: 'Starring' });
     await userEvent.click(within(group).getByRole('button', { name: 'The Keeper' }));
     await userEvent.click(within(group).getByRole('button', { name: 'Gull' }));
@@ -180,7 +185,7 @@ describe('Home — cast caps', () => {
     withCast();
     const seen = capturePost();
     renderHome();
-    await userEvent.click(screen.getByRole('radio', { name: 'Seedance' }));
+    await userEvent.click(screen.getByRole('radio', { name: 'Seedance 2.0' }));
     const group = await screen.findByRole('group', { name: 'Starring' });
     await userEvent.click(within(group).getByRole('button', { name: 'The Keeper' }));
     await userEvent.click(within(group).getByRole('button', { name: 'Gull' }));
@@ -198,7 +203,7 @@ describe('Home — per-model aspect ratios', () => {
     expect(within(group).getAllByRole('radio').map((r) => r.getAttribute('aria-label'))).toEqual(['16:9', '9:16', '1:1']);
     expect(within(group).queryByRole('radio', { name: '21:9' })).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole('radio', { name: 'Seedance' }));
+    await userEvent.click(screen.getByRole('radio', { name: 'Seedance 2.0' }));
     expect(within(group).getAllByRole('radio').map((r) => r.getAttribute('aria-label'))).toEqual(['16:9', '9:16', '1:1']);
   });
 
@@ -207,7 +212,7 @@ describe('Home — per-model aspect ratios', () => {
     renderHome();
     const group = await screen.findByRole('radiogroup', { name: 'Aspect ratio' });
     await userEvent.click(within(group).getByRole('radio', { name: '16:9' }));
-    await userEvent.click(screen.getByRole('radio', { name: 'Seedance' }));
+    await userEvent.click(screen.getByRole('radio', { name: 'Seedance 2.0' }));
     expect(within(group).getByRole('radio', { name: '16:9' })).toHaveAttribute('aria-checked', 'true');
     await userEvent.type(screen.getByLabelText('Your idea, in one line'), 'wide open{Enter}');
     await screen.findByText('run page web-caps-1');

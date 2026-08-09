@@ -35,11 +35,12 @@ describe('Settings — defaults', () => {
     await waitFor(() =>
       expect(screen.getByRole('radio', { name: /16:9/ })).toHaveAttribute('aria-checked', 'true'));
 
-    await userEvent.click(screen.getByRole('radio', { name: 'Seedance' }));
+    await userEvent.click(screen.getByRole('radio', { name: /Seedance 2\.0 fal/ }));
     await userEvent.click(screen.getByRole('button', { name: 'Save defaults' }));
 
-    // backend changed; aspect and resolution match the server → omitted
-    await waitFor(() => expect(body).toEqual({ backend: 'seedance' }));
+    // backend changed; aspect and resolution match the server → omitted. The saved value is the
+    // canonical pair the picker works in, not the legacy one-word spelling.
+    await waitFor(() => expect(body).toEqual({ backend: 'seedance-2.0@fal' }));
     expect(await screen.findByText('Defaults saved — new runs start from these.')).toBeInTheDocument();
   });
 

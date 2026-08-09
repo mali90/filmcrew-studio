@@ -28,6 +28,10 @@ export const PROVIDERS = {
 export const RENDER_MODELS = {
   'kling-o3': {
     label: 'Kling 3.0 Omni',
+    // The picker's compact spelling. A model whose full label already fits a segment omits it, and
+    // every caller falls back to `label` — so this is a display detail, never a second name: the UI
+    // reads it from HERE rather than keeping its own segment table (CreateHero.registry.test.tsx).
+    shortLabel: 'Kling',
     family: 'kling',
     castLimit: 1, // one starred cast member — Kling takes a single elements set per job
     aspects: ['16:9', '9:16', '1:1'],
@@ -77,16 +81,109 @@ export const RENDER_MODELS = {
         shotSyntax: 'connectors',
         argMap: { images: 'image_urls', audios: 'audio_urls', videos: null, firstFrame: null, lastFrame: null },
       },
+      // The SAME model on Segmind is a different endpoint contract: it is addressed by model SLUG
+      // (`slugKey`, resolved against config.segmind exactly as `endpointKey` is against config.fal),
+      // it takes an INTEGER duration, it accepts a seed, and it has real first/last-frame slots —
+      // which are MUTUALLY EXCLUSIVE with reference_images, hence firstFrameExcludesRefs.
+      segmind: {
+        slugKey: 'seedance20Slug',
+        maxImages: 9,
+        maxAudioRefs: 3,
+        maxVideoRefs: 3,
+        audioBudgetS: 15,
+        minSeconds: 4,
+        maxSeconds: 15,
+        durationType: 'int',
+        resolutions: ['480p', '720p', '1080p', '4k'],
+        defaultResolution: '480p',
+        // Six ratios live HERE rather than at model level: fal's 2.0 endpoint renders three and 422s
+        // on the rest, so the model-level list must not widen underneath `seedance-2.0@fal`.
+        aspects: ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'],
+        nativeFirstFrame: true,
+        nativeLastFrame: true,
+        firstFrameExcludesRefs: true,
+        supportsSeed: true, // fal's 2.0 endpoint 422s on a seed; Segmind's takes one
+        supportsReturnLastFrame: true,
+        refStyle: 'spaced',
+        shotSyntax: 'connectors',
+        knobsKey: 'seedance', // the shared 2.0 knobs block (resolution, probe resolution, style…)
+        argMap: {
+          images: 'reference_images', audios: 'reference_audios', videos: 'reference_videos',
+          firstFrame: 'first_frame_url', lastFrame: 'last_frame_url',
+        },
+      },
     },
   },
-  // Declared model-level ONLY this phase: its cast cap and ratio list are already assertable (and
-  // UI-selectable) while `providers` is empty, so shipping it is a one-line registry add later.
   'seedance-2.5': {
     label: 'Seedance 2.5',
     family: 'seedance',
     castLimit: 4,
     aspects: ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'],
-    providers: {},
+    providers: {
+      fal: {
+        endpointKey: 'seedance25Endpoint',
+        probeEndpointKey: 'seedance25ProbeEndpoint',
+        // No textEndpointKey: fal's 2.5 has no separate text tier on this family, so a job with zero
+        // image refs rides THIS endpoint (the renderer falls through to it, probe variant included).
+        // fal budgets 2.5's references ACROSS modalities — 50 combined, no per-kind limit published.
+        // The per-kind numbers are therefore high-water marks inside that budget, and
+        // `maxCombinedRefs` is the cap that actually bites (enforced in seedance-args.js).
+        maxImages: 50,
+        maxAudioRefs: 10,
+        maxVideoRefs: 50,
+        maxCombinedRefs: 50,
+        audioBudgetS: 30,
+        // duration is a STRING here, as on fal's 2.0 endpoint ('auto' is also accepted by the
+        // endpoint; this build always computes a numeric duration, so it is never emitted).
+        minSeconds: 4,
+        maxSeconds: 30,
+        durationType: 'string',
+        // 480p|720p ONLY (24 fps native) — 1080p comes from approve's Topaz upscale, not from here.
+        resolutions: ['480p', '720p'],
+        defaultResolution: '720p',
+        // The reference-to-video endpoint carries NO frame anchors at all (they live on the separate
+        // image-to-video endpoint), so a seam frame is always demoted to a trailing image ref + a
+        // prompt pin — byte-for-byte the strategy fal Seedance 2.0 already uses.
+        nativeFirstFrame: false,
+        nativeLastFrame: false,
+        supportsSeed: true, // unlike fal's 2.0 endpoint, which 422s on `seed`
+        supportsReturnLastFrame: false,
+        refStyle: 'bracket',
+        shotSyntax: 'numbered',
+        knobsKey: 'seedance25', // its own user-tunable block (config.seedance25), falling back to config.seedance
+        argMap: { images: 'image_urls', audios: 'audio_urls', videos: 'video_urls', firstFrame: null, lastFrame: null },
+      },
+      // Segmind publishes per-kind reference caps instead of fal's combined budget, so there is no
+      // `maxCombinedRefs` here — the per-kind numbers ARE the limits. Its reference audio also has a
+      // stated 2s FLOOR (a shorter clip is a hard 422 on an already-paid submit), which is what
+      // `audioPerClipS` exists for; the renderer drops such a clip instead of shipping it.
+      segmind: {
+        slugKey: 'seedance25Slug',
+        maxImages: 30,
+        maxAudioRefs: 10,
+        maxVideoRefs: 10,
+        audioBudgetS: 30,
+        audioPerClipS: [2, 30],
+        minSeconds: 4,
+        maxSeconds: 30,
+        durationType: 'int',
+        resolutions: ['480p', '720p'],
+        defaultResolution: '720p',
+        aspects: ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'],
+        nativeFirstFrame: true,
+        nativeLastFrame: true,
+        firstFrameExcludesRefs: true,
+        supportsSeed: true,
+        supportsReturnLastFrame: true,
+        refStyle: 'spaced',
+        shotSyntax: 'numbered',
+        knobsKey: 'seedance25',
+        argMap: {
+          images: 'reference_images', audios: 'reference_audios', videos: 'reference_videos',
+          firstFrame: 'first_frame_url', lastFrame: 'last_frame_url',
+        },
+      },
+    },
   },
 };
 
@@ -158,17 +255,26 @@ export function capsFor(id) {
 
 // castLimitFor/aspectsFor deliberately accept a BARE MODEL ID as well as a backend id, so a model
 // whose provider entries have not landed yet still answers "how many cast members?" and "which
-// ratios?" — that is what keeps adding a provider a one-line registry change.
-function modelFor(value) {
-  if (typeof value === 'string' && Object.hasOwn(RENDER_MODELS, value)) return RENDER_MODELS[value];
-  return RENDER_MODELS[normalizeBackend(value).model];
+// ratios?" — that is what keeps adding a provider a one-line registry change. Given a BACKEND id
+// they follow capsFor's precedence (provider entry ⊕ model), because some facts are per (model,
+// provider): Seedance 2.0 renders six ratios on Segmind and three on fal, from one model entry.
+function lookup(value) {
+  if (typeof value === 'string' && Object.hasOwn(RENDER_MODELS, value)) return { model: RENDER_MODELS[value], entry: null };
+  const { model, provider } = normalizeBackend(value);
+  return { model: RENDER_MODELS[model], entry: RENDER_MODELS[model].providers[provider] };
+}
+
+/** One merged field, provider entry winning over the model default (a bare model id has no entry). */
+function fieldFor(value, key) {
+  const { model, entry } = lookup(value);
+  return entry?.[key] ?? model[key];
 }
 
 /** Max starred cast members for a model/backend. Enforced in the engine, the server and the UI. */
-export const castLimitFor = (value) => modelFor(value).castLimit;
+export const castLimitFor = (value) => fieldFor(value, 'castLimit');
 
-/** The model's selectable aspect ratios (a copy). Numeric only — 'adaptive'/'auto' stay unexposed. */
-export const aspectsFor = (value) => [...modelFor(value).aspects];
+/** The selectable aspect ratios (a copy). Numeric only — 'adaptive'/'auto' stay unexposed. */
+export const aspectsFor = (value) => [...fieldFor(value, 'aspects')];
 
 /**
  * How this model cites a reference in a prompt: '@Image1' (compact, today's shipping style),
@@ -184,7 +290,12 @@ export const aspectsFor = (value) => [...modelFor(value).aspects];
  * budget — spec-schema's validation and the render paths must never disagree on it.
  */
 export const demotesOpeningFrame = (caps) =>
-  !caps.nativeFirstFrame || !caps.argMap?.firstFrame || Boolean(caps.firstFrameExcludesRefs);
+  !caps.nativeFirstFrame
+  // `argMap` is the Seedance builder's key table: an entry that declares one and leaves `firstFrame`
+  // null has no anchor argument to put the frame in. An entry with NO argMap at all (Kling, whose
+  // renderer builds its own payload) is not saying "no slot" — its nativeFirstFrame flag stands.
+  || (caps.argMap ? !caps.argMap.firstFrame : false)
+  || Boolean(caps.firstFrameExcludesRefs);
 
 export function refLabel(caps, kind, n) {
   const k = String(kind).charAt(0).toUpperCase() + String(kind).slice(1);

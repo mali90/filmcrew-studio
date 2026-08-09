@@ -37,8 +37,9 @@ export function PaidButton({
           </>
         }
       >
-        Rendering calls fal.ai with your key and bills your account. Every paid button states its
-        estimated price before you click — this is the only time we ask.
+        Rendering calls your configured provider (fal.ai or Segmind) with your key and bills that
+        account. Every paid button states its estimated price when a rate is on file — and says so
+        when one isn't. This is the only time we ask.
       </Dialog>
     </>
   );

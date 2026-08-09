@@ -53,10 +53,16 @@ test('job storyboard cap: >6 shots per job', () => {
   assert.match(errStr(validateSpec(s, { upTo: 7 })), /storyboard cap/);
 });
 
-test('job duration cap: total >15s per job', () => {
+test('job duration cap: total >15s per job (on a 15s model — the cap is the model\'s, not this module\'s)', () => {
   const s = loadGoldenSpec();
   for (const sh of s.shots) { sh.duration_s = 6; delete sh.kling.duration; } // 3 * 6 = 18s
-  assert.match(errStr(validateSpec(s, { upTo: 7 })), /15s\/job cap/);
+  assert.match(errStr(validateSpec(s, { upTo: 7, backend: 'kling' })), /15s\/job cap/);
+  assert.match(errStr(validateSpec(s, { upTo: 7, backend: 'seedance' })), /15s\/job cap/);
+  // …and with NO backend named, the reading is the SUPERSET of every registered model (Seedance 2.5
+  // renders 30s jobs), so a spec planned for a long-window model still round-trips. Which window a
+  // particular run gets is decided where the backend is actually known — every engine/render path
+  // passes one (see test/unit/spec-schema-backend.test.js).
+  assert.equal(validateSpec(s, { upTo: 7 }).ok, true);
 });
 
 test('job cross-refs: unknown shot id and unknown element id', () => {

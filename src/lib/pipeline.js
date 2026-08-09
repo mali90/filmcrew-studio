@@ -11,6 +11,7 @@ import { validateSpec } from './spec-schema.js';
 import { BACKEND_IDS, LEGACY_BACKENDS, capsFor, demotesOpeningFrame, normalizeBackend } from './render-models.js';
 import { renderKlingJobFal } from './fal-kling.js';
 import { falAdapter } from './fal-seedance.js';
+import { segmindAdapter } from './segmind-seedance.js';
 import { renderSeedanceJob } from './render-seedance.js';
 import { assembleVideo, grabFrame, lastFrameOf } from './assemble.js';
 import { readContinuity } from './seamstitch.js';
@@ -20,7 +21,7 @@ import { upscaleVideoTopaz, probeDims } from './upscale.js';
 // plus one line here. The generalized renderer then runs with EACH ENTRY'S OWN caps, so a sibling
 // model (seedance-2.5@fal) or a sibling provider (seedance-2.0@segmind) can never silently render
 // through another entry's limits or transport.
-const SEEDANCE_ADAPTERS = { fal: falAdapter };
+const SEEDANCE_ADAPTERS = { fal: falAdapter, segmind: segmindAdapter };
 
 // Render backends — one entry per renderable `<model>@<provider>`, all honoring the same per-job
 // contract ({ job, spec, runDir, seed, lowRes, startFrame, nonce }) → { jobId, clip, totalDuration,
@@ -218,6 +219,12 @@ export async function renderJob(spec, jobId, { runDir, backend, take = 0, feedba
   return { ...r, backend: be, staleDownstream };
 }
 
+/** The provider a run rendered on ('fal' | 'segmind'), or null when the backend is unrecorded — an
+ *  older manifest assembled long after the fact still upscales, it just can't follow its own run. */
+function providerOf(backend) {
+  try { return backend ? capsFor(backend).provider : null; } catch { return null; }
+}
+
 /**
  * Assembly tail shared by a full render and the `assemble` CLI: stitch the rendered job clips in
  * spec (job) order → optional Topaz upscale → cover frame, writing out/<project>.mp4. Re-renders
@@ -245,10 +252,22 @@ export async function finishRender(spec, results, { runDir, upscale = false, bac
   // the delivery frame (config.video), so a sub-1080p source (a 480p/720p Seedance render, a probe
   // clip) must be lifted first — after assembly the master is nominally full-size and Topaz would
   // no-op. Clips already ≥1080p come back unchanged, so this costs nothing on a 1080p render.
+  let canvasScale = null; // set by the upscale branch so the stitch follows what Topaz delivered
   if (upscale || config.upscale.enabled) {
+    // …and it runs on the provider this run RENDERED on (UPSCALE_PROVIDER=auto): a Segmind-only
+    // install has no fal key to fall back on, and a fal run should not round-trip its master
+    // through a second vendor. An explicit UPSCALE_PROVIDER still wins inside upscaleVideoTopaz.
+    const runProvider = providerOf(backend);
     const lifted = [];
-    for (const clip of clipPaths) lifted.push(await upscaleVideoTopaz({ inPath: clip, outDir: path.dirname(clip) }));
+    for (const clip of clipPaths) lifted.push(await upscaleVideoTopaz({ inPath: clip, outDir: path.dirname(clip), runProvider }));
     clipPaths = lifted;
+    // The stitch canvas must FOLLOW what the upscale delivered: canvasFor caps at VIDEO_SHORT_SIDE
+    // (1080 default), which would quietly stitch a paid 4K Topaz target back down to 1080p.
+    try {
+      const liftedShorts = [];
+      for (const clip of clipPaths) { const d = await probeDims(clip); liftedShorts.push(Math.min(d.width, d.height)); }
+      if (liftedShorts.length) canvasScale = Math.max(config.video.shortSide, Math.min(...liftedShorts));
+    } catch { /* probe failure — the default canvas cap stands */ }
   }
 
   // Dialogue is spoken NATIVELY by the render backend: each spec.audio.voice.lines[] line is folded
@@ -258,7 +277,7 @@ export async function finishRender(spec, results, { runDir, upscale = false, bac
   // hard-cut concat by itself if they don't, or if the stitcher is unavailable).
   const seams = continuity !== undefined ? continuity : readContinuity({ chained }, clipPaths.length);
   const master = uniqueOutPath(outDir, name); // repeat renders of one title get -2, -3, … (never overwrite)
-  const stitch = await assembleVideo(clipPaths, master, { nativeAudio, aspect: spec.kling?.aspect_ratio ?? spec.project?.aspect_ratio ?? null, continuity: seams });
+  const stitch = await assembleVideo(clipPaths, master, { nativeAudio, aspect: spec.kling?.aspect_ratio ?? spec.project?.aspect_ratio ?? null, continuity: seams, canvasScale });
 
   const cover = await grabFrame(master, spec.project?.cover_frame_s ?? 2, path.join(runDir, 'cover.png'));
   // record the delivered size: the UI disables the paid upscale when the master is already ≥1080p

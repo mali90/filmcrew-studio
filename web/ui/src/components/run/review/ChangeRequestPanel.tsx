@@ -80,6 +80,7 @@ export function ChangeRequestPanel({ run }: { run: RunDetail }) {
                 variant="secondary"
                 className="w-full justify-center"
                 costUsd={jobEstimate.data?.totalUsd ?? null}
+                costUnknown={Boolean(jobEstimate.data?.unknownPrice)}
                 loading={rerenderJob.isPending}
                 onPaidClick={() => rerenderJob.mutate(false)}
               >
@@ -91,6 +92,7 @@ export function ChangeRequestPanel({ run }: { run: RunDetail }) {
                     variant="secondary"
                     className="w-full justify-center"
                     costUsd={cascadeEstimate.data?.totalUsd ?? null}
+                    costUnknown={Boolean(cascadeEstimate.data?.unknownPrice)}
                     loading={rerenderJob.isPending}
                     onPaidClick={() => rerenderJob.mutate(true)}
                   >
@@ -108,6 +110,7 @@ export function ChangeRequestPanel({ run }: { run: RunDetail }) {
               variant="secondary"
               className="w-full justify-center"
               costUsd={fullEstimate.data?.totalUsd ?? null}
+              costUnknown={Boolean(fullEstimate.data?.unknownPrice)}
               loading={rerenderAll.isPending}
               onPaidClick={() => rerenderAll.mutate()}
             >

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { estimateRender, estimateUpscale, jobSeconds, readSeedanceResolution } from '../../lib/estimator.js';
+import { estimateRender, estimateUpscale, jobSeconds, readProbeResolution, readRenderResolution, readSeedanceResolution, readUpscaleProvider } from '../../lib/estimator.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
 const golden = () => JSON.parse(fs.readFileSync(path.join(ROOT, 'examples/ocean-lighthouse/spec.json'), 'utf8'));
@@ -139,19 +139,24 @@ test('$alias hop preserves the kling audio-off rate (a literal backend check wou
 });
 
 test('$alias resolves ONE hop and still fails loudly on a genuinely unknown compound id', () => {
-  assert.throws(() => estimateRender(threeJobs(), { backend: 'seedance-2.5@segmind', mode: 'full' }), /backend/);
+  // NB: 'seedance-2.5@segmind' USED to belong here. It is now a real (unpriced) row — see
+  // estimator-providers.test.js for the difference between "no rate on file" and "no such backend".
   assert.throws(() => estimateRender(threeJobs(), { backend: 'kling-o3@segmind', mode: 'full' }), /backend/);
+  assert.throws(() => estimateRender(threeJobs(), { backend: 'seedance-3.0@fal', mode: 'full' }), /backend/);
 });
 
 // The registry is the thing that grows: a model/provider added there with no matching price row
 // would 500 the estimate endpoint for every run on it. This is the coupling stated as an assertion,
 // so the failure lands on whoever adds the model rather than on a user opening a run page.
-test('EVERY renderable backend id in the registry prices, through whatever hop it needs', async () => {
+test('EVERY renderable backend id in the registry has a ROW — priced or explicitly unknown', async () => {
   const { BACKEND_IDS, ALL_BACKENDS } = await import('../../../../src/lib/render-models.js');
   assert.ok(BACKEND_IDS.length > 0);
   for (const id of [...BACKEND_IDS, ...ALL_BACKENDS]) {
     const e = estimateRender(threeJobs(), { backend: id, mode: 'full', resolution: '480p' });
-    assert.ok(Number.isFinite(e.totalUsd) && e.totalUsd > 0, `${id} priced to a real number, got ${e.totalUsd}`);
+    // A provider whose prices are unpublished (Segmind) answers null + a hint rather than throwing;
+    // anything with a rate must still price to a real, positive number.
+    if (e.totalUsd === null) assert.ok(e.unknownPrice?.hint, `${id}: unknown price must carry a hint`);
+    else assert.ok(Number.isFinite(e.totalUsd) && e.totalUsd > 0, `${id} priced to a real number, got ${e.totalUsd}`);
   }
 });
 
@@ -176,5 +181,73 @@ test('readSeedanceResolution: reads .env, tolerates quotes, defaults to 480p', (
     assert.equal(readSeedanceResolution(dir), '720p');
     fs.writeFileSync(path.join(dir, '.env'), '# SEEDANCE_RESOLUTION=4k\n');
     assert.equal(readSeedanceResolution(dir), '480p'); // commented line does not count
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ── The resolution knob is per MODEL ──────────────────────────────────────────
+// Seedance 2.5 has its own env knob and its own default (720p; 480p is only its probe tier), so
+// reading SEEDANCE_RESOLUTION for a 2.5 run would quietly price a 720p render at the 480p rate —
+// off by more than 2×. readSeedanceResolution stays as the pre-2.5 spelling of the same question.
+test('readRenderResolution: 2.5 reads its own knob and its own default; everything else is unchanged', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-res25-'));
+  try {
+    assert.equal(readRenderResolution(dir, 'seedance-2.5@fal'), '720p');   // no .env: 2.5 default
+    assert.equal(readRenderResolution(dir, 'seedance-2.0@fal'), '480p');   // …not the 2.0 default
+    assert.equal(readRenderResolution(dir, null), '480p');                 // nor the legacy answer
+
+    fs.writeFileSync(path.join(dir, '.env'), 'SEEDANCE_RESOLUTION=1080p\nSEEDANCE25_RESOLUTION=480p\n');
+    assert.equal(readRenderResolution(dir, 'seedance-2.5@segmind'), '480p', '2.5 follows SEEDANCE25_RESOLUTION on either provider');
+    assert.equal(readRenderResolution(dir, 'seedance-2.0@fal'), '1080p', 'and never crosses the two knobs');
+    assert.equal(readSeedanceResolution(dir), '1080p', 'the old export still answers the old question');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('readRenderResolution/readProbeResolution: an injected childEnv var beats .env — dotenv never overwrites it in the render child', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-res-child-'));
+  try {
+    fs.writeFileSync(path.join(dir, '.env'), 'SEEDANCE_RESOLUTION=720p\nSEEDANCE_PROBE_RESOLUTION=720p\n');
+    const childEnv = { SEEDANCE_RESOLUTION: '480p', SEEDANCE_PROBE_RESOLUTION: '480p' };
+    assert.equal(readRenderResolution(dir, 'seedance-2.0@fal', childEnv), '480p', 'the child renders the injected tier — the estimate must quote it');
+    assert.equal(readProbeResolution(dir, 'seedance-2.0@fal', childEnv), '480p');
+    // an explicitly EMPTY injected var also blocks the .env value (dotenv leaves it empty), so the
+    // model default applies — exactly what config.js resolves to inside the child
+    assert.equal(readRenderResolution(dir, 'seedance-2.0@fal', { SEEDANCE_RESOLUTION: '' }), '480p');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ── Which vendor the approve-time upscale will bill ───────────────────────────
+// Mirrors src/lib/upscale.js resolveUpscaleProvider, which this server may not import (config.js).
+// Getting it wrong shows a fal figure on a Segmind bill — exactly the invented number this work
+// exists to avoid.
+test('readUpscaleProvider: explicit wins, auto upscales where the run rendered, else where a key is', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-upv-'));
+  try {
+    fs.writeFileSync(path.join(dir, '.env'), 'UPSCALE_PROVIDER=segmind\nFAL_KEY=x\n');
+    assert.equal(readUpscaleProvider(dir, 'kling-o3@fal'), 'segmind', 'an explicit pin beats everything');
+
+    fs.writeFileSync(path.join(dir, '.env'), 'FAL_KEY=x\nSEGMIND_API_KEY=y\n'); // auto (unset)
+    assert.equal(readUpscaleProvider(dir, 'seedance-2.5@segmind'), 'segmind', 'no master round-trips to a second vendor');
+    assert.equal(readUpscaleProvider(dir, 'seedance-2.0@fal'), 'fal');
+    assert.equal(readUpscaleProvider(dir, 'kling'), 'fal', 'legacy ids resolve through the registry');
+
+    fs.writeFileSync(path.join(dir, '.env'), 'SEGMIND_API_KEY=y\n'); // Segmind-only install
+    assert.equal(readUpscaleProvider(dir, 'kling-o3@fal'), 'segmind', 'falls back to the key that exists');
+
+    fs.writeFileSync(path.join(dir, '.env'), '# nothing configured\n');
+    assert.equal(readUpscaleProvider(dir, 'seedance-2.5@segmind'), 'fal', 'keyless fails with the familiar FAL_KEY message');
+    assert.equal(readUpscaleProvider(dir, 'seedance-2.5@segmind', { SEGMIND_API_KEY: 'y' }), 'segmind', 'the child env counts too');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// The two are one system: a Segmind-rendered run must not show a fal Topaz figure on approve.
+test('a Segmind run prices its upscale as unknown, a fal run keeps its number', () => {
+  const clips = [{ jobId: 'K1', seconds: 5 }];
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-upv2-'));
+  try {
+    fs.writeFileSync(path.join(dir, '.env'), 'FAL_KEY=x\nSEGMIND_API_KEY=y\n');
+    const seg = estimateUpscale(clips, { provider: readUpscaleProvider(dir, 'seedance-2.5@segmind') });
+    assert.equal(seg.totalUsd, null);
+    assert.match(seg.unknownPrice.hint, /segmind/i);
+    assert.ok(estimateUpscale(clips, { provider: readUpscaleProvider(dir, 'kling-o3@fal') }).totalUsd > 0);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

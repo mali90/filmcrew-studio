@@ -6,8 +6,24 @@
 //
 // Extracted verbatim from fal.js, which imports and re-exports every symbol here so no downstream
 // import ever changed.
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fetchRetry, writeBuffer, ensureDir } from './util.js';
+
+const MIME = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp',
+  '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.m4a': 'audio/mp4', '.aac': 'audio/aac',
+  '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.webm': 'video/webm',
+};
+/** Content type for a local asset, by extension (both providers' url fields are content-typed). */
+export const mimeFor = (p) => MIME[path.extname(p).toLowerCase()] || 'application/octet-stream';
+
+/** Inline a local file as a base64 data URI — every queue provider's url fields accept these, so
+ *  this is the upload mode that needs no storage service (and therefore no second API key). */
+export async function fileToDataUri(filePath) {
+  const buf = await fs.readFile(filePath);
+  return `data:${mimeFor(filePath)};base64,${buf.toString('base64')}`;
+}
 
 // A deterministic rejection (bad args / validation) — surface immediately, never retry.
 const VALIDATION = /validation|unprocessable|invalid|must be|required|not (a )?valid|bad request|exceeds|unsupported/i;
@@ -36,8 +52,9 @@ export function isContentPolicyError(err) {
   return CONTENT_POLICY.test(String(err?.message ?? ''));
 }
 // Keep the `content_policy_violation` token in the message so the web banner can key off it.
-export function contentPolicyError(err, endpoint) {
-  return new Error(`fal ${endpoint}: the generated video was flagged by content moderation as sensitive (content_policy_violation) — usually a false positive on a benign prompt. Revise the plan to rephrase it (LLM only, no render spend), or retry to re-roll. [${String(err?.message ?? '').slice(0, 160)}]`);
+// `provider` only names who flagged it — the wording (and the token) is identical everywhere.
+export function contentPolicyError(err, endpoint, provider = 'fal') {
+  return new Error(`${provider} ${endpoint}: the generated video was flagged by content moderation as sensitive (content_policy_violation) — usually a false positive on a benign prompt. Revise the plan to rephrase it (LLM only, no render spend), or retry to re-roll. [${String(err?.message ?? '').slice(0, 160)}]`);
 }
 
 /** Pull every downloadable file URL out of a queue result ({ video:{url} } and common variants). */
@@ -65,4 +82,4 @@ export async function downloadResultFiles(result, destDir, label) {
   return paths;
 }
 
-export default { resultFileUrls, downloadResultFiles, isValidationError, isTransientError, isContentPolicyError, contentPolicyError };
+export default { mimeFor, fileToDataUri, resultFileUrls, downloadResultFiles, isValidationError, isTransientError, isContentPolicyError, contentPolicyError };

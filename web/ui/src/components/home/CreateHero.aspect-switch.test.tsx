@@ -57,7 +57,7 @@ describe('Home — an aspect the next model cannot render', () => {
     }));
     renderHome();
 
-    await userEvent.click(screen.getByRole('radio', { name: 'Seedance' }));
+    await userEvent.click(screen.getByRole('radio', { name: 'Seedance 2.0' }));
     const group = screen.getByRole('radiogroup', { name: 'Aspect ratio' });
     await userEvent.click(within(group).getByRole('radio', { name: '21:9' }));
     expect(within(group).getByRole('radio', { name: '21:9' })).toHaveAttribute('aria-checked', 'true');
