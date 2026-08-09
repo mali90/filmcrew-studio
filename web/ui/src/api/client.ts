@@ -2,7 +2,7 @@
 // server's {error, hint} body — surfaces verbatim in the UI's error states.
 import type {
   CharactersResponse, CliStatus, CreateRunBody, DoctorReport, EnvironmentsResponse, Estimate, InstallCliEvent, ModelsResponse,
-  PromptView, PromptsResponse, ReferencesList, RunDetail, RunSummary, SetupStatus, VoicesList,
+  PromptView, PromptsResponse, ReferencesList, RunDetail, RunSummary, SetPromptBody, SetupStatus, VoicesList,
 } from '../../../shared/api-types';
 
 const BASE = '/api';
@@ -94,6 +94,13 @@ export const api = {
   prompt: (id: string, q: { job: string; take?: string }) =>
     get<PromptView>(`/runs/${id}/prompt?job=${encodeURIComponent(q.job)}${q.take ? `&take=${encodeURIComponent(q.take)}` : ''}`),
   prompts: (id: string) => get<PromptsResponse>(`/runs/${id}/prompts`),
+  /** Save one job's prompt. Free: a local file write — nothing is submitted and nothing is billed.
+   *  Over budget the server refuses with the byte numbers rather than truncating silently. */
+  putPrompt: (id: string, body: SetPromptBody) =>
+    req<PromptView>(`/runs/${id}/prompt`, { method: 'PUT', body: JSON.stringify(body) }),
+  /** Discard one job's edit and go back to the agents' text. Also free, and also local. */
+  deletePrompt: (id: string, job: string) =>
+    del<PromptView>(`/runs/${id}/prompt?job=${encodeURIComponent(job)}`),
   estimate: (id: string, q: { mode: string; jobId?: string; cascade?: boolean; cut?: string }) =>
     get<Estimate>(`/runs/${id}/estimate?mode=${q.mode}${q.jobId ? `&jobId=${q.jobId}` : ''}${q.cascade ? '&cascade=1' : ''}${q.cut ? `&cut=${q.cut}` : ''}`),
 

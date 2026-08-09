@@ -12,6 +12,7 @@ import { timeAgo } from '../../../lib/format';
 import { jobSeconds, outMediaUrl } from './lib';
 import { ClipStrip } from './ClipStrip';
 import { PaidButton } from './PaidButton';
+import { usePlanPrompts } from './PromptSheet';
 
 export function ReviewStage({ run, cutId, setCutId }: {
   run: RunDetail;
@@ -53,6 +54,14 @@ export function ReviewStage({ run, cutId, setCutId }: {
       t.mode === 'full'
       || (t.mode === 'probe' && jobIds[0] === jobId)
       || (t.mode === 'job' && (t.jobId === jobId || (t.cascade === true && jobIds.indexOf(jobId) > jobIds.indexOf(t.jobId ?? ''))))).length;
+
+  // Which segments carry an edit, for the tiles' pen overlay (spec D8/D22). Shares its cache entry
+  // with the prompt sheet's plan-wide read, so opening the sheet costs no second request.
+  const prompts = usePlanPrompts(run.id);
+  const promptStateFor = (jobId: string) => {
+    const v = prompts.data?.prompts.find((p) => p.jobId === jobId);
+    return { edited: v?.source === 'override', stale: Boolean(v?.source === 'override' && v.stale) };
+  };
 
   const seekToJob = (index: number) => {
     const offset = jobs.slice(0, index).reduce((sum, j) => sum + jobSeconds(run.spec, j.jobId), 0);
@@ -130,7 +139,13 @@ export function ReviewStage({ run, cutId, setCutId }: {
       </div>
 
       {jobs.length > 0 && (
-        <ClipStrip run={run} jobs={jobs} takeCountFor={jobTakeCount} onSeek={seekToJob} />
+        <ClipStrip
+          run={run}
+          jobs={jobs}
+          takeCountFor={jobTakeCount}
+          promptStateFor={promptStateFor}
+          onSeek={seekToJob}
+        />
       )}
     </section>
   );

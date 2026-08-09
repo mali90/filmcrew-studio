@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { server, http, HttpResponse } from '../../../test/msw';
-import { makeRun } from '../../../test/fixtures';
+import { makeRun, promptView } from '../../../test/fixtures';
 import { renderReview, markPaidConfirmed, clearPaidState } from './test-helpers';
 import { ReviewStage } from './ReviewStage';
 
@@ -119,5 +119,24 @@ describe('ReviewStage', () => {
     renderReview(<Stage run={run} />);
     // K1 and K2 both got fresh clips from the cascade → 2 each
     expect(screen.getAllByText('×2')).toHaveLength(2);
+  });
+
+  // Spec D8/D22: an edited prompt is a fact about a segment, so it is visible ON the segment —
+  // not only inside the sheet a user would have to open to find it.
+  it('marks the tile of a segment whose prompt carries an edit', async () => {
+    server.use(http.get('/api/runs/:id/prompts', ({ params }) => HttpResponse.json({
+      runId: String(params.id),
+      backend: 'kling-o3@fal',
+      jobs: ['K1', 'K2'],
+      prompts: [promptView('K1'), promptView('K2', { source: 'override', stale: true })],
+      orphaned: [],
+    })));
+    renderReview(<Stage run={makeRun('review')} />);
+
+    const k2 = screen.getByTestId('segment-tile-K2');
+    expect(await within(k2).findByLabelText('prompt edited')).toBeInTheDocument();
+    expect(within(k2).getByLabelText('prompt edit is stale')).toBeInTheDocument();
+    // K1 is on the agents' words, so it wears nothing.
+    expect(within(screen.getByTestId('segment-tile-K1')).queryByLabelText('prompt edited')).not.toBeInTheDocument();
   });
 });

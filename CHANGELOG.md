@@ -3,6 +3,23 @@
 ## Unreleased
 
 ### Added
+- **The prompt sheet now has an editor, and it meters what you type in the unit the model actually
+  counts.** `Edit prompt` opens the words themselves — the authored scene body, not the composed
+  prompt, because the style directive, the identity clause, the speech rules and the frame pins are
+  re-composed on top at render time and re-composing them over themselves would send them twice. The
+  meter draws against `maxBytes − pinBytes`: the room left for *your* words once the system's share
+  is taken out, in UTF-8 **bytes**, so an em dash costs 3 and an emoji 4 — counting characters is how
+  a 480-character edit sails past a 500-byte cap and dies at the provider instead of on screen. Kling
+  gets one textarea and one meter per shot (its cap is per shot; fal rejects a 512-byte segment) and
+  Seedance one for the whole job. Over budget, nothing is ever truncated for you: every byte you
+  typed stays in the box, Save refuses, and the line says by how much — text cut behind your back is
+  text you cannot fix. When the agents revise the plan under a saved edit, a banner says the one
+  thing that matters first — *your edit is still what we'll send, word for word* — and offers
+  `Refresh from plan` (loads the new text into the editor, **unsaved**) or `Discard edit` (confirmed
+  first, and only then). An edit whose segment the agents re-cut away is listed with its text and a
+  `Copy the text` before anything can discard it. Edited segments wear a pen in the review strip, and
+  a warning beside it when the plan has moved. Saving is genuinely free — one local file write —
+  which is exactly why the caption says so and says nothing renders until you re-render the segment.
 - **You can now edit the words we send, and they are kept word for word.** `PUT /api/runs/:id/prompt`
   saves one job's prompt to `<runDir>/prompt-overrides.json`; `DELETE …/prompt?job=K2` goes back to
   the agents' text. What is stored is **only what you typed** — the style directive, the identity

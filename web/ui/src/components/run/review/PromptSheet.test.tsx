@@ -78,9 +78,9 @@ describe('PromptSheet', () => {
     // D20: what is sent with every prompt for this job, and cannot be edited away.
     expect(panel).toHaveTextContent('Sent with every K2 prompt — not editable');
     expect(panel).toHaveTextContent('@Element1 = the lighthouse keeper');
-    // Reading is read-only in this phase: nothing to type in, nothing to save.
+    // Opening the sheet still only READS: editing is offered, never entered on your behalf.
     expect(within(panel).queryByRole('textbox')).not.toBeInTheDocument();
-    expect(within(panel).queryByRole('button', { name: /edit/i })).not.toBeInTheDocument();
+    expect(within(panel).getByRole('button', { name: /edit prompt/i })).toBeInTheDocument();
   });
 
   it('the version picker lists Current plan plus one entry per take that kept a prompts.json', async () => {
@@ -228,5 +228,105 @@ describe('PromptSheet', () => {
     await openFromStrip('K2');
 
     expect(await screen.findByTestId('prompt-sheet')).toHaveTextContent('shot S9 is not in this plan');
+  });
+
+  it('a job the plan cannot compose is not editable — there are no words to hand an editor', async () => {
+    servePrompts({
+      K2: promptView('K2', {
+        segments: null, shotPrompts: null, refs: [], prompt: '', bytes: 0, maxBytes: 0, segmentMaxBytes: null, pinBytes: 0,
+        error: 'shot S9 is not in this plan',
+      }),
+    });
+    renderRunPage(makeRun('review'));
+    await screen.findByRole('region', { name: 'Review stage' });
+    await openFromStrip('K2');
+
+    const panel = await screen.findByTestId('prompt-sheet');
+    expect(within(panel).queryByRole('button', { name: /edit prompt/i })).not.toBeInTheDocument();
+  });
+
+  // ── P4: editing ───────────────────────────────────────────────────────────────────────────────
+
+  /** The plan's view until a PUT lands, the saved override afterwards — as the real server behaves. */
+  function serveEditable(jobId = 'K2') {
+    let saved: string[] | null = null;
+    const viewNow = () => (saved
+      ? promptView(jobId, { source: 'override', draftSegments: saved, updatedAt: '2026-07-04T10:00:00.000Z' })
+      : promptView(jobId));
+    server.use(
+      http.get('/api/runs/:id/prompt', () => HttpResponse.json(viewNow())),
+      http.get('/api/runs/:id/prompts', ({ params }) => HttpResponse.json({
+        runId: String(params.id), backend: 'kling-o3@fal', jobs: [jobId], prompts: [viewNow()], orphaned: [],
+      })),
+      http.put('/api/runs/:id/prompt', async ({ request }) => {
+        saved = ((await request.json()) as { segments?: string[] }).segments ?? null;
+        return HttpResponse.json(viewNow());
+      }),
+    );
+    return { savedNow: () => saved };
+  }
+
+  it('saving flips the sheet to the saved state: an edited chip, and what it means for the next render', async () => {
+    const { savedNow } = serveEditable('K2');
+    renderRunPage(makeRun('review'));
+    await screen.findByRole('region', { name: 'Review stage' });
+    await openFromStrip('K2');
+
+    const panel = await screen.findByTestId('prompt-sheet');
+    expect(within(panel).queryByTestId('prompt-edited-chip-K2')).not.toBeInTheDocument();
+
+    await userEvent.click(within(panel).getByRole('button', { name: /edit prompt/i }));
+    const boxes = within(panel).getAllByRole('textbox');
+    await userEvent.clear(boxes[0]);
+    await userEvent.type(boxes[0], 'hold on the lamp until it fails.');
+    await userEvent.click(within(panel).getByRole('button', { name: 'Save' }));
+
+    // The words that left the browser are the user's own — not the composed prompt around them.
+    await waitFor(() => expect(savedNow()?.[0]).toBe('hold on the lamp until it fails.'));
+    expect(await within(panel).findByTestId('prompt-edited-chip-K2')).toHaveTextContent('edited');
+    await waitFor(() => expect(panel).toHaveTextContent("Your edit is what K2's next render sends."));
+    // Back to reading: the editor closed itself, and nothing on this screen was paid for.
+    expect(within(panel).queryByRole('textbox')).not.toBeInTheDocument();
+    expect(within(panel).getByTestId('prompt-body-K2-0')).toBeInTheDocument();
+  });
+
+  it('an edit the plan has moved under opens IN the editor, banner first', async () => {
+    servePrompts({
+      K2: promptView('K2', {
+        source: 'override',
+        stale: true,
+        planSegments: ['@Element1 the agents’ new words'],
+        planDraftSegments: ['the agents’ new words'],
+      }),
+    });
+    renderRunPage(makeRun('review'));
+    await screen.findByRole('region', { name: 'Review stage' });
+    await openFromStrip('K2');
+
+    const panel = await screen.findByTestId('prompt-sheet');
+    expect(await within(panel).findByTestId('prompt-stale-K2')).toHaveTextContent(
+      "The agents revised the plan after you edited K2's prompt. Your edit is still what we'll send, word for word.",
+    );
+    expect(within(panel).getAllByRole('textbox').length).toBeGreaterThan(0);
+  });
+
+  it('an edit whose segment the agents re-cut away is kept, and said out loud', async () => {
+    server.use(http.get('/api/runs/:id/prompts', ({ params }) => HttpResponse.json({
+      runId: String(params.id),
+      backend: 'kling-o3@fal',
+      jobs: ['K1', 'K2'],
+      prompts: [promptView('K1'), promptView('K2')],
+      orphaned: [{ jobId: 'K4', prompt: 'the words for a segment that no longer exists', updatedAt: null }],
+    })));
+    renderRunPage(makeRun('plan-ready'));
+    await screen.findByRole('region', { name: 'The plan is ready' });
+    await userEvent.click(screen.getByRole('button', { name: 'Prompts for this plan' }));
+
+    const panel = await screen.findByTestId('prompt-sheet');
+    const row = within(panel).getByTestId('prompt-orphaned');
+    expect(row).toHaveTextContent('1 edited prompt has no segment any more.');
+    await userEvent.click(within(row).getByRole('button', { name: /has no segment any more/ }));
+    expect(row).toHaveTextContent('K4 no longer exists in this plan');
+    expect(row).toHaveTextContent('the words for a segment that no longer exists');
   });
 });

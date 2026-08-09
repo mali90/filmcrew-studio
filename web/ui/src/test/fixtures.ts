@@ -127,6 +127,9 @@ const utf8 = (s: string) => new TextEncoder().encode(s).length;
 /** One job's plan prompt, shaped like the server's `PromptView`. */
 export function promptView(jobId: string, over: Partial<PromptView> = {}): PromptView {
   const shots = SPEC.kling.jobs.find((j) => j.job_id === jobId)?.shots ?? [];
+  // The AUTHORED body per shot — what the editor edits. The composed segment wraps it in the lead
+  // reference and the framing the system owns, which is why the two are not the same string.
+  const bodies = shots.map((shotId) => SPEC.shots.find((s) => s.shot_id === shotId)?.kling?.content_prompt ?? 'a shot');
   const segments = shots.map((shotId) => {
     const shot = SPEC.shots.find((s) => s.shot_id === shotId);
     const prompt = `@Element1 ${shot?.kling?.content_prompt ?? 'a shot'}`;
@@ -160,6 +163,8 @@ export function promptView(jobId: string, over: Partial<PromptView> = {}): Promp
     maxBytes: 500 * segments.length,
     segmentMaxBytes: 500,
     pinBytes: 64 * segments.length,
+    draft: bodies.join('\n\n'),
+    draftSegments: bodies,
     ...over,
   };
 }
@@ -179,6 +184,9 @@ export function sentPromptView(jobId: string, take: string, over: Partial<Prompt
     maxBytes: null,
     segmentMaxBytes: null,
     pinBytes: null,
+    // A past take is a record, not a draft — the server sends no editable body for one.
+    draft: undefined,
+    draftSegments: undefined,
     ...over,
   };
 }

@@ -218,6 +218,16 @@ export interface PromptView {
   planPrompt?: string;
   /** Same, per shot (Kling segments / Seedance shot blocks). */
   planSegments?: string[];
+  /** The words the EDITOR owns — the authored scene body, without the system scaffolding that is
+   *  re-composed on top at render time. Saved back unchanged it re-composes to `prompt`, byte for
+   *  byte. Absent on a past take, which is a record and not a draft. */
+  draft?: string;
+  /** Kling: one authored body per shot, because its byte cap is per shot. Null on Seedance. */
+  draftSegments?: string[] | null;
+  /** The agents' CURRENT authored body, in the same editable form — what `Refresh from plan` loads
+   *  into the editor. Present only alongside an override. */
+  planDraft?: string;
+  planDraftSegments?: string[] | null;
   /** Hash of exactly the authored inputs this prompt is composed from; null for a past take. */
   fingerprint: string | null;
   /** Take ids that kept a `prompts.json` for THIS job, newest first — the version picker's options.

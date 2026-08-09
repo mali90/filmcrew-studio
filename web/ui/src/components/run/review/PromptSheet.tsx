@@ -7,21 +7,23 @@
 // sibling (the toggles live in the plan card, the job cards and the clip strip, while the panel
 // lives under the stage band) it also carries `aria-controls`.
 //
-// Read-only in WS2-P3: this sheet SHOWS, it never sends. Every number in it — bytes, budget, the
-// bytes the system already owns — is measured by the server with the same pure builder the renderer
-// composes with, and is rendered here verbatim. Recomputing a byte count in the browser would be a
-// second implementation of the one thing this screen promises not to have.
+// Every number in it — bytes, budget, the bytes the system already owns — is measured by the server
+// with the same pure builder the renderer composes with, and is rendered here verbatim. Recomputing
+// a byte count in the browser would be a second implementation of the one thing this screen promises
+// not to have. (The editor is the one exception, and only for text that has not been saved yet: the
+// server cannot count words that are still being typed. See PromptEditor.)
 import { createContext, useContext, useMemo, useState, type PropsWithChildren, type ReactNode } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { Copy, FileText, Lock, X } from 'lucide-react';
-import type { PromptSegment, PromptView, RunDetail } from '../../../../../shared/api-types';
+import { AlertTriangle, Copy, FileText, Lock, PenLine, X } from 'lucide-react';
+import type { PromptSegment, PromptView, PromptsResponse, RunDetail } from '../../../../../shared/api-types';
 import { api } from '../../../api/client';
 import { Button } from '../../ui/Button';
 import { SegmentedControl } from '../../ui/SegmentedControl';
 import { useToast } from '../../ui/Toast';
 import { timeAgo, usd } from '../../../lib/format';
 import { jobSeconds } from './lib';
+import { PromptEditor, StalePromptBanner } from './PromptEditor';
 
 /** The one panel every `[Prompt]` control points at with `aria-controls`. */
 export const PROMPT_SHEET_ID = 'prompt-sheet';
@@ -60,6 +62,19 @@ export function PromptSheetProvider({ children }: PropsWithChildren) {
 }
 
 export const usePromptSheet = () => useContext(Ctx) ?? INERT;
+
+/**
+ * Every job's prompt for the CURRENT plan. One cache entry shared by the sheet and by whatever else
+ * needs to know which prompts carry an edit (the clip strip's pen overlay) — two keys would mean two
+ * requests and, worse, two answers.
+ */
+export function usePlanPrompts(runId: string, enabled = true) {
+  return useQuery<PromptsResponse>({
+    queryKey: ['prompts', runId, '*'],
+    queryFn: () => api.prompts(runId),
+    enabled,
+  });
+}
 
 /**
  * The `[Prompt]` disclosure control. It appears in DOM order wherever a prompt belongs to something
@@ -205,6 +220,14 @@ function JobPrompt({ run, view }: { run: RunDetail; view: PromptView }) {
   const { toast } = useToast();
   const asSent = view.source === 'take';
   const take = asSent && view.take ? run.manifest?.takes.find((t) => t.id === view.take) ?? null : null;
+  // A past take is a record, not a draft (spec D22 *as-sent*) — and a job the plan cannot compose
+  // has no words to hand an editor. Everything else is the user's to change.
+  const editable = !asSent && !view.error;
+  // An edit the plan has moved under opens IN the editor: the banner, the two ways out and the words
+  // themselves are the whole point of that state, and burying them behind a button hides the news.
+  const [editing, setEditing] = useState<null | 'plan' | 'discard' | 'edit'>(
+    editable && view.source === 'override' && view.stale ? 'edit' : null,
+  );
 
   const copy = async () => {
     try {
@@ -237,6 +260,16 @@ function JobPrompt({ run, view }: { run: RunDetail; view: PromptView }) {
             {take?.estUsd != null ? ` · ≈${usd(take.estUsd)}` : ''}
           </span>
         )}
+        {view.source === 'override' && (
+          // Spec D22 *saved*: the words on this screen are the user's, and the tile in the strip
+          // wears the same pen so the fact is visible without opening anything.
+          <span
+            className="inline-flex h-5 items-center gap-1 rounded-full bg-[var(--accent-soft)] px-2 text-caption text-accent"
+            data-testid={`prompt-edited-chip-${view.jobId}`}
+          >
+            <PenLine size={11} aria-hidden /> edited
+          </span>
+        )}
         <span className="flex-1" />
         <ByteMeter bytes={view.bytes} maxBytes={view.maxBytes} pinBytes={view.pinBytes} testId={`prompt-bytes-${view.jobId}`} />
         <button
@@ -247,10 +280,40 @@ function JobPrompt({ run, view }: { run: RunDetail; view: PromptView }) {
         >
           <Copy size={14} aria-hidden />
         </button>
+        {editable && !editing && (
+          <Button
+            variant="quiet"
+            size="sm"
+            icon={<PenLine size={13} aria-hidden />}
+            onClick={() => setEditing('edit')}
+          >
+            Edit prompt
+          </Button>
+        )}
       </div>
       <p className="text-caption text-ink-muted">{meta}</p>
 
-      {view.error ? (
+      {!editing && editable && view.stale && (
+        // Reachable by cancelling out of the editor — the news must not disappear with it.
+        <StalePromptBanner
+          jobId={view.jobId}
+          canRefresh={Boolean(view.planDraftSegments ?? view.planDraft)}
+          onRefresh={() => setEditing('plan')}
+          onDiscard={() => setEditing('discard')}
+        />
+      )}
+
+      {editing ? (
+        <>
+          <LockedPins view={view} />
+          <PromptEditor
+            runId={run.id}
+            view={view}
+            openWith={editing === 'edit' ? null : editing}
+            onClose={() => setEditing(null)}
+          />
+        </>
+      ) : view.error ? (
         <p className="mt-2 text-dense text-status-failed">
           This job cannot be composed — the render would fail on the same message: {view.error}
         </p>
@@ -274,7 +337,71 @@ function JobPrompt({ run, view }: { run: RunDetail; view: PromptView }) {
           <Body testId={`prompt-body-${view.jobId}`}>{view.prompt}</Body>
         </>
       )}
+
+      {!editing && view.source === 'override' && (
+        <p className="mt-2 text-caption text-ink-muted">
+          {`Your edit is what ${view.jobId}'s next render sends.`}
+        </p>
+      )}
     </article>
+  );
+}
+
+/**
+ * Edits the plan no longer has a segment for (spec D22 *orphaned*). Collapsed, because it is news
+ * about text that will not be sent — but present, because the alternative is deleting a user's
+ * words on the agents' say-so and never mentioning it.
+ */
+function OrphanedEdits({ runId, orphaned }: { runId: string; orphaned: PromptsResponse['orphaned'] }) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const [open, setOpen] = useState(false);
+  const discard = useMutation({
+    mutationFn: (jobId: string) => api.deletePrompt(runId, jobId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['prompts', runId] }),
+    onError: (e: Error) => toast({ kind: 'error', text: e.message }),
+  });
+  const textOf = (o: PromptsResponse['orphaned'][number]) => o.prompt ?? (o.segments ?? []).join('\n\n');
+
+  return (
+    <div className="mt-4 rounded-r2 border border-line bg-stage p-3" data-testid="prompt-orphaned">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center gap-1.5 text-left text-caption text-ink-muted hover:text-ink-secondary"
+      >
+        <AlertTriangle size={12} className="text-status-warn" aria-hidden />
+        {`${orphaned.length} edited prompt${orphaned.length === 1 ? '' : 's'} ${orphaned.length === 1 ? 'has' : 'have'} no segment any more.`}
+      </button>
+      {open && orphaned.map((o) => (
+        <div key={o.jobId} className="mt-2.5">
+          <p className="text-dense text-ink-secondary">
+            {`${o.jobId} no longer exists in this plan — the agents re-cut the segments. Your text is kept, but nothing will send it.`}
+          </p>
+          <pre className="well mt-1.5 max-h-40 overflow-auto whitespace-pre-wrap rounded-r2 bg-surface-1 p-2 font-mono text-caption text-ink-secondary">
+            {textOf(o)}
+          </pre>
+          <div className="mt-1.5 flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                navigator.clipboard.writeText(textOf(o)).then(
+                  () => toast({ kind: 'success', text: `${o.jobId}'s text copied to your clipboard.` }),
+                  () => toast({ kind: 'error', text: 'Could not copy — your browser blocked clipboard access.' }),
+                );
+              }}
+            >
+              Copy the text
+            </Button>
+            <Button variant="destructive" size="sm" loading={discard.isPending} onClick={() => discard.mutate(o.jobId)}>
+              Discard it
+            </Button>
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -284,11 +411,13 @@ function SheetPanel({ run, target, onClose }: { run: RunDetail; target: PromptTa
   const [version, setVersion] = useState<string>('plan');
   const jobIds = target === null ? (run.spec?.kling.jobs ?? []).map((j) => j.job_id) : [target];
 
-  const planQ = useQuery({
-    queryKey: ['prompts', run.id, target ?? '*'],
-    queryFn: () => (target === null
-      ? api.prompts(run.id).then((r) => r.prompts)
-      : api.prompt(run.id, { job: target }).then((v) => [v])),
+  // Whole-plan and single-job reads are separate cache entries on purpose: the plan-wide one is
+  // shared with the clip strip (usePlanPrompts), and it is the only one that carries `orphaned`.
+  const allQ = usePlanPrompts(run.id, target === null);
+  const oneQ = useQuery({
+    queryKey: ['prompts', run.id, target],
+    queryFn: () => api.prompt(run.id, { job: target! }),
+    enabled: target !== null,
   });
   const takeQ = useQuery({
     queryKey: ['prompts', run.id, target ?? '*', version],
@@ -299,16 +428,24 @@ function SheetPanel({ run, target, onClose }: { run: RunDetail; target: PromptTa
     enabled: version !== 'plan',
   });
 
+  const planQ = target === null ? allQ : oneQ;
+  const planViews = useMemo<PromptView[]>(
+    () => (target === null ? allQ.data?.prompts ?? [] : oneQ.data ? [oneQ.data] : []),
+    [target, allQ.data, oneQ.data],
+  );
   const active = version === 'plan' ? planQ : takeQ;
-  const views = active.data ?? [];
+  const views = version === 'plan' ? planViews : takeQ.data ?? [];
+  // Edits whose job the agents have since re-cut away. Kept with their text, and said out loud —
+  // silently dropping words a user typed is the one thing this sheet must never do (spec D22).
+  const orphaned = target === null ? allQ.data?.orphaned ?? [] : [];
 
   // The picker offers exactly the takes the server says kept a sidecar for these jobs — no option
   // opens onto a 404. Zero takes ⇒ a static label, not a one-segment control (spec D19).
   const takes = useMemo(() => {
     const seen = new Set<string>();
-    for (const v of planQ.data ?? []) for (const t of v.availableTakes ?? []) seen.add(t);
+    for (const v of planViews) for (const t of v.availableTakes ?? []) seen.add(t);
     return [...seen].sort(byTakeNewestFirst);
-  }, [planQ.data]);
+  }, [planViews]);
 
   const endpointLabel = views[0]?.endpointLabel ?? 'the render provider';
 
@@ -352,6 +489,10 @@ function SheetPanel({ run, target, onClose }: { run: RunDetail; target: PromptTa
         </p>
       ) : (
         views.map((v) => <JobPrompt key={v.jobId} run={run} view={v} />)
+      )}
+
+      {version === 'plan' && orphaned.length > 0 && (
+        <OrphanedEdits runId={run.id} orphaned={orphaned} />
       )}
 
       {/* D22 read-only states: what this text IS, and what changing it would and would not do. */}

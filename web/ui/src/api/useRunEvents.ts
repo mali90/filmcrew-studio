@@ -44,6 +44,10 @@ export function useRunEvents(runId: string | undefined): RunLive & { connected: 
         qc.invalidateQueries({ queryKey: ['runs'] });
       }
       if (event.type === 'spec-block') qc.invalidateQueries({ queryKey: ['spec', runId] });
+      // A prompt edit changes the stored text, not the live render — the reducer rightly ignores it
+      // (see run-events.ts). The prompt sheet reads through React Query, so refetching is what makes
+      // a save land in every open tab instead of leaving one showing words we would no longer send.
+      if (event.type === 'prompt-override') qc.invalidateQueries({ queryKey: ['prompts', runId] });
     };
     return () => { cancelled = true; es.close(); sourceRef.current = null; setConnected(false); };
   }, [runId, qc]);

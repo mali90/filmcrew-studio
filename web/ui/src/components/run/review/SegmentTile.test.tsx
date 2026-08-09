@@ -88,6 +88,18 @@ describe('SegmentTile', () => {
     expect(screen.queryByLabelText('prompt edit is stale')).not.toBeInTheDocument();
   });
 
+  // Spec D8: an edit the plan has moved under is TWO facts — these words are yours, and the plan
+  // changed since. One mark for each, in that order, so neither can be read as the other.
+  it('a stale edit wears the warning beside the pen, not instead of it', () => {
+    renderTile({ promptEdited: true, promptStale: true });
+    const overlay = screen.getByTestId('tile-prompt-overlay');
+    const pen = screen.getByLabelText('prompt edited');
+    const warn = screen.getByLabelText('prompt edit is stale');
+    expect(overlay).toContainElement(pen);
+    expect(overlay).toContainElement(warn);
+    expect(pen.compareDocumentPosition(warn) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('the head of the cut wears no join chip — there is nothing before it to join to', () => {
     renderTile({ isHead: true, entry: { ...ENTRY, jobId: 'K1', index: 0, continuesFromPrev: false, from: null, reason: 'no-prev' } });
     expect(screen.queryByText('joined')).not.toBeInTheDocument();

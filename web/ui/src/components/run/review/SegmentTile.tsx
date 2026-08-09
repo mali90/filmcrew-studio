@@ -66,7 +66,7 @@ export function SegmentTile({
   entry: ContinuityEntry | null;
   clipState?: SegmentClipState;
   isHead?: boolean;         // the first clip of the cut: it has no join to describe
-  promptEdited?: boolean;   // wired by P4's prompt overrides; false until then
+  promptEdited?: boolean;   // this segment's prompt carries a saved edit (P4's overrides)
   promptStale?: boolean;
   capStart?: boolean;       // 3px cap on the thumb edge: this clip's start/end is pinned (spec D6)
   capEnd?: boolean;

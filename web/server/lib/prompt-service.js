@@ -223,6 +223,17 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
       hasSeamIn,
       hasSeamOut,
     });
+    // What the EDITOR opens on. Not `segments[].prompt` — that is the COMPOSED segment, lead ref and
+    // framing and camera included, and re-composing it would wrap the scaffolding a second time. The
+    // editable thing is the authored scene body, exactly what `applyOverride` swaps in, so saving an
+    // untouched draft re-composes to the same bytes.
+    const planBodies = (job.shots ?? []).map((id) =>
+      String((spec.shots ?? []).find((s) => s?.shot_id === id)?.kling?.content_prompt ?? ''));
+    // Mirrors applyOverride's own fallback: a blank or missing entry leaves that shot on the plan.
+    const draftSegments = planBodies.map((body, i) => {
+      const edit = Array.isArray(override?.segments) ? override.segments[i] : i === 0 ? override?.prompt : undefined;
+      return typeof edit === 'string' && edit.trim() ? edit : body;
+    });
     return {
       prompt,
       segments: segments.map((s, i) => ({
@@ -241,11 +252,15 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
       segmentMaxBytes: cap,
       pinBytes: pins.reduce((a, b) => a + b, 0),
       seam: { in: seam.in.mode, out: seam.out.mode },
+      draft: draftSegments.join('\n\n'),
+      draftSegments,
       // The agents' current text, offered ALONGSIDE an override (never instead of it) so the stale
       // banner's "Refresh from plan" has something to load and the reader can compare the two.
       ...(override ? {
         planPrompt: planned.segments.map((s) => s.prompt).join('\n\n'),
         planSegments: planned.segments.map((s) => s.prompt),
+        planDraft: planBodies.join('\n\n'),
+        planDraftSegments: planBodies,
       } : {}),
     };
   }
@@ -294,6 +309,15 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
     // The renderer's own call (seedance.js → applyOverride): the user's words with THIS render's
     // front matter and seam pins re-composed over them, then clamped. Preview === wire, still.
     const { prompt, shotPrompts } = override ? applyOverride(planned, override, settings) : planned;
+    // The editable body: the composed prompt with the SYSTEM front matter taken back off, which is
+    // precisely what `applyOverride` re-composes over. Saving it untouched yields the same bytes.
+    const planBody = planned.prompt.startsWith(planned.front)
+      ? planned.prompt.slice(planned.front.length).replace(/^\n{1,2}/, '')
+      : planned.prompt;
+    const edited = typeof override?.prompt === 'string'
+      ? override.prompt
+      : Array.isArray(override?.segments) ? override.segments.join('\n') : '';
+    const draft = edited.trim() ? edited : planBody;
 
     let castSeen = 0;
     const groupOfRef = [];
@@ -315,8 +339,15 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
       segmentMaxBytes: null,
       pinBytes: pinBytesOf('seedance', job, spec, settings, opts),
       seam: { in: seam.in.mode, out: seam.out.mode },
+      draft,
+      draftSegments: null,
       // The agents' current text, offered alongside an override — never in place of it.
-      ...(override ? { planPrompt: planned.prompt, planSegments: planned.shotPrompts } : {}),
+      ...(override ? {
+        planPrompt: planned.prompt,
+        planSegments: planned.shotPrompts,
+        planDraft: planBody,
+        planDraftSegments: null,
+      } : {}),
     };
   }
 

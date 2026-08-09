@@ -69,10 +69,13 @@ function Connector({ kind, size }: { kind: ConnectorKind; size: TileSize }) {
   );
 }
 
-export function ClipStrip({ run, jobs, takeCountFor, onSeek }: {
+export function ClipStrip({ run, jobs, takeCountFor, promptStateFor, onSeek }: {
   run: RunDetail;
   jobs: JobView[];
   takeCountFor: (jobId: string) => number;
+  /** Whether this segment's prompt carries an edit, and whether the plan has since moved under it
+   *  (spec D8). Absent — a strip rendered without the prompt read — simply wears no pen. */
+  promptStateFor?: (jobId: string) => { edited: boolean; stale: boolean };
   onSeek: (index: number) => void;
 }) {
   // The shared explanation line mirrors whichever tile is hovered or focused (spec D9) — one line
@@ -149,6 +152,8 @@ export function ClipStrip({ run, jobs, takeCountFor, onSeek }: {
                 takeCount={takeCountFor(job.jobId)}
                 entry={entryFor(job, i)}
                 clipState={states[i]}
+                promptEdited={promptStateFor?.(job.jobId).edited ?? false}
+                promptStale={promptStateFor?.(job.jobId).stale ?? false}
                 capStart={kinds[i] === 'linked'}
                 capEnd={i < jobs.length - 1 && kinds[i + 1] === 'linked'}
                 description={sentenceFor(i)}
