@@ -107,8 +107,10 @@ export async function clipsHaveNativeAudio(clipPaths) {
  * 'seamless' or 'concat', and the counts say how many joints were colour-matched.
  *
  * VIDEO: two paths. With `continuity` (one flag per joint saying whether that clip was rendered from
- * the previous clip's LAST frame) the seam-invisible stitcher runs first; without it — or if
- * anything about it fails — clips are hard-cut together with the concat filter, exactly as before.
+ * the previous clip's LAST frame — seamstitch.js readContinuity derives it per joint from the
+ * recorded seam lineage, so a mixed cut may well be [false, true]) the seam-invisible stitcher runs
+ * first; without it — or if anything about it fails — clips are hard-cut together with the concat
+ * filter, exactly as before.
  *
  * NATIVE mode (`nativeAudio: true`): per-clip audio is normalized and concatenated (clips with no
  * audio get matching silence), so Kling's generated audio survives 1:1. `bedTrack` (optional)
@@ -308,7 +310,11 @@ export async function assembleVideo(clipPaths, outPath, {
   // the previous one's last frame). Those joints get colour-matched, their duplicated boundary frame
   // dropped and a short crossfade; scene cuts stay cuts. Anything at all going wrong here falls back
   // to the concat below with one warning, so this can never cost a master.
-  if (continuity) {
+  //
+  // A map saying every joint is a cut is not a downgrade to warn about (or, under
+  // STITCH_SEAMLESS=force, to fail on): a hard cut IS the right master for it. Since the lineage is
+  // read per joint, that map is now the ordinary answer for a run that never chained at all.
+  if (continuity?.some(Boolean)) {
     const stitched = await trySeamlessStitch({ clipPaths, probes, continuity, canvas, targetFps, outPath });
     if (stitched) {
       try {

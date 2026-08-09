@@ -10,6 +10,17 @@
   *that* a seam frame was used said nothing about **which clip** it came from, so a cut mixing take
   2's first segment with take 1's second looked exactly like an intact chain — this is what the
   seam-invisible stitcher needs to stop falling back to a hard cut on mixed timelines.
+- **Seamless stitching now reads that lineage, joint by joint.** `readContinuity` no longer answers
+  "was this whole run chained?" from a single flag — it derives one verdict per joint from each
+  clip's own recorded seam, using the same source-clip identity rule as the review read model (a
+  unit test runs both implementations over the same fixtures and requires identical verdicts). A cut
+  with one re-rendered segment therefore colour-matches and crossfades the joints that survived and
+  hard-cuts only the one the re-render broke, where before the mixed timeline lost the seamless
+  stitch entirely. Runs made before the lineage existed still read their run-level `chained` flag
+  exactly as they did, an unknown run is still unknown (never guessed as "all cuts"), and
+  `STITCH_ASSUME_CONTINUOUS=1` still forces all-true. A timeline whose every joint is a genuine cut
+  is now assembled as a plain concat without a "seamless stitch skipped" warning — nothing was
+  downgraded — and `STITCH_SEAMLESS=force` no longer fails on it. Local ffmpeg only: free.
 - **The review read model answers, per segment, whether it really continues from the one before
   it.** `GET /api/runs/:id` (and the library list) now carry `continuity[]`, one entry per clip in
   the cut, computed by a pure rule: a segment continues from its predecessor **iff the clip its

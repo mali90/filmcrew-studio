@@ -143,6 +143,8 @@ test('framing is judged by DISPLAY aspect, so non-square pixels are not mistaken
   assert.match(no.reason, /clip 2 is framed 32\.8% off/);
 });
 
+// The LEGACY path only — a run whose jobs carry no seam records. Per-joint derivation from the
+// recorded lineage lives in seamstitch-continuity.test.js.
 test('readContinuity: only a run that RECORDED chaining gets a continuity map', () => {
   const cfg = { ...CFG, assumeContinuous: false };
   assert.deepEqual(readContinuity({ chained: true }, 3, cfg), [true, true]);

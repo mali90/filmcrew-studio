@@ -381,7 +381,10 @@ function providerOf(backend) {
  */
 export async function finishRender(spec, results, { runDir, upscale = false, backend, outName, chained = false, continuity } = {}) {
   const jobs = spec.kling.jobs;
-  let clipPaths = jobs.map((j) => results.find((r) => r.jobId === j.job_id)?.clip).filter(Boolean);
+  // Ordered by the SPEC, never by however `results` arrived: the clips are stitched in job order, so
+  // the seam lineage has to be read in that same order or joint j would describe a different pair.
+  const clipResults = jobs.map((j) => results.find((r) => r.jobId === j.job_id)).filter((r) => r?.clip);
+  let clipPaths = clipResults.map((r) => r.clip);
   if (!clipPaths.length) {
     // Name WHY each job failed (e.g. a content-policy flag) instead of a bare "nothing to assemble".
     const failed = results.filter((r) => r.error);
@@ -423,8 +426,10 @@ export async function finishRender(spec, results, { runDir, upscale = false, bac
   // into the shot prompt, voiced by the character's minted voice_id (Kling elements) or lip-synced
   // to its mint-time ref clip (Seedance @Audio refs) — so no separate post-dub pass is needed.
   // Seam lineage → a seamless stitch when the clips really do chain (assembleVideo falls back to a
-  // hard-cut concat by itself if they don't, or if the stitcher is unavailable).
-  const seams = continuity !== undefined ? continuity : readContinuity({ chained }, clipPaths.length);
+  // hard-cut concat by itself if they don't, or if the stitcher is unavailable). Read from each
+  // clip's OWN recorded seam, so a cut that mixes takes stitches the joints that survived and cuts
+  // the one the re-render broke; the run-level `chained` flag is only the pre-lineage fallback.
+  const seams = continuity !== undefined ? continuity : readContinuity({ chained, jobs: clipResults }, clipPaths.length);
   const master = uniqueOutPath(outDir, name); // repeat renders of one title get -2, -3, … (never overwrite)
   const stitch = await assembleVideo(clipPaths, master, { nativeAudio, aspect: spec.kling?.aspect_ratio ?? spec.project?.aspect_ratio ?? null, continuity: seams, canvasScale });
 

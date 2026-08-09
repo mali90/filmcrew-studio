@@ -1,8 +1,12 @@
 // Node wrapper around tools/seamstitch — the seam-invisible stitcher for CHAINED clips.
 //
-// Nothing calls this yet: assemble.js still hard-cuts every seam. This module is the whole Node-side
-// surface the wiring will need — is the tool usable here (seamstitchAvailable), should we use it for
-// THIS set of clips (planSeamstitch, pure), and run it (runSeamstitch).
+// The whole Node-side surface assemble.js needs — is the tool usable here (seamstitchAvailable),
+// should we use it for THIS set of clips (readContinuity + planSeamstitch, both pure), and run it
+// (runSeamstitch).
+//
+// readContinuity answers the question per JOINT, from the seam lineage the renderers record
+// (schema:2), so a cut that mixes takes stitches the joints that really are continuations and
+// hard-cuts the one that is not. See web/server/lib/lineage.js for the same rule on the UI side.
 //
 // The Python package uses relative imports, so it can only be started as `-m seamstitch` with
 // PYTHONPATH pointing at tools/ — see tools/seamstitch/PROVENANCE.md.
@@ -60,23 +64,67 @@ function pythonPath(root) {
   return [toolsDir(root), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter);
 }
 
+/** A non-empty string, or null — ids and paths arriving from JSON may be anything. */
+const str = (v) => (typeof v === 'string' && v.length ? v : null);
+
+/** Seam modes that pinned NOTHING: the clip opened fresh, so the joint before it is a real cut.
+ *  'unsupported' is the provider having rejected the anchor we sent — no frame was shared. */
+const UNPINNED_SEAM_MODES = new Set(['none', 'unsupported']);
+
+/**
+ * Did `next` really open on `prev`'s closing frame? Clip identity is the authoritative test, the same
+ * rule as web/server/lib/lineage.js: a seam recorded against a clip that is no longer in this cut is
+ * exactly the false continuation claim the check exists to catch (run b1nx — K1 re-rendered into a
+ * new take, the cut still using the old take's K2, which opens on a frame nothing here contains).
+ */
+function jointChained(prev, next) {
+  const seam = next?.seamIn;
+  if (!seam || typeof seam !== 'object') return false;
+  if (UNPINNED_SEAM_MODES.has(str(seam.mode) ?? 'none')) return false;
+  const source = str(seam.from?.clip);
+  const current = str(prev?.clip);
+  return Boolean(source && current && source === current);
+}
+
 /**
  * Which joints of a finished run are CHAINED, from what the run recorded. Returns one flag per joint,
  * or null when the run cannot say — null is "unknown", and planSeamstitch declines on it rather than
  * guessing (guessing wrong drops a real frame at a scene cut).
  *
- * TODAY a render is chained all-or-nothing: renderSpec seeds every job after the first with the
- * previous clip's last frame, and records that as `chained` in render.json. Per-JOINT lineage — which
- * seams actually got their frame, which clips were re-rendered since — is upcoming work; when it
- * lands this reads it and mixed timelines start stitching correctly on their own.
+ * `render.jobs[]` is the cut in clip order, each entry the renderer's own record (schema:2) of the
+ * seam it opened on. When those seams are present they are the answer, PER JOINT: joint j is chained
+ * iff clip j+1 was pinned to a boundary frame at all AND the clip that frame came off is the clip
+ * sitting at position j right now. That is what lets a mixed timeline — one segment re-rendered,
+ * the rest untouched — stitch its intact joints and hard-cut the broken one, where the older
+ * all-or-nothing `chained` flag could only claim everything or nothing.
+ *
+ * Runs made before the sidecar existed carry no per-job seams. For them the run-level `chained` flag
+ * is the only record there is, and it still means exactly what it always did: renderSpec seeded every
+ * job after the first with the previous clip's last frame, in one pass, so every joint is a chain.
  *
  * `STITCH_ASSUME_CONTINUOUS=1` forces all-true. It is a test/debug knob for driving the stitcher over
  * clips whose lineage nothing recorded — never a default, because it asserts a fact about the footage.
+ *
+ * @param render     `{ chained?:boolean, jobs?:{clip?:string, seamIn?:object}[] }` — render.json, or
+ *                   the in-flight equivalent finishRender is about to write
+ * @param clipCount  how many clips are actually being stitched
+ * @returns one boolean per joint (length `clipCount - 1`), or null for "unknown"
  */
 export function readContinuity(render, clipCount, cfg = config.stitch) {
   const joints = Math.max(0, (clipCount ?? 0) - 1);
   if (!joints) return null;
   if (cfg.assumeContinuous) return Array(joints).fill(true);
+
+  // Only the clip-BEARING jobs, in the order they were handed over: a job that errored contributes
+  // no clip and therefore no joint, so including it would shift every verdict by one.
+  const jobs = (Array.isArray(render?.jobs) ? render.jobs : []).filter((j) => str(j?.clip));
+  const recorded = jobs.some((j) => j?.seamIn && typeof j.seamIn === 'object');
+  // The count guard is not paranoia: if the job list and the clip list disagree we cannot say WHICH
+  // pair each joint describes, and a misaligned answer is worse than no answer.
+  if (recorded && jobs.length === clipCount) {
+    return Array.from({ length: joints }, (_, j) => jointChained(jobs[j], jobs[j + 1]));
+  }
+
   return render?.chained === true ? Array(joints).fill(true) : null;
 }
 
