@@ -222,6 +222,25 @@ export async function generateSegmind(args, { slug = SG.seedance25Slug, destDir,
 }
 
 /**
+ * Upscale one already-rendered clip with Segmind's Topaz (`topaz-video-upscale`) — the Segmind
+ * sibling of fal.js's `topazUpscale`, and the last piece of a Segmind-only install: render here,
+ * upscale here, no fal key anywhere. `args` is the model's own argument object ({ video,
+ * target_resolution, target_fps }), built by upscale.js's pure `segmindTopazArgs` so the
+ * frame-rate pin stays one testable function rather than a value assembled in the transport.
+ *
+ * A named wrapper rather than a bare generateSegmind call, for two reasons that both cost money:
+ * generateSegmind's default slug is the RENDER model (upscaling through it would queue a wrong,
+ * billed job), and Topaz on a long clip outlasts the render timeout.
+ * @returns {Promise<string>} the local path of the single upscaled mp4
+ */
+export async function topazUpscaleSegmind(args, { destDir, slug = SG.topazSlug, timeoutMs, onMeta } = {}) {
+  const outs = await generateSegmind(args, { slug, destDir, timeoutMs: timeoutMs ?? 1800000, onMeta });
+  const mp4 = outs.find((p) => /\.mp4$/i.test(p)) ?? outs[0];
+  if (!mp4) throw new Error(`Segmind ${slug}: the upscale produced no output file.`);
+  return mp4;
+}
+
+/**
  * Resolve a local file to a value Segmind accepts in a url field.
  *   'data-uri'    — inline base64. No other service is involved, which is what makes a Segmind-only
  *                   install (no FAL_KEY anywhere) possible.
@@ -267,5 +286,6 @@ export async function validateSegmind(apiKey, { slug = SG.topazSlug } = {}) {
 }
 
 export default {
-  segmindHeaders, submitSegmind, awaitSegmind, runSegmind, generateSegmind, segmindAssetUrl, validateSegmind,
+  segmindHeaders, submitSegmind, awaitSegmind, runSegmind, generateSegmind, topazUpscaleSegmind,
+  segmindAssetUrl, validateSegmind,
 };

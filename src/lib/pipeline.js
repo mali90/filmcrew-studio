@@ -219,6 +219,12 @@ export async function renderJob(spec, jobId, { runDir, backend, take = 0, feedba
   return { ...r, backend: be, staleDownstream };
 }
 
+/** The provider a run rendered on ('fal' | 'segmind'), or null when the backend is unrecorded — an
+ *  older manifest assembled long after the fact still upscales, it just can't follow its own run. */
+function providerOf(backend) {
+  try { return backend ? capsFor(backend).provider : null; } catch { return null; }
+}
+
 /**
  * Assembly tail shared by a full render and the `assemble` CLI: stitch the rendered job clips in
  * spec (job) order → optional Topaz upscale → cover frame, writing out/<project>.mp4. Re-renders
@@ -247,8 +253,12 @@ export async function finishRender(spec, results, { runDir, upscale = false, bac
   // clip) must be lifted first — after assembly the master is nominally full-size and Topaz would
   // no-op. Clips already ≥1080p come back unchanged, so this costs nothing on a 1080p render.
   if (upscale || config.upscale.enabled) {
+    // …and it runs on the provider this run RENDERED on (UPSCALE_PROVIDER=auto): a Segmind-only
+    // install has no fal key to fall back on, and a fal run should not round-trip its master
+    // through a second vendor. An explicit UPSCALE_PROVIDER still wins inside upscaleVideoTopaz.
+    const runProvider = providerOf(backend);
     const lifted = [];
-    for (const clip of clipPaths) lifted.push(await upscaleVideoTopaz({ inPath: clip, outDir: path.dirname(clip) }));
+    for (const clip of clipPaths) lifted.push(await upscaleVideoTopaz({ inPath: clip, outDir: path.dirname(clip), runProvider }));
     clipPaths = lifted;
   }
 

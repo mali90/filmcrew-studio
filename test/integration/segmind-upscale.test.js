@@ -122,6 +122,23 @@ test('a clip already at/above the target is skipped — no Topaz job, no charge'
     } finally { config.upscale.targetResolution = prev; cleanup(); }
   });
 
+test('Topaz dropping the audio track is repaired — the SOURCE audio is re-muxed onto the upscale',
+  { skip: FF ? false : 'ffmpeg not installed' }, async () => {
+    const { dir, cleanup } = mkTmp('sgup-audio');
+    try {
+      const { upscaleVideoSegmind } = await import('../../src/lib/upscale.js');
+      const { makeClip } = await import('../helpers/ffmpeg-clips.js');
+      const src = path.join(dir, 'with-audio.mp4');
+      const silent = path.join(dir, 'silent.mp4');
+      await makeClip({ out: src, seconds: 1, size: '128x128', fps: 15 });                    // 440Hz tone
+      await makeClip({ out: silent, seconds: 1, size: '128x128', fps: 15, withAudio: false }); // what Topaz returns
+      sg.opts.upscaledBytes = fs.readFileSync(silent);
+      const out = await upscaleVideoSegmind({ inPath: src, outDir: dir });
+      assert.match(out, /upscaled_with_audio\.mp4$/, 'the silent Topaz output was re-muxed, not shipped mute');
+      assert.ok(fs.existsSync(out));
+    } finally { delete sg.opts.upscaledBytes; cleanup(); }
+  });
+
 test('a Segmind Topaz failure surfaces the provider detail without re-POSTing the (paid) job',
   { skip: FF ? false : 'ffmpeg not installed' }, async () => {
     const { dir, cleanup } = mkTmp('sgup-fail');

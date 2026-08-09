@@ -245,9 +245,19 @@ const config = {
     timeoutMs: numEnv('STITCH_TIMEOUT_MS', 20 * 60 * 1000),
   },
 
-  // ── Optional fal Topaz upscale of the final master (endpoint/model/factor live under `fal` above) ──
+  // ── Optional Topaz upscale of the rendered clips. It runs on EITHER provider: fal's factor-based
+  //    endpoint (endpoint/model/factor live under `fal` above) or Segmind's `topaz-video-upscale`
+  //    slug (under `segmind`), which takes a target resolution + fps instead of a factor. ──
   upscale: {
     enabled: boolEnv('UPSCALE_ENABLED', false), // auto-lift the master toward 1080p when it's smaller
+    // 'auto' (default) upscales wherever the run RENDERED — so a master never round-trips through a
+    // second vendor — and falls back to whichever provider actually has a key (that fallback is what
+    // lets a Segmind-only install, with no FAL_KEY anywhere, still finish a 1080p film).
+    provider: process.env.UPSCALE_PROVIDER || 'auto', // 'auto' | 'fal' | 'segmind'
+    // Segmind's target_resolution enum ('720p' | '1080p' | '4k'). 4k is 4× the pixels and 4× the
+    // bill, so it is only ever reached when someone sets it here on purpose — an auto-derived plan
+    // stops at 1080p. (fal's Topaz has no resolution input; its factor comes from the source size.)
+    targetResolution: process.env.UPSCALE_TARGET_RESOLUTION || '1080p',
   },
 
   // ── Working paths (env-overridable so wrappers/tests can isolate a workspace) ──

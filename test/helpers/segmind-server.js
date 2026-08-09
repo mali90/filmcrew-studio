@@ -32,6 +32,8 @@ const readBody = (req) => new Promise((r) => { let b = ''; req.on('data', (c) =>
  *     contentPolicy     — the status poll answers a FAILED blob carrying content_policy_violation
  *     expired           — status/result answer 404 (the ~1h record expiry)
  *     cost / remainingCredits — the terminal body's metrics
+ *     upscaledBytes     — the bytes the Topaz download serves (default: videoBytes), so a test can
+ *                         hand back an audio-less clip and prove the source audio is re-muxed on
  * @returns {Promise<{baseUrl:string, requests:object[], queued:object[], opts:object, close:()=>Promise<void>}>}
  */
 export async function startSegmindServer({ videoBytes = Buffer.from('FAKE-MP4'), opts = {} } = {}) {
@@ -49,7 +51,13 @@ export async function startSegmindServer({ videoBytes = Buffer.from('FAKE-MP4'),
     const json = (c, o) => { res.writeHead(c, { 'content-type': 'application/json' }); res.end(JSON.stringify(o)); };
 
     // The public CDN: no auth, ever. Checked FIRST so an authFail run can still download.
-    if (u.pathname.startsWith('/dl/')) { res.writeHead(200, { 'content-type': 'video/mp4' }); return res.end(videoBytes); }
+    // `opts.upscaledBytes` answers the Topaz download with a DIFFERENT file — that is how a test
+    // reproduces Topaz handing back a clip whose audio track it dropped.
+    if (u.pathname.startsWith('/dl/')) {
+      const bytes = (u.pathname.endsWith('upscaled.mp4') && opts.upscaledBytes) || videoBytes;
+      res.writeHead(200, { 'content-type': 'video/mp4' });
+      return res.end(bytes);
+    }
 
     if (opts.authFail || !apiKey) return json(401, { detail: 'unauthorized' });
 
@@ -87,9 +95,14 @@ export async function startSegmindServer({ videoBytes = Buffer.from('FAKE-MP4'),
     }
 
     // ── result ────────────────────────────────────────────────────────────
+    // Topaz (`topaz-video-upscale`) rides the SAME queue shape as a render — the only difference is
+    // the file it hands back, which is named apart from the render's so an upscale landing in the
+    // job's own directory can never overwrite the take it was made from.
     if (req.method === 'GET' && /^\/v2\/requests\/[^/]+$/.test(u.pathname)) {
       if (opts.expired) return json(404, { detail: 'Request not found' });
-      return json(200, { video: { url: `${base}/dl/out.mp4` }, seed: 70000 });
+      const job = queued.find((q) => q.id === u.pathname.split('/').pop());
+      const name = /topaz/i.test(job?.slug ?? '') ? 'upscaled.mp4' : 'out.mp4';
+      return json(200, { video: { url: `${base}/dl/${name}` }, seed: 70000 });
     }
 
     res.writeHead(404); res.end();
