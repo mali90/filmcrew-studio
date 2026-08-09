@@ -11,7 +11,7 @@
 // each model states its own storyboard/second/reference window, so a spec is judged against the
 // model that will actually render it. The constants below survive only as SHARED FALLBACKS for the
 // caps a model leaves undeclared (Seedance names no segment caps, and the check must not vanish).
-import { ALL_BACKENDS, BACKEND_IDS, capsFor, demotesOpeningFrame } from './render-models.js';
+import { ALL_BACKENDS, BACKEND_IDS, capsFor } from './render-models.js';
 
 /**
  * The SUPERSET of aspect ratios any registered model can render — a shape check for
@@ -106,7 +106,7 @@ function validateAudio(spec, P) {
   }
 }
 
-function validateJobs(spec, P, elementIds, caps, enforceModelAspects = false, chainFrames = true) {
+function validateJobs(spec, P, elementIds, caps, enforceModelAspects = false) {
   // Every number below is the RENDERING MODEL's, with the shared fallback used when the registry
   // entry stays silent about a cap (never "no cap declared" → "no check").
   const maxSegments = caps.maxSegments ?? MAX_STORYBOARDS;
@@ -159,35 +159,32 @@ function validateJobs(spec, P, elementIds, caps, enforceModelAspects = false, ch
     // Kling, so "under Seedance 2.0's 4s/job minimum" tells the planner which window it missed.
     if (total < minSeconds) P.push(`${at}: total ${total}s is under ${caps.label}'s ${minSeconds}s/job minimum (merge a shot into this job)`);
     const refs = job.elements ?? [];
-    // The opening frame — an authored first_frame, or the seam frame every job after the first
-    // receives on a chained multi-job render — rides one of the SAME image slots on models that
-    // demote it to a reference (fal Seedance has no native slot; Segmind's native slot excludes
-    // refs). Validating against the full cap would pass a max-ref job here and then silently drop
-    // one paid identity reference at render time, so the slot is reserved up front.
+    // The CAST gets the whole image budget. A boundary frame that has to travel as a reference
+    // (fal Seedance has no native slot; Segmind's excludes refs) is a soft pin, and a soft pin is
+    // DROPPABLE — SEAM_PRIORITY gives up the closing pin, then the opening one, before it gives up
+    // a single identity reference. Reserving a slot up front would reject a legal max-cast job to
+    // protect a hint the renderer is willing to lose.
+    // The pre-flight signal that a pin WILL be dropped did not disappear with the old reservation
+    // rule, it moved to where the user can act on it for free: `pinStrengths()` runs the same
+    // SEAM_PRIORITY arithmetic, and the prompt sheet's seam line plus the re-render dialog's
+    // plain-words sentence both report the pin as dropped BEFORE the paid button is pressed.
     // An omitted/empty job.elements INHERITS the whole roster at render time (characterGroups()
     // expands it to every kling.elements entry), so the budget judges what will actually be sent —
     // a literal zero here with a nine-entry roster is nine paid uploads, not none.
     const effRefs = refs.length || elementIds.size;
-    const holdsOpeningFrame = caps.family === 'seedance' && (nonEmpty(job.first_frame) || (j > 0 && chainFrames));
-    const refBudget = maxRefs - (holdsOpeningFrame && demotesOpeningFrame(caps) ? 1 : 0);
-    if (effRefs > refBudget) {
+    if (effRefs > maxRefs) {
       const what = refs.length ? `${effRefs} elements` : `${effRefs} roster refs (job.elements omitted — the whole kling.elements roster rides along)`;
-      P.push(refBudget < maxRefs
-        ? `${at}: ${what} exceeds the ${refBudget}-reference budget (${caps.label} caps at ${maxRefs} images and 1 slot is reserved for this job's opening/seam frame)`
-        : `${at}: ${what} exceeds the ${maxRefs}-reference cap`);
+      P.push(`${at}: ${what} exceeds the ${maxRefs}-reference cap`);
     }
     refs.forEach((id) => { if (!elementIds.has(id)) P.push(`${at}.elements: "${id}" not in kling.elements`); });
     if (job.first_frame !== undefined && !nonEmpty(job.first_frame)) P.push(`${at}.first_frame must be a non-empty path when present`);
     if (job.last_frame !== undefined && !nonEmpty(job.last_frame)) P.push(`${at}.last_frame must be a non-empty path when present`);
-    if (job.last_frame && !job.first_frame) P.push(`${at}: last_frame requires first_frame (the Kling first/last node needs a first frame)`);
-    // Where the native first/last mode EXCLUDES reference images (Segmind), an authored last_frame
-    // can only be honored on a ref-less job — the renderer refuses the mix only after every upload
-    // completed, so reject it here where the planner can still repair the spec for free. (An
-    // omitted/empty job.elements inherits the whole roster, so count what will actually be sent.)
-    const mixRefs = (job.elements ?? []).length || elementIds.size;
-    if (nonEmpty(job.last_frame) && caps.firstFrameExcludesRefs && mixRefs > 0) {
-      P.push(`${at}: last_frame needs ${caps.label}'s native first/last mode, and this job's ${mixRefs} reference image(s) occupy it — drop last_frame or the job's references`);
-    }
+    // A closing frame no longer implies an opening one: each end is decided independently
+    // (chooseSeamMode), and a segment that only has to LAND somewhere is exactly what the
+    // frame-conditioned re-render asks for.
+    // A last_frame on a model whose native first/last mode EXCLUDES reference images (Segmind) is no
+    // longer a spec error: with a cast present the cast wins and the closing frame becomes a soft
+    // pin (chooseSeamMode), which is a weaker promise but a delivered clip rather than a rejection.
   });
 }
 
@@ -222,13 +219,13 @@ const SUPERSET_CAPS = (() => {
   };
 })();
 
-export function validateSpec(spec, { upTo = 7, backend, chainFrames = true } = {}) {
+export function validateSpec(spec, { upTo = 7, backend } = {}) {
   // Caps precedence: an EXPLICIT backend (every render/engine path passes the resolved one, and
   // only it turns on the model-aspect gate) > the spec's own persisted render_backend (a stored
   // 9-ref Seedance spec must not be judged by Kling's 7 just because a reader passed no options) >
   // the true structural SUPERSET (a spec naming no backend must round-trip anything any registered
-  // model accepts). `chainFrames` mirrors config.kling.chainFrames (callers thread it; this module
-  // stays config-free): with chaining OFF, later jobs receive no seam frame, so no slot is reserved.
+  // model accepts). Seam chaining no longer enters into it: a boundary frame that has to ride as a
+  // reference is a droppable soft pin, so it reserves nothing from the cast's image budget.
   let enforceModelAspects = backend !== undefined;
   let caps = SUPERSET_CAPS;
   if (backend !== undefined) caps = capsFor(backend);
@@ -269,7 +266,7 @@ export function validateSpec(spec, { upTo = 7, backend, chainFrames = true } = {
   if (upTo >= 4) validateElements(spec, P, elementIds);
   else if (upTo >= 6) validateElements(spec, P, elementIds); // jobs cross-ref needs element ids
   if (upTo >= 5) validateAudio(spec, P);
-  if (upTo >= 6) validateJobs(spec, P, elementIds, caps, enforceModelAspects, chainFrames);
+  if (upTo >= 6) validateJobs(spec, P, elementIds, caps, enforceModelAspects);
   if (upTo >= 7) validateQc(spec.qc, P);
 
   return { ok: P.length === 0, errors: P };

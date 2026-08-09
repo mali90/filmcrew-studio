@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { server, http, HttpResponse } from '../../../test/msw';
-import { makeRun } from '../../../test/fixtures';
+import { makeRun, promptView } from '../../../test/fixtures';
 import { renderReview, markPaidConfirmed, clearPaidState } from './test-helpers';
 import { ReviewStage } from './ReviewStage';
 
@@ -102,10 +102,12 @@ describe('ReviewStage', () => {
       { id: 't4', mode: 'job', jobId: 'K2', revision: 'r1', createdAt: '2026-07-04T12:00:00.000Z' },
     ];
     renderReview(<Stage run={run} />);
+    // The 9:16 thumb is 47px wide, so the takes pill sits in the caption row in its compact form
+    // and carries the words on its tooltip (spec D8).
     // K2 has THREE clips on disk: the full render's + two re-renders (it once said "2 takes")
-    expect(screen.getByText('3 takes')).toBeInTheDocument();
+    expect(screen.getByText('×3')).toHaveAttribute('title', '3 takes');
     // K1 has exactly one (the full render) — singular, quiet
-    expect(screen.getByText('1 take')).toBeInTheDocument();
+    expect(screen.getByText('×1')).toHaveAttribute('title', '1 take');
   });
 
   it('a cascade take counts for the downstream jobs it re-rendered too', () => {
@@ -116,6 +118,62 @@ describe('ReviewStage', () => {
     ];
     renderReview(<Stage run={run} />);
     // K1 and K2 both got fresh clips from the cascade → 2 each
-    expect(screen.getAllByText('2 takes')).toHaveLength(2);
+    expect(screen.getAllByText('×2')).toHaveLength(2);
+  });
+
+  // Spec D8/D22: an edited prompt is a fact about a segment, so it is visible ON the segment —
+  // not only inside the sheet a user would have to open to find it.
+  it('marks the tile of a segment whose prompt carries an edit', async () => {
+    server.use(http.get('/api/runs/:id/prompts', ({ params }) => HttpResponse.json({
+      runId: String(params.id),
+      backend: 'kling-o3@fal',
+      jobs: ['K1', 'K2'],
+      prompts: [promptView('K1'), promptView('K2', { source: 'override', stale: true })],
+      orphaned: [],
+    })));
+    renderReview(<Stage run={makeRun('review')} />);
+
+    const k2 = screen.getByTestId('segment-tile-K2');
+    expect(await within(k2).findByLabelText('prompt edited')).toBeInTheDocument();
+    expect(within(k2).getByLabelText('prompt edit is stale')).toBeInTheDocument();
+    // K1 is on the agents' words, so it wears nothing.
+    expect(within(screen.getByTestId('segment-tile-K1')).queryByLabelText('prompt edited')).not.toBeInTheDocument();
+  });
+
+  // Spec D25 — a reopened run looks exactly like one that never left review, so the banner slot has
+  // to say why the user is back and what is still on disk.
+  it('a reopened run carries the re-entry notice in the banner slot, and never toasts it', () => {
+    const run = makeRun('review');
+    run.manifest!.approved = { cut: 'c1', final: '/abs/out/ocean-final.mp4', upscaled: false, at: '2026-07-04T10:05:00.000Z' };
+    run.manifest!.reopenedAt = '2026-07-04T11:00:00.000Z';
+
+    const { container } = renderReview(<Stage run={run} />);
+
+    const notice = screen.getByTestId('reopened-notice');
+    expect(notice).toHaveClass('border', 'border-line', 'bg-surface-1');
+    const text = notice.textContent ?? '';
+    expect(text).toMatch(/^Reopened for changes\./);
+    expect(text).toMatch(/ocean-final\.mp4 is still on disk/);
+    expect(text).toMatch(/approving again writes a new final and keeps the old one/);
+
+    // the notice sits above the video, in the slot the probe banner uses — not over it
+    expect(notice.compareDocumentPosition(screen.getByTestId('master-video')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    // Don't #11: this is standing state, not an event — a toast would expire exactly when needed
+    expect(document.querySelector('[aria-live="polite"]')?.childElementCount ?? 0).toBe(0);
+    expect(container.textContent).not.toMatch(/free/i);
+  });
+
+  it('a run that was delivered again since the reopen shows no notice', () => {
+    const run = makeRun('review');
+    run.manifest!.reopenedAt = '2026-07-04T11:00:00.000Z';
+    run.manifest!.approved = { cut: 'c1', final: '/abs/out/ocean-final.mp4', upscaled: false, at: '2026-07-04T12:00:00.000Z' };
+    renderReview(<Stage run={run} />);
+    expect(screen.queryByTestId('reopened-notice')).not.toBeInTheDocument();
+  });
+
+  it('a run that was never delivered shows no notice', () => {
+    renderReview(<Stage run={makeRun('review')} />);
+    expect(screen.queryByTestId('reopened-notice')).not.toBeInTheDocument();
   });
 });

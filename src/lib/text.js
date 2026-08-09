@@ -1,0 +1,37 @@
+// Pure text helpers shared by the prompt composers and the renderers.
+//
+// They live apart from util.js on purpose: util.js pulls in fs/logger (and therefore the
+// environment), while src/lib/prompt-compose.js must stay importable from web/server's
+// config-free static graph. Same functions, one implementation — util.js re-exports them so every
+// existing importer keeps its path.
+
+export function slug(s) {
+  return String(s)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+/**
+ * Clean a SPOKEN line so the render model voices it intelligibly: typographic punctuation → ASCII,
+ * embedded double-quotes neutralized (they'd break the `"…"` wrapper both render prompts use),
+ * emoji/markdown/control chars stripped, whitespace collapsed. A speech-hygiene pass shared by both
+ * backends (kling.js, seedance.js) so em-dashes / smart-quotes / emoji never reach fal (they garble
+ * the TTS and inflate the UTF-8 byte budget). NOT a security filter.
+ */
+export function sanitizeSpeech(text) {
+  if (!text) return '';
+  return String(text)
+    .normalize('NFC')
+    .replace(/[‒-―−]+/g, ', ')                  // em/en/figure/bar/minus dashes → a spoken pause
+    .replace(/[‘’‚‛]/g, "'")              // curly single quotes → apostrophe
+    .replace(/[“”„‟«»"]/g, "'") // ALL double quotes (curly or straight) → single, so the "…" wrapper can't break
+    .replace(/…/g, '...')                                 // ellipsis → three dots
+    .replace(/ /g, ' ')                                   // non-breaking space → space
+    .replace(/\p{Extended_Pictographic}/gu, '')               // emoji / pictographs
+    .replace(/[*_`~#]/g, '')                                   // markdown formatting markers
+    .replace(/[\x00-\x1f\x7f]/g, ' ')                   // control chars
+    .replace(/\s+/g, ' ')                                      // collapse whitespace
+    .replace(/\s+([,.!?;:])/g, '$1')                          // no space before punctuation
+    .trim();
+}

@@ -31,6 +31,20 @@ export async function startFalServer({ videoBytes = Buffer.from('FAKE-MP4'), opt
     // generic queue submit (any model endpoint)
     if (req.method === 'POST') {
       if (opts.validationFail) return json(400, { detail: 'invalid: prompt required' });
+      // A DETERMINISTIC validation rejection that NAMES one input field — how fal reports an
+      // argument a given model does not take (e.g. Kling's unverified `end_image_url`). `times`
+      // counts down, so a test can prove the client retries EXACTLY once and then succeeds.
+      const vn = opts.validationFailNaming;
+      if (vn && (vn.times ?? 1) > 0) {
+        vn.times = (vn.times ?? 1) - 1;
+        return json(422, {
+          detail: [{
+            loc: ['body', vn.field],
+            msg: vn.msg ?? `The parameter \`${vn.field}\` specified in the request is not valid: this model does not accept it.`,
+            type: 'value_error',
+          }],
+        });
+      }
       return json(200, { request_id: 'req_1', status_url: `${base}/st/req_1`, response_url: `${base}/rs/video` });
     }
     if (u.pathname.startsWith('/st/')) {
@@ -49,7 +63,19 @@ export async function startFalServer({ videoBytes = Buffer.from('FAKE-MP4'), opt
       if (opts.fetchTimeoutOnce && videoHits++ === 0) {
         return json(422, { detail: [{ loc: ['body'], msg: 'The parameter `content[1].image_url` specified in the request is not valid: timeout while fetching resource. Request id: test', type: 'invalid_request' }] });
       }
-      return json(200, { video: { url: `${base}/dl/out.mp4` } });
+      // `return_last_frame` models that hand back the generator's OWN closing still — the exact
+      // pixels the next segment should open on, rather than an ffmpeg re-encode of them.
+      // `opts.omitLastFrame` reproduces the provider quietly not sending it (→ ffmpeg fallback).
+      // The URL is CONTENT-HASHED, exactly as fal's real CDN serves it: a renderer that found the
+      // frame by the url's basename would pass against a friendly name and fail in production, so
+      // the transport has to be the thing that lands it at <job>/last_frame.png.
+      const body200 = { video: { url: `${base}/dl/out.mp4` } };
+      if (opts.returnLastFrame && !opts.omitLastFrame) body200.last_frame = { url: `${base}/dl/9f2c1ab7e4.png` };
+      return json(200, body200);
+    }
+    if (u.pathname === '/dl/9f2c1ab7e4.png') {
+      res.writeHead(200, { 'content-type': 'image/png' });
+      return res.end(opts.lastFrameBytes ?? Buffer.from('PROVIDER-PNG'));
     }
     if (u.pathname.startsWith('/dl/')) { res.writeHead(200, { 'content-type': 'video/mp4' }); return res.end(videoBytes); }
     res.writeHead(404); res.end();

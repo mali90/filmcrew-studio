@@ -3,6 +3,266 @@
 ## Unreleased
 
 ### Added
+- **A delivered run can be reopened for changes — and until it is, the server itself refuses to
+  spend on it.** Approving used to lock a run in the interface only: a stale tab, a second browser
+  window, or a double-click that landed just after the approval still reached `POST /render` and
+  billed you against a film you already had. `render`, `revise`, `rerender-job` and `assemble` now
+  refuse a finalized run outright — 409, no child spawned, nothing submitted — with a message that
+  names the way forward instead of just saying no. `POST /api/runs/:id/reopen` is that way forward:
+  it moves one timestamp and deletes nothing. **Your delivered file stays exactly where it is**, and
+  stays the run's linked final until a newer approval supersedes it; every delivery is kept in the
+  manifest's `finals` history with the id of whatever replaced it, so a second approval writes a new
+  file *beside* the first and never over it. A reopened run reads as `review` again — "complete"
+  now means the approval is newer than the last reopen — so the ordinary render/revise/re-render
+  path simply works again. Reopening is refused while a paid upscale is still running (that job is
+  writing the very file being delivered) and on a run that was never approved. The reopen itself
+  costs nothing at all: one line written to the run's manifest, no render, no model call.
+  On screen, the way back is in the deliver card itself rather than behind an overflow menu:
+  *Make changes* asks once, and the entire question is about what does **not** happen — it names
+  your file and says it stays on disk and stays downloadable. A run that has delivered more than
+  once shows which final is on screen and what it replaced (`final-2 · replaced final-1`), with
+  every earlier file one click away under *Earlier finals*. Coming back in, the run explains itself
+  where you land instead of in a toast that expires six seconds later: a standing notice above the
+  stage names the file still on disk, and the approve button reads *Replace final* with the same
+  promise underneath it. The history panel gains a leading glyph column and the rows that are not
+  renders — what was delivered and whether it was upscaled, when the run was reopened, and every
+  prompt edit or discard along the way.
+- **Re-rendering one segment now shows you what it will do to its two joins, in plain words, before
+  it spends anything.** Picking a clip in the review strip (or the rail's *Re-render one segment*
+  row — both open the same dialog and post to the same endpoint) shows the neighbour it would start
+  on, the clip that gets replaced, and the neighbour it would end on, with one live sentence
+  underneath: *"K2 will start from K1's last frame and end on K3's opening frame — both joins stay
+  seamless."* That last word is the point. **"Seamless" is said only where the model has a real
+  first/last-frame anchor**; where a boundary frame rides as an extra reference image plus a prompt
+  pin — every Seedance render on fal, and any Segmind segment carrying cast references — the
+  sentence reads *"reference-guided, near-seamless"* and an amber row says plainly that the pin is
+  close but not guaranteed frame-perfect. Nothing pinned reads as a scene cut. The strength comes
+  from the renderer's own rule, so the sentence and the render cannot disagree. `Auto` mirrors the
+  joins the cut already has and `Custom` opens on exactly what Auto would have done, so the first
+  click changes nothing by surprise. Where the next clip really does start on this one's last frame,
+  a warn row offers to re-render the tail as well and re-prices the button; where the ending is
+  being pinned it says so instead of predicting a break it is preventing. On Segmind, a segment with
+  cast references cannot have both an exact frame and its cast — the trade the renderer made, and
+  why, is stated rather than swallowed. Every figure on the screen belongs to the paid button, which
+  says `rate not on file` rather than invent one, and the one-time "this spends real money"
+  confirmation appears *inside* the dialog: never a second scrim over the first.
+- **A re-render can now be pinned to the clips on either side of it, and by default it keeps the
+  joins the cut already has.** `POST /api/runs/:id/rerender-job` takes `boundaries` —
+  `auto` · `both` · `start` · `end` · `none`. `auto` mirrors the cut as it stands: a joint that is
+  whole today stays whole, and one that is already broken stays broken. It never quietly repairs a
+  break, because repairing one costs money and is a thing you should be choosing, not discovering on
+  the invoice. `both`/`start`/`end` ask outright, `none` renders the segment on its own. The new
+  ability is the closing pin: pinning a segment's *ending* to the next clip's opening frame keeps the
+  join downstream of it alive **without** re-rendering everything after it — until now the only way
+  to keep that join was to pay for the whole tail. Whichever ends are pinned, the child is told both
+  which frame (`--first-frame-from`) and which take it came off (`--seam-from`), so the joint stays
+  readable afterwards and the seamless stitcher can still act on it. During a cascade the closing pin
+  belongs to the last job in the chain and to no other — every earlier one's ending is defined by the
+  job that follows it, so pinning it would fight the chain it was queued to rebuild. How strongly
+  each end is actually held comes from the renderer's own `chooseSeamMode`, so only a native anchor
+  is ever reported as a true seam; a reference-guided pin says so.
+- **The prompt sheet now has an editor, and it meters what you type in the unit the model actually
+  counts.** `Edit prompt` opens the words themselves — the authored scene body, not the composed
+  prompt, because the style directive, the identity clause, the speech rules and the frame pins are
+  re-composed on top at render time and re-composing them over themselves would send them twice. The
+  meter draws against `maxBytes − pinBytes`: the room left for *your* words once the system's share
+  is taken out, in UTF-8 **bytes**, so an em dash costs 3 and an emoji 4 — counting characters is how
+  a 480-character edit sails past a 500-byte cap and dies at the provider instead of on screen. Kling
+  gets one textarea and one meter per shot (its cap is per shot; fal rejects a 512-byte segment) and
+  Seedance one for the whole job. Over budget, nothing is ever truncated for you: every byte you
+  typed stays in the box, Save refuses, and the line says by how much — text cut behind your back is
+  text you cannot fix. When the agents revise the plan under a saved edit, a banner says the one
+  thing that matters first — *your edit is still what we'll send, word for word* — and offers
+  `Refresh from plan` (loads the new text into the editor, **unsaved**) or `Discard edit` (confirmed
+  first, and only then). An edit whose segment the agents re-cut away is listed with its text and a
+  `Copy the text` before anything can discard it. Edited segments wear a pen in the review strip, and
+  a warning beside it when the plan has moved. Saving is genuinely free — one local file write —
+  which is exactly why the caption says so and says nothing renders until you re-render the segment.
+- **You can now edit the words we send, and they are kept word for word.** `PUT /api/runs/:id/prompt`
+  saves one job's prompt to `<runDir>/prompt-overrides.json`; `DELETE …/prompt?job=K2` goes back to
+  the agents' text. What is stored is **only what you typed** — the style directive, the identity
+  clause, the text and speech rules and the seam pin sentences are re-composed on top at render
+  time, from that render's own settings. That is not tidiness: a seam pin names a reference label
+  (`@Image3`) that only exists once a particular render has laid its references out, so a stored pin
+  would eventually point a future take at the wrong image. The sidecar lives at the run root, so a
+  revise — which rewrites `spec.json` underneath it — leaves it untouched; if the plan really moved,
+  the prompt view says `stale` and offers the new plan text alongside, while still sending your
+  words verbatim. Each render snapshots the sidecar into the take it reserves and passes
+  `--prompt-overrides` to the CLI, so a past take can answer "what did we send, and whose words were
+  they?" from its own directory (`takes[].promptSource`, `prompts.json`'s `prompt_source`). Over
+  budget is refused with the byte numbers rather than silently truncated — text cut behind your back
+  is text you cannot fix — and an edit whose job the agents later re-cut away is kept and reported
+  as orphaned, never dropped. Saving is genuinely free: one local file write, nothing submitted —
+  nothing changes on screen until you re-render that segment, which does cost money.
+  See [docs/PROMPTS.md](docs/PROMPTS.md).
+- **You can now read the prompt before it is sent, from wherever the segment is on screen.** A
+  `Prompt` control on the plan card (every job at once), on each job card, and on a clip you pick in
+  the review strip opens one panel under the stage — an inline disclosure, not a modal, because
+  reading is neither destructive nor paid. It shows the words themselves, the reference legend that
+  rides along with them (`@Element1 = the lighthouse keeper`) and what else is pinned into every
+  prompt for that job, and it meters the text against the model's real budget: `3,880 / 5,000 B`,
+  amber from 90%, and on Kling one counter per shot segment against the 500 bytes fal actually
+  enforces. Every number is the server's own count — nothing is recounted in the browser, because a
+  second implementation of "how big is this prompt" is exactly how a preview starts lying. A version
+  picker switches between the current plan and any past take that kept a `prompts.json`, and a past
+  take is shown verbatim as it was sent, named with the provider **that take** recorded and the time
+  it went out. Read-only in this step: no editing, and nothing here spends.
+- **The prompt each segment will be sent is now readable from the server — composed by the same
+  builder the renderer uses.** `GET /api/runs/:id/prompts` (every job of the current plan) and
+  `GET /api/runs/:id/prompt?job=K2` return the exact text that would leave for the provider, the
+  reference legend it cites (`@Image1`, `@Audio1`, the boundary pins), its UTF-8 byte count, the
+  model's byte budget, and how much of that budget the SYSTEM already owns (front matter, guards,
+  frame pins) so an editor can draw a real meter. This is not a second implementation: the server
+  calls `src/lib/prompt-compose.js` — the same pure function the renderers call — and an
+  integration test composes the same job independently and compares buffers, because a preview that
+  differs from what is sent by a single byte is a lie. `&take=t2` serves that take's `prompts.json`
+  verbatim instead: what was actually sent, when, and to which provider, never recomposed (the
+  settings may have moved since). Reading spends nothing — no model is called and no render is
+  queued. The run's `.env` is read as **data** for the byte budgets and never sourced into the
+  server process, and the service is lazy-imported so web/server's static import graph stays
+  config-free.
+- **Per-joint seam lineage — every clip now records which clip it continues from.** `prompts.json`
+  becomes `schema: 2` on both renderers and carries `seam_in { mode, frame, from: {take, job, clip} }`
+  and `seam_out { mode, frame, frameSource, to }`; `render.json` carries the same per job, and it
+  survives both the wholesale rewrite at the end of a render and a later `assemble --from`. Knowing
+  *that* a seam frame was used said nothing about **which clip** it came from, so a cut mixing take
+  2's first segment with take 1's second looked exactly like an intact chain — this is what the
+  seam-invisible stitcher needs to stop falling back to a hard cut on mixed timelines.
+- **Seamless stitching now reads that lineage, joint by joint.** `readContinuity` no longer answers
+  "was this whole run chained?" from a single flag — it derives one verdict per joint from each
+  clip's own recorded seam, using the same source-clip identity rule as the review read model (a
+  unit test runs both implementations over the same fixtures and requires identical verdicts). A cut
+  with one re-rendered segment therefore colour-matches and crossfades the joints that survived and
+  hard-cuts only the one the re-render broke, where before the mixed timeline lost the seamless
+  stitch entirely. Runs made before the lineage existed still read their run-level `chained` flag
+  exactly as they did, an unknown run is still unknown (never guessed as "all cuts"), and
+  `STITCH_ASSUME_CONTINUOUS=1` still forces all-true. A timeline whose every joint is a genuine cut
+  is now assembled as a plain concat without a "seamless stitch skipped" warning — nothing was
+  downgraded — and `STITCH_SEAMLESS=force` no longer fails on it. Local ffmpeg only: free.
+- **The review read model answers, per segment, whether it really continues from the one before
+  it.** `GET /api/runs/:id` (and the library list) now carry `continuity[]`, one entry per clip in
+  the cut, computed by a pure rule: a segment continues from its predecessor **iff the clip its
+  opening frame was taken off is the clip currently at that position** — not merely "a seam frame
+  was used". Re-rendering one segment therefore breaks exactly the joint after it and nothing else.
+  Runs made before the lineage existed are reconstructed from take history and marked
+  `confidence: 'derived'`, so the UI can say *join unknown* instead of claiming a link it cannot
+  see. Take/job ids only: no filesystem path is ever serialized. The manifest gained `clipLineage`
+  (which take each job's newest clip came out of, with its seams), and a composed cut now carries
+  every clip's own `seamIn`/`seamOut` into `render.json` instead of dropping them.
+- **The review page draws that continuity.** The clip row under the player became a proper
+  continuity strip: each segment is a tile (fixed height, width from the run's aspect, so all six
+  ratios work), and *between* the tiles the join itself is drawn — a solid rule with a chevron where
+  a clip really does start on its neighbour's last frame, two offset stubs where that link is
+  broken, a divider where the cut is a scene cut by design, a dashed rule where the answer was
+  reconstructed. Each tile carries a chip saying which of those it is in words (*joined* · *join
+  broken* · *scene cut* · *join unknown*), and one shared line under the strip explains the hovered
+  clip's joins in plain language — no legend, no popovers. A reconstructed (pre-lineage) run says so
+  and never claims a link it cannot see. The strip no longer wraps: a chain folded onto a second
+  line lies about which clip follows which, so it scrolls instead. Read-only — nothing here spends.
+- **Boundary frames are applied honestly, per model.** One decision (`chooseSeamMode`) now answers
+  "how is this clip pinned to its neighbours?" for the renderers, the prompt preview and the UI
+  copy: `native` (a real first/last-frame anchor — the only mode anything may call *seamless*),
+  `soft` (the frame rides as an extra reference image plus a prompt pin — near-seamless,
+  reference-guided), `none`, and the runtime-only `unsupported`. fal's Seedance endpoints can never
+  report native — they carry no frame anchors at all — and Segmind goes native only on a cast-less
+  segment, because its native slots exclude reference images. At the reference cap the closing pin
+  is dropped first, then the opening one, and only then a cast reference: identity outranks a hint.
+  Where the provider offers it and the clip feeds another segment we now keep the **generator's own
+  closing still** (`return_last_frame`) instead of an ffmpeg re-encode, recorded as `frameSource`.
+- **Kling's closing frame (`end_image_url`) ships with a one-shot fallback.** The input is
+  documented but unverified in practice, so a validation rejection naming it re-submits the
+  identical payload once without it and records `seam_out.mode: 'unsupported'` — anything else
+  propagates on the first attempt. fal bills per accepted submit, so nothing here retries blindly.
+- **`--first-frame-from` / `--last-frame-from` / `--prompt-overrides` on `render` and `render-job`.**
+  Point a boundary flag at a still and it is used as-is; point it at a **clip** and the frame that
+  touches this segment is grabbed (the neighbour's last frame for an opening pin, its first frame
+  for a closing pin). Opening-frame precedence is `--first-frame-from` > the spec's authored
+  `job.first_frame` > the chained seam frame, and the recorded lineage follows the frame that was
+  actually used — a clip that opened on an authored or hand-picked frame no longer names a source
+  clip it did not continue from. All three flags are validated before anything is queued — a typo
+  costs nothing.
+
+### Fixed
+- **The prompt preview's byte budget is now pinned to the renderer's own defaults, for installs
+  with no `.env` at all.** The server may not import `config.js` (that would let a request
+  reconfigure the running process), so it re-declares the prompt-shaping defaults by hand. Every
+  test that compared preview against wire wrote an explicit `.env` first, so both sides read the
+  same number and the *defaults* path — the one a fresh install actually takes — was never
+  exercised: a budget changed in `config.js` alone would have shown you a meter measuring against
+  one cap while the render used another. The two sets of defaults are now composed against each
+  other byte for byte, so a drift fails the suite instead of reaching a user's screen.
+- **A pin the reference budget is about to drop is no longer sold as a join.** The re-render dialog
+  and the prompt sheet asked the model *"can you pin this end?"* but not the budget *"is there a slot
+  left for it?"* — so on a segment carrying a full cast (a Seedance model takes nine images; two
+  characters with seven references each fill that on their own) both screens promised
+  *"near-seamless (reference-guided)"* and the render, correctly, dropped the pin and delivered a
+  scene cut. Both now read the same composed answer the renderer acts on, so a boundary that cannot
+  be pinned says so **before** the paid button, not afterwards in the clip strip. The seam rule and
+  its budget arithmetic now live in one module that the renderers, the server and the browser all
+  import, replacing the hand-kept TypeScript copy of the rule.
+- **Replanning a delivered run was still possible.** `render`, `revise`, `rerender-job` and
+  `assemble` refuse a finalized run, but `POST /api/runs/:id/plan` — a full engine pass that also
+  rewrites `spec.json` — did not, leaving the plan behind your delivered file rewritable from a
+  stale tab. It is guarded like the rest now.
+- **A prompt edit can no longer be silently dropped from a render you paid for.** If the saved-edits
+  sidecar existed but could not be read or copied into the take, the web path used to fall back to
+  the agents' words, label the take `plan`, and say nothing. It now refuses the render (409) and
+  names the file — the same refusal the command line has always made.
+- **A transient fal fetch race no longer looks like an unsupported field.** fal answers HTTP 422
+  both when a Kling argument is wrong *and* when its worker briefly cannot fetch a reference URL we
+  just uploaded — and the second message names the field too. The closing-frame fallback read that
+  as a rejection, permanently recorded `seam_out: unsupported` (a lie the continuity strip and the
+  seamless stitcher then acted on) and submitted a **second billed render**. It now tells the two
+  apart, exactly as the ordinary retry loop already did.
+- **The provider's own closing still is kept under the name the seam reads.** The downloaded frame
+  was matched by the URL's filename, which real CDNs content-hash — so outside the test mocks the
+  paid-for frame was never found, every seam fell back to an ffmpeg grab, and a stray PNG was left
+  in the take. The transport now names that file at download time (and the mocks serve hashed URLs,
+  so the test can fail again).
+- A re-approval landing in the **same millisecond** as the reopen that enabled it was read as
+  superseded: the run sat out of `complete` forever while every spending endpoint stayed unlocked on
+  a delivered file. An approval cannot precede its own reopen, so equal timestamps now count as
+  delivered.
+- `DELETE /api/runs/:id/prompt?job=__proto__` (or `constructor`, or `toString`) answered 200,
+  broadcast a prompt-override event to every open tab and filed a history row for a job that never
+  existed. Inherited object members are no longer mistaken for saved edits.
+- A provider's **closing still is a courtesy, not the purchase**: a `return_last_frame` image that is
+  advertised and then fails to download (an expired CDN record) no longer throws away the render it
+  came with. The clip has already been generated and billed by that point, and the same frame is
+  reproducible locally, so the download is skipped with a warning and the seam frame is grabbed with
+  ffmpeg instead (`seam_out.frameSource: 'ffmpeg'`). A missing **video** is still a hard error.
+- The first-run wizard's end-to-end walkthrough followed the old step order and stalled on a key
+  field that had moved: the backend picker comes **before** the render key now (which key you are
+  asked for depends on which provider your backend bills), and the test walks it that way.
+
+### Changed
+- **The library list no longer pays for continuity.** Per-segment join facts are read from disk, and
+  the list re-fetches on every progress tick during a render — so a busy library was doing dozens of
+  synchronous reads a second on the same loop that streams progress, for a field only the run page
+  uses. `GET /api/runs/:id` (and the run's live stream) still carry it; the library list does not.
+- **The delivery history reaches the browser as file names, not host paths.** `finals[]` and the
+  reopen entries in `history[]` used to ship absolute paths from the machine running the server; the
+  interface only ever showed the file name. The current final keeps its full path, which is what
+  *Reveal in Finder* and *Copy path* are for.
+- Prompt-edit and prompt-discard rows in the history panel are capped at the most recent twenty.
+  Editing a prompt is free and iterative, and every save used to be filed forever — in the run's
+  manifest and in every state payload the page received. Reopens, takes and cuts are never compacted.
+- **The zero-spend demo boots with a run whose cut has a broken join.**
+  `npm --prefix web/server run demo` seeds a three-segment cut in which the middle clip was
+  re-rendered under its neighbour — so the join chips, the prompt sheet's "as sent" take versions,
+  the segment re-render dialog and the reopen path are one click from the banner instead of two
+  minutes of mock rendering away. It is re-seeded on every boot (and on `POST /__demo/reseed`), so a
+  walkthrough that approves or reopens it still starts from the same place next time. `/__demo/submits`
+  reports each provider mock's render-submit count, which is how the Playwright walkthrough proves
+  that reading a prompt, saving an edit and cancelling a paid dialog move nothing.
+- A boundary frame that has to travel as a reference no longer **reserves** an image slot from the
+  cast: it is a droppable soft pin, so a full-cast job is valid again. An authored `last_frame` on
+  Segmind alongside cast references now soft-pins instead of failing validation, and `last_frame` no
+  longer requires `first_frame`.
+- The prompt builders moved into pure, config-free modules (`src/lib/prompt-compose.js`,
+  `src/lib/prompt-settings.js`), byte-for-byte identical to what shipped — `kling.js`/`seedance.js`
+  keep every export and become thin shims. This is what lets the web server show the exact bytes a
+  render will send without pulling a developer's `.env` into its import graph.
 - **Seam-invisible stitching.** A video over the model's window renders as several *chained* jobs —
   each seeded with the previous clip's last frame — and the local stitch now colour-matches every
   chained joint, drops the duplicated boundary frame (trimming one frame of audio to match) and
@@ -17,9 +277,10 @@
 
   It is **optional and self-disabling**: without python3 + numpy + pillow — or if anything at all
   goes wrong — assembly logs one warning and falls back to the hard-cut stitch, unchanged.
-  **Today the fallback still runs for most renders**: the seamless path only fires when the run can
-  say which joints are chained, which is recorded as one all-or-nothing flag. Per-joint seam lineage
-  is the next piece of work; when it lands, mixed timelines start stitching seamlessly on their own.
+  **Per-joint seam lineage has since landed** (below), so the all-or-nothing flag this shipped with
+  is gone: every joint is judged on its own recorded seam, and a timeline that mixes takes stitches
+  the joints that survived instead of falling back wholesale. A run made before lineage existed
+  still reads its old run-level flag, exactly as it did.
 - **Segmind is a second render provider.** Both Seedance models now render on **fal.ai or Segmind** —
   `seedance-2.0@segmind` and `seedance-2.5@segmind` join the backend list, and you only need a key
   for the provider you actually use. A **Segmind-only install needs no fal account at all**: set

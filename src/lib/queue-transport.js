@@ -1,13 +1,19 @@
 // Provider-neutral plumbing for queue-style render APIs (submit → poll → download). fal.ai is the
 // only provider today, but none of this is fal-specific: a second queue-based provider reuses the
-// same result-shape reader, downloader and error classifiers. Config-free by construction — every
-// caller passes what it needs, so this module can be imported from anywhere (including the web
-// server, whose static-import chain must stay config-free).
+// same result-shape reader, downloader and error classifiers. It takes NO configuration of its own —
+// every caller passes what it needs, so nothing here reads config.js or a provider's env. (It is not
+// in web/server's static graph, and must not be put there without checking the note on the logger
+// import below.)
 //
 // Extracted verbatim from fal.js, which imports and re-exports every symbol here so no downstream
 // import ever changed.
 import fs from 'node:fs/promises';
 import path from 'node:path';
+// logger.js reads LOG_LEVEL off process.env, so it is not itself config-free; queue-transport is in
+// neither web/server's nor prompt-compose's static graph, which is why that is fine HERE and not a
+// licence to import it from either. (util.js pulls it in too — that is exactly why the pure text
+// helpers had to move to src/lib/text.js.)
+import log from './logger.js';
 import { fetchRetry, writeBuffer, ensureDir } from './util.js';
 
 const MIME = {
@@ -57,27 +63,57 @@ export function contentPolicyError(err, endpoint, provider = 'fal') {
   return new Error(`${provider} ${endpoint}: the generated video was flagged by content moderation as sensitive (content_policy_violation) — usually a false positive on a benign prompt. Revise the plan to rephrase it (LLM only, no render spend), or retry to re-roll. [${String(err?.message ?? '').slice(0, 160)}]`);
 }
 
-/** Pull every downloadable file URL out of a queue result ({ video:{url} } and common variants). */
-export function resultFileUrls(result) {
-  const urls = [];
-  const push = (v) => { if (v?.url) urls.push(v.url); };
+/**
+ * Every downloadable file in a queue result, tagged with whether the JOB depends on it and — where
+ * the destination name MATTERS — what to save it as.
+ * `optional: true` marks a courtesy artifact: something the provider threw in that we would like but
+ * that is reproducible locally, so failing to fetch it must never discard the paid render.
+ */
+function resultFiles(result) {
+  const files = [];
+  const push = (v, optional = false, saveAs = null) => { if (v?.url) files.push({ url: v.url, optional, saveAs }); };
   push(result?.video);
   for (const v of result?.videos ?? []) push(v);
-  if (typeof result?.url === 'string') urls.push(result.url);
-  return urls;
+  // A provider that was asked for its own closing still (`return_last_frame`) returns it alongside
+  // the video. `saveAs` is what makes it usable: a result URL is content-hashed (…/<hash>.png) on
+  // both real CDNs, so keying on the URL's basename would land the frame under an arbitrary name and
+  // every downstream seam would silently fall back to an ffmpeg grab of pixels we already paid for.
+  // It lands at <job>/last_frame.png — the exact file every downstream seam reads. OPTIONAL by
+  // construction: the same frame can always be grabbed off the finished clip with ffmpeg (see
+  // pipeline.closingFrameFor), and the video is what was paid for.
+  push(result?.last_frame, true, 'last_frame.png');
+  if (typeof result?.url === 'string') files.push({ url: result.url, optional: false, saveAs: null });
+  return files;
 }
 
-/** Download every file url in a completed queue result to destDir (shared by the video backends). */
+/** Pull every downloadable file URL out of a queue result ({ video:{url} } and common variants). */
+export function resultFileUrls(result) {
+  return resultFiles(result).map((f) => f.url);
+}
+
+/**
+ * Download every file url in a completed queue result to destDir (shared by the video backends).
+ * A required file that will not download is a hard error; an OPTIONAL one is skipped with a warning
+ * on stderr — the clip is already generated and billed, and throwing it away over a missing courtesy
+ * still would cost the user a whole re-render to recover something ffmpeg can produce for free.
+ */
 export async function downloadResultFiles(result, destDir, label) {
-  const urls = resultFileUrls(result);
-  if (!urls.length) throw new Error(`${label} job produced no video url: ${JSON.stringify(result).slice(0, 400)}`);
+  const files = resultFiles(result);
+  if (!files.some((f) => !f.optional)) {
+    throw new Error(`${label} job produced no video url: ${JSON.stringify(result).slice(0, 400)}`);
+  }
   ensureDir(destDir);
   const paths = [];
-  for (const [i, url] of urls.entries()) {
-    const res = await fetchRetry(url, {}, { retries: 3 });
-    if (!res.ok) throw new Error(`${label} output download failed (${url.slice(0, 80)}): HTTP ${res.status}`);
-    const base = (() => { try { return path.basename(new URL(url).pathname) || `out_${i + 1}.mp4`; } catch { return `out_${i + 1}.mp4`; } })();
-    paths.push(await writeBuffer(path.join(destDir, base.replace(/[/\\]/g, '_')), Buffer.from(await res.arrayBuffer())));
+  for (const [i, { url, optional, saveAs }] of files.entries()) {
+    const base = saveAs ?? (() => { try { return path.basename(new URL(url).pathname) || `out_${i + 1}.mp4`; } catch { return `out_${i + 1}.mp4`; } })();
+    try {
+      const res = await fetchRetry(url, {}, { retries: 3 });
+      if (!res.ok) throw new Error(`${label} output download failed (${url.slice(0, 80)}): HTTP ${res.status}`);
+      paths.push(await writeBuffer(path.join(destDir, base.replace(/[/\\]/g, '_')), Buffer.from(await res.arrayBuffer())));
+    } catch (e) {
+      if (!optional) throw e;
+      log.warn(`${label}: could not download the optional ${base} (${String(e?.message ?? e).slice(0, 120)}) — falling back to a local frame grab.`);
+    }
   }
   return paths;
 }

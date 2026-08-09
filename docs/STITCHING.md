@@ -33,7 +33,7 @@ the audio (optional music bed, EBU R128 loudness). There is still exactly one vi
 The seamless path needs to know **which joints are chained** — and it declines rather than guesses,
 because dropping a frame at a real scene cut destroys content. It runs only when all of these hold:
 
-- the run recorded that it chained (`chained` in `render.json`), or you said so yourself;
+- the run can say which joints are chained (per-joint seam lineage, below), or you said so yourself;
 - python3 with numpy and pillow is importable (`npm run doctor` tells you);
 - there are 2+ clips and at least one chained joint;
 - every clip outlasts the crossfades on its sides plus a frame;
@@ -44,10 +44,34 @@ Anything else — including a failure mid-run — logs **one** warning naming th
 to concat. A stitch can never be the reason a render has nothing to deliver. Set
 `STITCH_SEAMLESS=force` to turn those warnings into errors instead.
 
-Today `chained` is all-or-nothing per run, because that is how rendering works: `KLING_CHAIN_FRAMES`
-seeds every job after the first. Per-joint lineage (which seams actually got their frame, which clips
-were re-rendered since) is upcoming; when it lands, mixed timelines start stitching correctly with no
-change here.
+## Which joints are chained: seam lineage, per joint
+
+Every clip records the seam it was rendered with (`prompts.json` `schema: 2`, and the same fields on
+each job in `render.json`): `seam_in` names the frame this clip opened on **and the clip that frame
+came off** (`{take, job, clip}`), `seam_out` names the still it handed forward and who consumed it.
+
+A joint counts as chained when the clip on the right opened on a frame taken off **the clip that is
+actually to its left in this cut** — by identity, not "a seam frame was used somewhere". The
+difference is the whole point. Re-render one segment and its predecessor's joint survives while the
+joint *after* it does not: the next clip still opens on a frame from a clip the cut no longer
+contains. A run-level "did this render chain?" flag calls that intact and hands a real jump to the
+frame-dropping, colour-matching path.
+
+So a mixed timeline now stitches the joints that survived and hard-cuts only the ones a re-render
+broke, instead of falling back wholesale. The same rule, on the same records, produces the join chips
+on the review page — `src/lib/seamstitch.js` `readContinuity()` and `web/server/lib/lineage.js` are
+checked against each other over shared fixtures, because a stitcher and a UI that disagreed about a
+join would mean one of them is lying to you.
+
+Two honest fallbacks remain:
+
+- **A run made before lineage existed** has no seam records, so it falls back to the old run-level
+  `chained` flag and is treated exactly as it was. Unknown stays unknown — never guessed as "all
+  cuts", which would silently disable the seamless path on every older run.
+- **A cut whose job list and clip list disagree** (a job errored, a clip went missing) declines
+  rather than shifting every verdict by one: a misaligned answer is worse than no answer.
+
+`STITCH_ASSUME_CONTINUOUS=1` still forces every joint to true, for testing.
 
 Driving it by hand:
 

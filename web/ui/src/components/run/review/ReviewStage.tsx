@@ -1,6 +1,6 @@
 // The stage band: the current cut plays center-stage on the darkened strip, with a cut switcher
-// when there is more than one stitched master, a clip strip that seeks the master per job, and a
-// probe banner when the latest take only rendered the first job.
+// when there is more than one stitched master, a continuity strip that seeks the master per job and
+// draws how the clips join, and a probe banner when the latest take only rendered the first job.
 import { useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
@@ -9,8 +9,10 @@ import type { RunDetail } from '../../../../../shared/api-types';
 import { api, ApiClientError } from '../../../api/client';
 import { useToast } from '../../ui/Toast';
 import { timeAgo } from '../../../lib/format';
-import { jobSeconds, outMediaUrl } from './lib';
+import { jobSeconds, outMediaUrl, reopenedFinal } from './lib';
+import { ClipStrip } from './ClipStrip';
 import { PaidButton } from './PaidButton';
+import { usePlanPrompts } from './PromptSheet';
 
 export function ReviewStage({ run, cutId, setCutId }: {
   run: RunDetail;
@@ -32,6 +34,11 @@ export function ReviewStage({ run, cutId, setCutId }: {
     : selected?.master ? outMediaUrl(selected.master) : undefined;
 
   const isProbe = run.manifest?.takes.at(-1)?.mode === 'probe';
+  // A run that came back here from the deliver card looks identical to one that never left — so the
+  // banner slot says why the user is here and what is still on disk (spec D25). It is a standing
+  // fact about the run's state, not an event, so it is written on the page and never toasted
+  // (Don't #11): a toast would vanish six seconds after the one moment it was needed.
+  const reopened = reopenedFinal(run.manifest);
   const fullEstimate = useQuery({
     queryKey: ['estimate', run.id, 'full'],
     queryFn: () => api.estimate(run.id, { mode: 'full' }),
@@ -53,6 +60,14 @@ export function ReviewStage({ run, cutId, setCutId }: {
       || (t.mode === 'probe' && jobIds[0] === jobId)
       || (t.mode === 'job' && (t.jobId === jobId || (t.cascade === true && jobIds.indexOf(jobId) > jobIds.indexOf(t.jobId ?? ''))))).length;
 
+  // Which segments carry an edit, for the tiles' pen overlay (spec D8/D22). Shares its cache entry
+  // with the prompt sheet's plan-wide read, so opening the sheet costs no second request.
+  const prompts = usePlanPrompts(run.id);
+  const promptStateFor = (jobId: string) => {
+    const v = prompts.data?.prompts.find((p) => p.jobId === jobId);
+    return { edited: v?.source === 'override', stale: Boolean(v?.source === 'override' && v.stale) };
+  };
+
   const seekToJob = (index: number) => {
     const offset = jobs.slice(0, index).reduce((sum, j) => sum + jobSeconds(run.spec, j.jobId), 0);
     if (videoRef.current) videoRef.current.currentTime = offset;
@@ -60,6 +75,15 @@ export function ReviewStage({ run, cutId, setCutId }: {
 
   return (
     <section className="relative -mx-6 rounded-r3 bg-stage px-6 py-8" aria-label="Review stage">
+      {reopened && (
+        <div className="mb-5 rounded-r2 border border-line bg-surface-1 px-4 py-3" data-testid="reopened-notice">
+          <p className="text-dense text-ink">
+            Reopened for changes. <span className="font-mono">{reopened.fileName}</span> is still on disk — approving
+            again writes a new final and keeps the old one.
+          </p>
+        </div>
+      )}
+
       {isProbe && (
         <div className="mb-5 flex flex-wrap items-center gap-3 rounded-r2 border border-line bg-surface-1 px-4 py-3">
           <p className="text-dense text-ink">Probe take — first job only, low cost.</p>
@@ -129,38 +153,13 @@ export function ReviewStage({ run, cutId, setCutId }: {
       </div>
 
       {jobs.length > 0 && (
-        <div className="mt-5 flex flex-wrap justify-center gap-2" aria-label="Clips in this cut">
-          {jobs.map((job, i) => {
-            const secs = jobSeconds(run.spec, job.jobId);
-            const takeCount = jobTakeCount(job.jobId);
-            return (
-              <button
-                key={job.jobId}
-                aria-label={`Play from ${job.jobId}`}
-                onClick={() => seekToJob(i)}
-                className="group flex flex-col items-center gap-1.5 rounded-r2 border border-line bg-surface-1 p-2 hover:border-line-strong"
-              >
-                <video
-                  preload="metadata"
-                  muted
-                  src={job.clipUrl ?? undefined}
-                  className="rounded-r1 bg-black object-cover"
-                  style={{ height: 72, aspectRatio: (run.aspect ?? '9:16').replace(':', ' / ') }}
-                  aria-hidden
-                />
-                <span className="flex items-center gap-1.5">
-                  <span className="font-mono text-caption text-ink-secondary">{job.jobId}</span>
-                  <span className="tnum text-caption text-ink-muted">{secs}s</span>
-                  {takeCount > 0 && (
-                    <span className="tnum rounded-full bg-surface-2 px-1.5 text-caption text-ink-muted">
-                      {takeCount} {takeCount === 1 ? 'take' : 'takes'}
-                    </span>
-                  )}
-                </span>
-              </button>
-            );
-          })}
-        </div>
+        <ClipStrip
+          run={run}
+          jobs={jobs}
+          takeCountFor={jobTakeCount}
+          promptStateFor={promptStateFor}
+          onSeek={seekToJob}
+        />
       )}
     </section>
   );

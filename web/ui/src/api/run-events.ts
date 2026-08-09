@@ -166,6 +166,12 @@ export function reduceRunEvents(state: RunLive, event: ClientRunEvent, nowMs = D
           : j);
       return { ...state, run: { ...state.run, latestRender: { ...lr, jobs } } };
     }
+    case 'prompt-override':
+      // Deliberately INERT here. A prompt edit is a fact about the run's stored text, not about the
+      // live render: folding it into `activeKind`/`agents` would let a second tab's save disturb the
+      // timers and job ticks of work that is actually in flight. The prompt sheet subscribes to the
+      // event itself and refetches; this reducer owns only live texture.
+      return state;
     case 'done':
       return { ...state, activeKind: null };
     case 'error': {

@@ -2,12 +2,15 @@
 // Esc closes, focus is trapped, the scrim click cancels.
 import { useEffect, useRef, type ReactNode } from 'react';
 
-export function Dialog({ open, onClose, title, children, actions }: {
+export function Dialog({ open, onClose, title, children, actions, size = 'default' }: {
   open: boolean;
   onClose: () => void;
   title: string;
   children: ReactNode;
   actions: ReactNode;
+  /** `wide` (640px) is for a dialog that has to SHOW something — 480px cannot carry two boundary
+   *  frames side by side and still read as one row (spec D13a). */
+  size?: 'default' | 'wide';
 }) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -29,7 +32,7 @@ export function Dialog({ open, onClose, title, children, actions }: {
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className="relative w-full max-w-[480px] rounded-r4 border border-line bg-surface-1 p-5"
+        className={`relative w-full ${size === 'wide' ? 'max-w-[640px]' : 'max-w-[480px]'} rounded-r4 border border-line bg-surface-1 p-5`}
         style={{ boxShadow: 'var(--shadow-3)' }}
       >
         <h2 className="text-heading text-ink">{title}</h2>

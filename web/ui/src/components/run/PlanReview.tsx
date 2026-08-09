@@ -15,6 +15,7 @@ import { useToast } from '../ui/Toast';
 import { requestNotifyPermission } from '../../hooks/useNotifications';
 import { usd } from '../../lib/format';
 import { jobSeconds } from './SpecInspector';
+import { PromptButton } from './review/PromptSheet';
 
 type Mode = 'probe' | 'full';
 
@@ -120,6 +121,8 @@ export function PlanReview({ run }: { run: RunDetail }) {
           Full render
         </Button>
         <Button variant="quiet" onClick={() => setShowRevise((v) => !v)}>Revise the plan</Button>
+        {/* Before spending anything: the exact words each segment would be sent. */}
+        <PromptButton variant="quiet" size="md" label="See the prompts" ariaLabel="Prompts for this plan" />
         <Button variant="destructive" onClick={() => setConfirmDiscard(true)}>Discard</Button>
       </div>
       {unknownPrice

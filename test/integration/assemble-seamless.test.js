@@ -30,6 +30,7 @@ const NEED_BOTH = FF && SS ? false : 'requires ffmpeg + python3 with numpy/pillo
 
 const { canvasFor, probeClip } = await import('../../src/lib/assemble.js');
 const { computeOffsets } = await import('../../src/lib/stitch-math.js');
+const config = (await import('../../config.js')).default;
 
 // One fixture for the file; each test assembles from it into its own master.
 const tmp = FF ? mkTmp('assemble-seamless') : null;
@@ -38,6 +39,21 @@ test.after(() => tmp?.cleanup());
 
 const clips = () => fixture.segments.slice(0, 2);
 const CHILD = fileURLToPath(new URL('../helpers/assemble-child.mjs', import.meta.url));
+
+/**
+ * A b1nx-shaped render.json over the three fixture clips: segment 1 was re-rendered into a new take,
+ * so segment 2 still points at a K1 clip this cut no longer contains (broken), while segment 3 opens
+ * on segment 2's own closing frame (intact). readContinuity turns that into [false, true] — the map
+ * the mixed-timeline test below drives the real stitcher with.
+ */
+const mixedRender = (segs) => ({
+  chained: false,
+  jobs: [
+    { jobId: 'K1', clip: segs[0], seamIn: { mode: 'none', frame: null, from: null } },
+    { jobId: 'K2', clip: segs[1], seamIn: { mode: 'soft', frame: '/gone/t1/K1/last_frame.png', from: { take: 't1', job: 'K1', clip: '/gone/t1/K1/clip.mp4' } } },
+    { jobId: 'K3', clip: segs[2], seamIn: { mode: 'soft', frame: '/gone/t1/K2/last_frame.png', from: { take: 't1', job: 'K2', clip: segs[1] } } },
+  ],
+});
 
 /** assembleVideo in a child process, so the STITCH_ and PYTHON_BIN vars in `env` really reach config.js. */
 function assembleWithEnv(env, clipPaths, out, opts) {
@@ -108,12 +124,54 @@ test('SEAMLESS: chained clips are colour-matched, crossfaded and delivered at th
   assert.equal(fs.readdirSync(tmp.dir).filter((f) => f.includes('seamstitch')).length, 0, 'no temp files left behind');
 });
 
+test('MIXED: a re-rendered segment hard-cuts its own joint and the rest still stitch', { skip: NEED_BOTH }, async () => {
+  // The whole point of per-joint lineage: before it this cut fell back to a hard cut at EVERY seam,
+  // because the run could only say "chained" or "not chained" about all of it at once.
+  const master = path.join(tmp.dir, 'mixed.mp4');
+  const { assembleVideo } = await import('../../src/lib/assemble.js');
+  const { readContinuity } = await import('../../src/lib/seamstitch.js');
+  const segs = fixture.segments;
+
+  const continuity = readContinuity(mixedRender(segs), segs.length, { ...config.stitch, assumeContinuous: false });
+  assert.deepEqual(continuity, [false, true], 'derived from the recorded seams, not hand-written');
+
+  const res = await assembleVideo(segs, master, { nativeAudio: true, aspect: '16:9', continuity });
+  assert.equal(res.stitcher, 'seamless', 'one broken joint must not cost the other joint its stitch');
+  assert.equal(res.joints, 2);
+  assert.equal(res.matched, 1, 'exactly the joint the lineage vouches for is colour-matched');
+
+  const p = await probeClip(master);
+  assert.equal(p.hasAudio, true);
+  const canvas = canvasFor('16:9', Math.min(160, 90));
+  assert.equal(p.width, canvas.w);
+  assert.equal(p.height, canvas.h);
+  // Shorter than a hard cut (the chained joint's shared frame is dropped and crossfaded), but only
+  // by that one joint — the cut joint keeps both clips' frames.
+  const concatLen = (3 * FRAMES) / FPS;
+  assert.ok(p.duration < concatLen, `a stitched joint must shorten the master (${p.duration}s vs ${concatLen}s)`);
+  assert.ok(p.duration > concatLen - 2 * XFADE, `only ONE joint was crossfaded, got ${p.duration}s`);
+  assert.equal(fs.readdirSync(tmp.dir).filter((f) => f.includes('seamstitch')).length, 0, 'no temp files left behind');
+});
+
 test('STITCH_SEAMLESS=off keeps the concat path even with continuity declared', { skip: NEED_BOTH }, async () => {
   const master = path.join(tmp.dir, 'off.mp4');
   const { result } = assembleWithEnv({ STITCH_SEAMLESS: 'off' }, clips(), master,
     { nativeAudio: true, aspect: '16:9', continuity: [true] });
   assert.equal(result.stitcher, 'concat');
   assert.ok((await probeClip(master)).duration > 3);
+});
+
+test('an all-cut map is a hard cut BY DESIGN — no warning, and force does not fail it', { skip: NEED_FF }, () => {
+  // Per-joint lineage makes "every joint is a cut" the ordinary answer for a run that never chained
+  // (a Kling text-to-video render, chaining switched off). Nothing was downgraded, so there is
+  // nothing to warn about — and STITCH_SEAMLESS=force must not turn the correct master into an error.
+  const master = path.join(tmp.dir, 'allcuts.mp4');
+  const { result, stderr } = assembleWithEnv(
+    { PYTHON_BIN: '/nonexistent/python3', STITCH_SEAMLESS: 'force', LOG_LEVEL: 'warn' },
+    clips(), master, { nativeAudio: true, aspect: '16:9', continuity: [false] },
+  );
+  assert.equal(result.stitcher, 'concat');
+  assert.equal(stderr.includes('Seamless stitch skipped'), false, `an all-cut timeline is not a downgrade:\n${stderr}`);
 });
 
 test('STITCH_SEAMLESS=force turns a fallback into a loud failure instead of a quiet downgrade', { skip: NEED_FF }, () => {

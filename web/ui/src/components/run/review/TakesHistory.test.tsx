@@ -43,4 +43,64 @@ describe('TakesHistory', () => {
     expect(screen.getByText('No takes yet.')).toBeInTheDocument();
     expect(screen.queryByRole('listitem')).not.toBeInTheDocument();
   });
+
+  // ── Deliveries, reopens and prompt edits (WS2-P6, spec D27) ───────────────
+  // The panel is the run's honest record, so the events that are NOT renders belong in it too: what
+  // was delivered, when the user came back in, and when the words we send were changed.
+  it('files deliveries, reopens and prompt edits in the same chronology, each with its glyph', () => {
+    const run = makeRun('review');
+    run.manifest!.takes = [{ id: 't1', mode: 'full', revision: null, createdAt: '2026-07-04T10:00:00.000Z', estUsd: 4.2 }];
+    run.manifest!.cuts = [];
+    run.manifest!.finals = [
+      { id: 'final-1', cut: 'c1', final: '/abs/out/ocean-final.mp4', upscaled: true, at: '2026-07-04T11:00:00.000Z' },
+    ];
+    run.manifest!.history = [
+      { id: 'reopen-1', kind: 'reopen', final: '/abs/out/ocean-final.mp4', at: '2026-07-04T12:00:00.000Z' },
+      { id: 'prompt-edit-1', kind: 'prompt-edit', job: 'K2', at: '2026-07-04T13:00:00.000Z' },
+      { id: 'prompt-discard-1', kind: 'prompt-discard', job: 'K2', at: '2026-07-04T14:00:00.000Z' },
+    ];
+
+    renderReview(<TakesHistory run={run} />);
+    const rows = screen.getAllByRole('listitem');
+    const text = rows.map((li) => li.textContent ?? '');
+
+    expect(text[0]).toContain('t1 · full · ≈$4.20');
+    expect(text[1]).toContain('final-1 · delivered · upscaled');
+    expect(text[2]).toContain('reopened for changes');
+    expect(text[3]).toContain('K2 prompt edited');
+    expect(text[4]).toContain('K2 prompt edit discarded');
+
+    // The glyph column tells the three kinds apart at a glance: a delivery is done, a reopen is a
+    // state the run is still in, an edit is the accent colour every prompt affordance wears.
+    const glyph = (row: HTMLElement) => row.querySelector('svg');
+    expect(glyph(rows[1])).toHaveClass('text-status-done');
+    expect(glyph(rows[1])?.getAttribute('width')).toBe('11');
+    expect(glyph(rows[2])).toHaveClass('text-status-warn');
+    expect(glyph(rows[3])).toHaveClass('text-accent');
+    expect(glyph(rows[4])).toHaveClass('text-accent');
+    // routine work keeps the column's width and stays unmarked, so the marked rows still stand out
+    expect(glyph(rows[0])).toBeNull();
+  });
+
+  it('a delivery that was not upscaled says only that it was delivered', () => {
+    const run = makeRun('review');
+    run.manifest!.takes = [];
+    run.manifest!.cuts = [];
+    run.manifest!.finals = [{ id: 'final-1', cut: 'c1', final: '/abs/out/a.mp4', upscaled: false, at: '2026-07-04T11:00:00.000Z' }];
+    renderReview(<TakesHistory run={run} />);
+    expect(screen.getByRole('listitem')).toHaveTextContent('final-1 · delivered');
+    expect(screen.queryByText(/upscaled/)).not.toBeInTheDocument();
+  });
+
+  // A manifest written by a newer server must never break the panel that reads it.
+  it('ignores a lifecycle marker kind it does not draw yet', () => {
+    const run = makeRun('review');
+    run.manifest!.takes = [];
+    run.manifest!.cuts = [];
+    run.manifest!.history = [
+      { id: 'x-1', kind: 'archived' as unknown as 'reopen', at: '2026-07-04T11:00:00.000Z' },
+    ];
+    renderReview(<TakesHistory run={run} />);
+    expect(screen.getByText('No takes yet.')).toBeInTheDocument();
+  });
 });

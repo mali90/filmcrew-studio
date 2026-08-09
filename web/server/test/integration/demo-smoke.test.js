@@ -50,6 +50,52 @@ async function startDemo(port) {
   throw new Error(`demo.js never answered ${url}: ${stderr.slice(-500)}`);
 }
 
+test('the demo seeds a cut with one whole join and one broken one', async () => {
+  const port = await freePort();
+  const { child, health } = await startDemo(port);
+  const get = async (p) => {
+    const res = await fetch(`http://127.0.0.1:${port}${p}`);
+    assert.equal(res.status, 200, `GET ${p}`);
+    return res.json();
+  };
+  try {
+    assert.equal(health.seededRun, 'web-demo-seam', 'health names the seeded run so a walkthrough can find it');
+    const { run } = await get(`/api/runs/${health.seededRun}`);
+
+    // It is a REVIEWABLE run: three clips on disk and a master to play them from. Without this the
+    // review stage never mounts and none of the WS2 surfaces exist to be walked.
+    assert.equal(run.status, 'review');
+    assert.deepEqual(run.latestRender.jobs.map((j) => j.jobId), ['K1', 'K2', 'K3']);
+    assert.ok(run.latestRender.jobs.every((j) => j.clipUrl), 'every segment has a playable clip');
+    assert.ok(run.latestRender.masterUrl, 'the cut has a master');
+
+    // The point of the fixture, read back through the same rule the review page draws from: K2 was
+    // re-rendered under K3, so K2's own join holds and the one after it is broken. A seed that
+    // drifted into an all-intact chain would still look fine on screen and quietly stop
+    // demonstrating anything.
+    assert.deepEqual(
+      run.continuity.map((c) => [c.jobId, c.continuesFromPrev, c.reason]),
+      [['K1', false, 'no-prev'], ['K2', true, 'source-matches'], ['K3', false, 'source-replaced']],
+    );
+    assert.ok(run.continuity.every((c) => c.confidence === 'recorded'), 'recorded lineage, not a reconstruction');
+    // Ids only — the same contract every serialized run keeps.
+    assert.ok(!JSON.stringify(run.continuity).includes('/'), 'no filesystem path reaches the client');
+
+    // The prompt sheet has something to show for every segment, and K2 — the re-rendered one — can
+    // be read back as it was sent in BOTH takes, which is what makes the version picker demoable.
+    const prompts = await get(`/api/runs/${health.seededRun}/prompts`);
+    assert.deepEqual(prompts.jobs, ['K1', 'K2', 'K3']);
+    assert.ok(prompts.prompts.every((p) => p.bytes > 0 && p.maxBytes > 0), 'each prompt is metered');
+    assert.deepEqual(prompts.prompts.find((p) => p.jobId === 'K2').availableTakes, ['t2', 't1']);
+    const sent = await get(`/api/runs/${health.seededRun}/prompt?job=K2&take=t1`);
+    assert.equal(sent.source, 'take');
+    assert.ok(sent.prompt.length > 0);
+  } finally {
+    child.kill('SIGTERM');
+    await new Promise((r) => child.on('exit', r));
+  }
+});
+
 test('the demo serves both provider mocks and lets e2e arm the Segmind one', async () => {
   const port = await freePort();
   const { child, health } = await startDemo(port);

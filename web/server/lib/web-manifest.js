@@ -25,6 +25,17 @@ export function newManifest({ idea, backend, aspect, durationS = null, cast = []
     // (Segmind, and Topaz before it) — readers must treat it as UNKNOWN, never as zero.
     costLedger: [], // [{ts, action, estUsd, note}]
     approved: null, // {cut, final, upscaled, at}
+    // Delivery lifecycle (WS2-P6). `reopenedAt` is when the user reopened a DELIVERED run to make
+    // changes: the run counts as delivered again only once a newer approval lands (run-scan's
+    // `complete` rule compares approved.at against it). `finals` is the history of everything
+    // delivered — the files themselves are never deleted or overwritten. `history` holds the
+    // takes-adjacent lifecycle markers (reopens), for the History panel to read beside the takes,
+    // cuts and revisions it already lists.
+    // All three are ADDITIVE: every reader must treat a manifest without them exactly as it did
+    // before they existed (no reopen, no history) — old runs are never migrated on disk.
+    reopenedAt: null, // ISO timestamp of the last reopen, or null
+    finals: [],       // [{id:'final-1', cut, final, upscaled, at, replacedBy?}]
+    history: [],      // [{id:'reopen-1', kind:'reopen', final, at}]
     lastError: null,   // {ts, action, message, logTail:[]}
     activeJob: null,   // {kind, pid, startedAt, queueId}
   };

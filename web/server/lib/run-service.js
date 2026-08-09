@@ -7,11 +7,18 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { newManifest, writeManifest, readManifest, updateManifest } from './web-manifest.js';
-import { scanRun, listRuns, defaultIsAlive } from './run-scan.js';
+import { scanRun, listRuns, defaultIsAlive, finalizedFinal } from './run-scan.js';
 import { createRingLog } from './ring-log.js';
 import { watchRun } from './artifact-watch.js';
 import { estimateRender, readProbeResolution, readRenderResolution, readUpscaleProvider } from './estimator.js';
 import { safeChild } from './paths.js';
+// Both config-free by construction (the runs-caps canary walks this graph): the continuity rule is a
+// pure function over a run record, and the model registry imports nothing at all.
+import { computeLineage, resolveBoundaries, BOUNDARY_MODES } from './lineage.js';
+import { capsFor, normalizeBackend } from '../../../src/lib/render-models.js';
+// The cast count the seam rule reads, from the module that owns the rule — a job with no elements
+// of its own inherits the WHOLE roster, and that subtlety is worth deriving in exactly one place.
+import { castRefCountFor } from '../../../src/lib/seam-rule.js';
 // config-FREE import: run-service is loaded eagerly by app.js, and the demo/e2e server sets FAL_BASE_URL
 // only AFTER its static import chain — importing anything that pulls config.js here would snapshot the
 // wrong (real) fal endpoint and make the validators/renders miss the mock.
@@ -201,6 +208,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     if (kind === 'render') { // full render — finishRender already assembled + wrote render.json
       updateManifest(dir, (m) => {
         mergeJobClips(m, result.jobs);
+        mergeLineage(m, result.jobs);
         const takeId = path.basename(result.runDir ?? '');
         m.cuts.push({ id: `c${m.cuts.length + 1}`, take: takeId, master: result.master ?? null, shortSide: result.masterShortSide ?? null, ...stitchFields(result), createdAt: now().toISOString() });
         return m;
@@ -209,17 +217,24 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     }
 
     if (kind === 'probe') { // stitch precedes review: assemble the probe clip now (free)
-      updateManifest(dir, (m) => { mergeJobClips(m, result.jobs); return m; });
+      updateManifest(dir, (m) => { mergeJobClips(m, result.jobs); mergeLineage(m, result.jobs); return m; });
       if (result.runDir) enqueueAssemble(runId, result.runDir);
       return;
     }
 
     if (kind === 'render-job') {
-      updateManifest(dir, (m) => { mergeJobClips(m, [{ jobId: result.jobId, clip: result.clip }]); return m; });
+      updateManifest(dir, (m) => { mergeJobClips(m, [result]); mergeLineage(m, [result]); return m; });
       const cascade = pendingCascade.get(runId);
       if (cascade && cascade.jobs.length) {
         const nextJob = cascade.jobs.shift();
-        enqueueRenderJob(runId, { jobId: nextJob, takeDir: cascade.takeDir, seamFrom: cascade.takeDir, feedback: cascade.feedback, take: cascade.take });
+        enqueueRenderJob(runId, {
+          jobId: nextJob, takeDir: cascade.takeDir, seamFrom: cascade.takeDir,
+          // The closing pin belongs to the LAST job of the cascade and to no other: every earlier
+          // job's ending is defined by the job that follows it in this same chain, so pinning one
+          // would fight the chain it was queued to rebuild.
+          lastFrameFrom: cascade.jobs.length ? undefined : cascade.lastFrameFrom,
+          feedback: cascade.feedback, take: cascade.take, promptOverrides: cascade.promptOverrides,
+        });
         return;
       }
       pendingCascade.delete(runId);
@@ -241,10 +256,9 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     if (kind === 'upscale') { // approve's paid tail: the upscaled re-assembly is the final
       const chosenCut = pendingApprove.get(runId) ?? null; // the cut approve() upscaled (null ⇒ latest, the default)
       pendingApprove.delete(runId);
-      updateManifest(dir, (m) => {
-        m.approved = { cut: chosenCut ?? m.cuts.at(-1)?.id ?? null, final: result.master ?? null, upscaled: true, ...stitchFields(result), at: now().toISOString() };
-        return m;
-      });
+      updateManifest(dir, (m) => recordFinal(m, {
+        cut: chosenCut ?? m.cuts.at(-1)?.id ?? null, final: result.master ?? null, upscaled: true, ...stitchFields(result), at: now().toISOString(),
+      }));
       return;
     }
   }
@@ -269,18 +283,94 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     }
   }
 
+  /**
+   * The take a clip belongs to: renders/<take>/<job>/clip.mp4 → '<take>'. The path is the only
+   * honest source — a job's newest clip may well live in an older take than the one being written.
+   */
+  const takeOfClip = (clip) => (clip ? path.basename(path.dirname(path.dirname(String(clip)))) : null);
+
+  /**
+   * Track each job's newest clip LINEAGE — which take it came out of and the seams the renderer
+   * recorded for it (schema:2). `jobClips` alone cannot answer "does segment 2 still continue from
+   * segment 1?", because a clip's seam names the take/job/clip it opened on and that source may
+   * since have been replaced (run b1nx). Ids and the renderer's own seam records only; the
+   * per-joint verdict is computed from them by lib/lineage.js, never stored.
+   */
+  function mergeLineage(m, jobs) {
+    m.clipLineage = m.clipLineage ?? {};
+    for (const j of jobs ?? []) {
+      const id = j.jobId ?? j.job;
+      if (!id || !j.clip) continue; // a failed job replaces nothing — its predecessor's lineage stands
+      m.clipLineage[id] = { take: takeOfClip(j.clip), seamIn: j.seamIn ?? null, seamOut: j.seamOut ?? null };
+    }
+  }
+
+  /**
+   * The cut as the pure continuity rule wants it: one entry per plan job, pointing at that job's
+   * NEWEST clip and the seams the renderer recorded for it. `clipLineage` is exactly what composeCut
+   * would write into the next take, so the answer matches the cut the reviewer is looking at — and
+   * it costs no disk read at all.
+   */
+  function cutRecordFor(runId, m, jobIds) {
+    const byTake = new Map();
+    const cut = jobIds.map((jobId) => {
+      const lin = m?.clipLineage?.[jobId] ?? null;
+      const clip = m?.jobClips?.[jobId] ?? null;
+      const take = lin?.take ?? takeOfClip(clip);
+      if (take && clip) {
+        if (!byTake.has(take)) byTake.set(take, []);
+        byTake.get(take).push({ jobId, clip, seamIn: lin?.seamIn ?? null, seamOut: lin?.seamOut ?? null });
+      }
+      return { jobId, take };
+    });
+    // Oldest take first: the legacy derivation replays history in this order, and a map keyed by
+    // job order would hand it the wrong one.
+    const nOf = (t) => Number(/^t(\d+)$/.exec(t)?.[1] ?? 0);
+    const takes = [...byTake.entries()].sort((a, b) => nOf(a[0]) - nOf(b[0])).map(([take, jobs]) => ({ take, jobs }));
+    return { runId, takes, cut };
+  }
+
+  /** The model registry's caps for a backend, or null when the run names one we no longer know. */
+  const capsOf = (backend) => { try { return capsFor(normalizeBackend(backend).id); } catch { return null; } };
+
   /** Write a full-composition render.json into takeDir: every spec job's newest clip, in order. */
   function composeCut(runId, takeDir) {
     const dir = dirFor(runId);
     const spec = readJson(path.join(dir, 'spec.json'));
     const m = readManifest(dir);
     if (!spec || !m?.jobClips) return;
-    const jobs = (spec.kling?.jobs ?? []).map((j) => ({ jobId: j.job_id, clip: m.jobClips[j.job_id] ?? null }));
+    // Each clip carries its OWN seams into the composition, read from the take it was rendered in
+    // (cached per take dir — a composition of N jobs usually spans one or two takes). Dropping them
+    // here is what made every mixed cut indistinguishable from an intact chain.
+    const takeJobs = new Map();
+    const seamsFor = (jobId, clip) => {
+      const takeId = takeOfClip(clip);
+      const takeDirOf = clip ? path.dirname(path.dirname(String(clip))) : null;
+      if (takeDirOf && !takeJobs.has(takeDirOf)) {
+        const rj = readJson(path.join(takeDirOf, 'render.json'));
+        takeJobs.set(takeDirOf, new Map((rj?.jobs ?? []).map((rec) => [rec.jobId ?? rec.job, rec])));
+      }
+      const rec = takeDirOf ? takeJobs.get(takeDirOf)?.get(jobId) : null;
+      // The manifest's own record is the fallback for a take whose render.json is gone or predates
+      // the composition (the CLI writes it before the web layer ever sees the take).
+      const fb = m.clipLineage?.[jobId];
+      return {
+        take: takeId ?? fb?.take ?? null,
+        seamIn: rec?.seamIn ?? (fb?.take === takeId ? fb?.seamIn : null) ?? null,
+        seamOut: rec?.seamOut ?? (fb?.take === takeId ? fb?.seamOut : null) ?? null,
+      };
+    };
+    const jobs = (spec.kling?.jobs ?? []).map((j) => {
+      const clip = m.jobClips[j.job_id] ?? null;
+      return { jobId: j.job_id, clip, ...seamsFor(j.job_id, clip) };
+    });
     const existing = readJson(path.join(takeDir, 'render.json')) ?? {};
-    // Composition BREAKS the seam lineage: these clips come from different takes, so a downstream
-    // clip was chained to the OLD take of the job before it (that is what the cascade warning is
-    // about). Inheriting `chained: true` from the take we are overwriting would tell the seamless
-    // stitcher to drop a real frame at what is now a genuine cut, so it is cleared, not spread.
+    // Composition BREAKS the run-wide seam lineage: these clips come from different takes, so a
+    // downstream clip may have been chained to the OLD take of the job before it (that is what the
+    // cascade warning is about). Inheriting `chained: true` from the take we are overwriting would
+    // tell the seamless stitcher to drop a real frame at what is now a genuine cut, so it is
+    // cleared, not spread. The per-JOINT truth now lives in each job's seamIn/seamOut above —
+    // `chained` stays only so readers written before those fields keep behaving exactly as they did.
     fs.writeFileSync(path.join(takeDir, 'render.json'), JSON.stringify({ ...existing, project: spec.project?.title, composed: true, chained: false, jobs }, null, 2) + '\n');
   }
 
@@ -318,19 +408,108 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     });
   }
 
-  function enqueueRenderJob(runId, { jobId, takeDir, seamFrom, feedback, take }) {
+  function enqueueRenderJob(runId, { jobId, takeDir, seamFrom, firstFrameFrom, lastFrameFrom, feedback, take, promptOverrides }) {
     const dir = dirFor(runId);
     return mgr.enqueue({
       runId, lane: 'spend', kind: 'render-job',
       script: CLI(root, 'render-job.js'),
       args: [
         '--spec', path.join(dir, 'spec.json'), '--job', jobId, '--out', takeDir,
+        // --seam-from names the take the opening frame came off (that is what makes the joint
+        // readable afterwards); --first-frame-from names the frame itself, so the boundary the user
+        // chose is honoured however the chaining default is configured.
         ...(seamFrom ? ['--seam-from', seamFrom] : []),
+        ...(firstFrameFrom ? ['--first-frame-from', firstFrameFrom] : []),
+        ...(lastFrameFrom ? ['--last-frame-from', lastFrameFrom] : []),
         ...(feedback ? ['--feedback', feedback] : []),
         ...(take ? ['--take', String(take)] : []),
+        ...(promptOverrides ? ['--prompt-overrides', promptOverrides] : []),
       ],
       env: env(), cwd: root,
     });
+  }
+
+  // ── Prompt overrides (WS2-P4) ──────────────────────────────────────────────
+  // The sidecar lives at the RUN root so it survives a revise (which rewrites spec.json). A take is
+  // immutable, so each one gets its OWN copy at enqueue: months later, "what did we send for t3?"
+  // is answerable from t3 alone.
+
+  const OVERRIDES_FILE = 'prompt-overrides.json';
+  /** How many prompt-edit/discard rows the History panel keeps (the newest ones). */
+  const PROMPT_HISTORY_MAX = 20;
+
+  /**
+   * Snapshot the run's prompt overrides into a reserved take dir.
+   *
+   * A sidecar that EXISTS but cannot be read or copied refuses the render (409). Degrading to the
+   * agents' text would spend the user's money rendering words they replaced, and label the take
+   * `promptSource:'plan'` — silently ignoring an edit is the one failure a user cannot see in the
+   * output, which is exactly what src/lib/prompt-overrides.js exists to prevent on the CLI path.
+   * No sidecar at all is not a failure: that run simply renders the plan.
+   *
+   * @param {string} dir  the run dir
+   * @param {string} takeDir  the take reserved for this render
+   * @param {string[]} jobIds  the jobs this render will actually submit
+   * @returns {{args:string[], promptSource:'plan'|'override'}} the CLI flag, and whose words the
+   *   take is rendering — recorded on the take so a past render explains itself.
+   */
+  /** Run `fn` against an already-reserved take dir, releasing the reservation if it throws — a take
+   *  number must not be burned by a render that never got as far as the queue. */
+  function reserved(takeDir, fn) {
+    try {
+      return fn();
+    } catch (e) {
+      fs.rmSync(takeDir, { recursive: true, force: true });
+      throw e;
+    }
+  }
+
+  function snapshotPromptOverrides(dir, takeDir, jobIds) {
+    const src = path.join(dir, OVERRIDES_FILE);
+    if (!fs.existsSync(src)) return { args: [], promptSource: 'plan' };
+    const unusable = (why) => Object.assign(new Error(`this run's saved prompt edits are unusable (${why})`), {
+      statusCode: 409, hint: 'discard the edited prompt (or fix prompt-overrides.json) — rendering the plan instead would spend money on words you replaced',
+    });
+    let jobs;
+    try { jobs = JSON.parse(fs.readFileSync(src, 'utf8'))?.jobs; } catch { throw unusable(`${OVERRIDES_FILE} is not readable JSON`); }
+    if (!jobs || typeof jobs !== 'object' || Array.isArray(jobs)) throw unusable(`${OVERRIDES_FILE} has no jobs object`);
+    const dest = path.join(takeDir, OVERRIDES_FILE);
+    try { fs.copyFileSync(src, dest); } catch (e) { throw unusable(`it could not be snapshotted into the take — ${String(e?.message ?? e).slice(0, 80)}`); }
+    // 'override' only when an edit really reaches one of the jobs being rendered — a sidecar that
+    // only holds K1's edit must not label a K2-only re-render as edited.
+    return { args: ['--prompt-overrides', dest], promptSource: jobIds.some((id) => jobs[id]) ? 'override' : 'plan' };
+  }
+
+  /**
+   * Tell every open tab that a prompt edit landed. Free and local — no render, no spend — so this
+   * broadcasts a fact, never a cost. It also files the edit as takes-adjacent lineage: the words a
+   * render is about to send changed, which is exactly what the History panel exists to show, and
+   * `takes[].promptSource` only says a take DID render an override, never when the decision was
+   * made. Best effort on purpose — a CLI-created run has no manifest, and the edit is already
+   * saved by the time we get here, so failing to note it must never fail the edit.
+   */
+  function promptOverrideChanged(runId, { jobId, action, source, stale = false }) {
+    const kind = action === 'discarded' ? 'prompt-discard' : 'prompt-edit';
+    try {
+      updateManifest(dirFor(runId), (m) => {
+        m.history = Array.isArray(m.history) ? m.history : [];
+        // Ids stay unique across a compaction by counting from the highest one still present, never
+        // from how many rows survive.
+        const nth = m.history.reduce((n, h) => (h?.kind === kind ? Math.max(n, Number(/-(\d+)$/.exec(h.id ?? '')?.[1] ?? 0)) : n), 0) + 1;
+        m.history.push({ id: `${kind}-${nth}`, kind, job: jobId, at: now().toISOString() });
+        // A prompt edit is free and iterative — someone tuning one segment can save it fifty times,
+        // and every row would then ride the manifest AND every detail payload forever. Only the
+        // newest PROMPT_HISTORY_MAX edit rows are kept; reopens/takes/cuts are lifecycle facts and
+        // are never compacted.
+        const edits = m.history.filter((h) => h?.kind === 'prompt-edit' || h?.kind === 'prompt-discard');
+        if (edits.length > PROMPT_HISTORY_MAX) {
+          const drop = new Set(edits.slice(0, edits.length - PROMPT_HISTORY_MAX));
+          m.history = m.history.filter((h) => !drop.has(h));
+        }
+        return m;
+      });
+    } catch { /* no manifest (a CLI run) — the event below is still the fact that matters */ }
+    bus.emit(runId, { type: 'prompt-override', jobId, action, source, stale: !!stale });
   }
 
   // ── Public API (what the routes call) ────────────────────────────────────
@@ -355,6 +534,11 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
 
   /** Re-run the engine on an existing run (recovery after a failed/interrupted plan). LLM cost, no render. */
   function plan(runId) {
+    // Guarded exactly like revise(): replanning both SPENDS (a full engine pass) and rewrites
+    // spec.json under a file the user already has — the strongest form of "rewrites the plan behind
+    // a delivered final", since the prompt views, the lineage and the finals history would all then
+    // describe a plan the delivered video was never made from.
+    assertNotFinalized(runId);
     const dir = dirFor(runId);
     const m = readManifest(dir);
     if (!m) throw Object.assign(new Error('not a web run'), { statusCode: 409, hint: 'CLI-created runs are planned from the terminal' });
@@ -385,7 +569,84 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     }
   }
 
+  /**
+   * A DELIVERED run does no more work until it is deliberately reopened (WS2-P6). The UI hides the
+   * spend buttons after an approval, but that is presentation: a stale tab, a second browser or a
+   * curl still reach these endpoints, and every one of them either spends money or rewrites the
+   * plan behind a file the user already has. Ordered BEFORE assertNoSpendInFlight everywhere,
+   * because a finalized run has no in-flight spend to report — "reopen it" is the honest answer.
+   */
+  function assertNotFinalized(runId) {
+    const final = finalizedFinal(readManifest(dirFor(runId)));
+    if (final && fs.existsSync(final)) {
+      throw Object.assign(new Error('this run is finalized — its final file is delivered'), {
+        statusCode: 409, hint: 'reopen this run to make changes (the delivered file stays on disk)',
+      });
+    }
+  }
+
+  /**
+   * Reopen a delivered run so it can be changed again. Nothing is deleted and nothing is unlinked:
+   * `approved` (and the file it points at) stays exactly where it is until a new approval supersedes
+   * it — only `reopenedAt` moves, and that is what returns the run to review and lifts the guard.
+   */
+  function reopen(runId) {
+    const dir = dirFor(runId);
+    const m = readManifest(dir);
+    if (!m) throw Object.assign(new Error('not a web run'), { statusCode: 409, hint: 'CLI-created runs are driven from the terminal' });
+    // An upscale is the paid tail of an approval, still writing the file being delivered — reopening
+    // mid-flight would strand it. Any other paid lane job gets the same refusal for the same reason.
+    const spend = liveJobsFor(runId).find((j) => j.lane === 'spend');
+    if (spend) {
+      throw Object.assign(new Error(`a paid ${spend.kind} is still ${spend.startedAt ? 'running' : 'queued'} for this run — reopening now would strand it`), {
+        statusCode: 409, hint: 'wait for it to finish (or cancel it), then reopen',
+      });
+    }
+    const final = finalizedFinal(m);
+    if (!final) {
+      throw Object.assign(
+        new Error(m.approved ? 'this run is already open for changes' : 'this run was never finalized'),
+        { statusCode: 409, hint: m.approved ? 'nothing is locked — render, revise or re-render as usual' : 'reopening is for delivered runs; approve a cut first' },
+      );
+    }
+    const at = now().toISOString();
+    updateManifest(dir, (mm) => {
+      mm.reopenedAt = at;
+      // takes-adjacent lifecycle marker, for the History panel to list beside takes/cuts/revisions
+      mm.history = Array.isArray(mm.history) ? mm.history : [];
+      mm.history.push({ id: `reopen-${mm.history.filter((h) => h?.kind === 'reopen').length + 1}`, kind: 'reopen', final, at });
+      mm.lastError = null;
+      return mm;
+    });
+    emitStatus(runId);
+    return { reopenedAt: at, final };
+  }
+
+  /**
+   * Record a delivery in `finals` and make it the current `approved`. The history is append-only:
+   * the entry it supersedes keeps its own file path and gains `replacedBy`, so "where did the first
+   * final go?" is always answerable — nothing on disk is touched. An approval recorded before
+   * `finals` existed is backfilled here, the one moment we know it is about to be superseded.
+   */
+  function recordFinal(m, approved) {
+    m.finals = Array.isArray(m.finals) ? m.finals : [];
+    const entry = (rec) => ({ id: `final-${m.finals.length + 1}`, cut: rec.cut ?? null, final: rec.final, upscaled: !!rec.upscaled, at: rec.at ?? null });
+    const prev = m.approved;
+    if (prev?.final && !m.finals.some((f) => f.final === prev.final && f.at === prev.at)) m.finals.push(entry(prev));
+    // A delivery with no file is a broken approval, not a delivery — it replaces nothing and is not
+    // history (`approved` still records it, exactly as it did before this existed).
+    if (approved.final) {
+      const superseded = m.finals.at(-1);
+      const row = entry(approved);
+      if (superseded) superseded.replacedBy = row.id;
+      m.finals.push(row);
+    }
+    m.approved = approved;
+    return m;
+  }
+
   function render(runId, { mode }) {
+    assertNotFinalized(runId);
     const dir = dirFor(runId);
     const spec = readJson(path.join(dir, 'spec.json'));
     if (!spec) throw Object.assign(new Error('this run has no plan yet'), { statusCode: 409, hint: 'wait for planning to finish (or revise it) before rendering' });
@@ -400,8 +661,11 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     fs.mkdirSync(takeDir, { recursive: true }); // reserve the tN NOW — a queued sibling must not resolve to the same take
     const backend = readManifest(dir)?.backend ?? 'kling';
     const est = estimateRender(spec, { backend, mode, ...estOpts(backend) });
+    const specJobs = (spec.kling?.jobs ?? []).map((j) => j.job_id);
+    // a probe renders only the FIRST job, so only its edit can be in play
+    const overrides = reserved(takeDir, () => snapshotPromptOverrides(dir, takeDir, mode === 'probe' ? specJobs.slice(0, 1) : specJobs));
     updateManifest(dir, (m) => {
-      m.takes.push({ id: takeId, mode, revision: m.revisions.at(-1)?.id ?? null, createdAt: now().toISOString(), estUsd: est.totalUsd });
+      m.takes.push({ id: takeId, mode, revision: m.revisions.at(-1)?.id ?? null, createdAt: now().toISOString(), estUsd: est.totalUsd, promptSource: overrides.promptSource });
       m.costLedger.push({ ts: now().toISOString(), action: mode, ...ledgerLine(est) });
       m.lastError = null;
       return m;
@@ -410,7 +674,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
       runId, lane: 'spend', kind: mode === 'probe' ? 'probe' : 'render',
       script: CLI(root, 'render.js'),
       args: ['--spec', path.join(dir, 'spec.json'), '--out', takeDir, '--out-name', outNameFor(runId, spec, takeId),
-        ...(mode === 'probe' ? ['--probe'] : [])],
+        ...(mode === 'probe' ? ['--probe'] : []), ...overrides.args],
       env: env(), cwd: root,
     });
     emitStatus(runId); // the page flips to 'rendering' NOW — queued work must never look like nothing happened
@@ -418,6 +682,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
   }
 
   function revise(runId, { feedback, scope }) {
+    assertNotFinalized(runId);
     const dir = dirFor(runId);
     if (!fs.existsSync(path.join(dir, 'spec.json'))) {
       throw Object.assign(new Error('this run has no plan to revise'), { statusCode: 409, hint: 'planning must finish once before a revision' });
@@ -442,12 +707,17 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     return revise(runId, { feedback: CONTENT_POLICY_REVISE_FEEDBACK });
   }
 
-  function rerenderJob(runId, { jobId, cascade = false, feedback, take }) {
+  function rerenderJob(runId, { jobId, cascade = false, feedback, take, boundaries = 'auto' }) {
+    assertNotFinalized(runId);
     const dir = dirFor(runId);
     const spec = readJson(path.join(dir, 'spec.json'));
     if (!spec) throw Object.assign(new Error('this run has no plan yet'), { statusCode: 409, hint: 'plan before rendering' });
     const jobs = (spec.kling?.jobs ?? []).map((j) => j.job_id);
     if (!jobs.includes(jobId)) throw Object.assign(new Error(`job "${jobId}" is not in this plan`), { statusCode: 400, hint: `jobs: ${jobs.join(', ')}` });
+    const mode = boundaries ?? 'auto';
+    if (!BOUNDARY_MODES.includes(mode)) {
+      throw Object.assign(new Error(`"${mode}" is not a boundary plan`), { statusCode: 400, hint: `boundaries: ${BOUNDARY_MODES.join(', ')}` });
+    }
     assertNoSpendInFlight(runId);
     const m = readManifest(dir);
     const takeDir = nextTakeDir(dir);
@@ -457,30 +727,68 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     const cascadeJobs = cascade ? downstream : [];
     const backend = m?.backend ?? 'kling';
     const est = estimateRender(spec, { backend, mode: 'job', jobId, cascade, ...estOpts(backend) });
+
+    // WS2-P5 — which boundaries this take pins, decided by the pure rule over the cut as it stands.
+    // The take is one chain: its OPENING pin belongs to the first job rendered, its CLOSING pin to
+    // the last, because every job in between has both ends defined by its cascade neighbours.
+    const lastRendered = cascadeJobs.at(-1) ?? jobId;
+    const lineage = computeLineage(cutRecordFor(runId, m, jobs));
+    const planFor = (id) => resolveBoundaries({
+      jobIds: jobs, jobId: id, continuity: lineage, mode,
+      caps: capsOf(backend), castRefCount: castRefCountFor(spec, id),
+    });
+    const opening = planFor(jobId);
+    const closing = lastRendered === jobId ? opening : planFor(lastRendered);
+
     // Seam-in: renderJob wants <seamFrom>/<prevJob>/last_frame.png. The trustworthy source is the
     // take dir that produced the PREVIOUS job's newest clip (manifest.jobClips) — the latest cut's
     // dir may be a composed cut or a single-job take that never held the neighbour's frame.
-    const prevJobId = jobs[jobs.indexOf(jobId) - 1];
+    const prevJobId = opening.start ? opening.start.from?.jobId ?? jobs[jobs.indexOf(jobId) - 1] : null;
     const prevClip = prevJobId ? m?.jobClips?.[prevJobId] : null;
     let seamFrom;
     if (prevClip && fs.existsSync(path.join(path.dirname(prevClip), 'last_frame.png'))) {
       seamFrom = path.dirname(path.dirname(prevClip)); // <takeDir>/<prevJob>/clip.mp4 → <takeDir>
-    } else if (m?.cuts?.at(-1)?.take) {
+    } else if (prevJobId && m?.cuts?.at(-1)?.take) {
       seamFrom = path.join(dir, 'renders', m.cuts.at(-1).take);
     }
+    const openingFrame = seamFrom && prevJobId ? path.join(seamFrom, prevJobId, 'last_frame.png') : null;
+    const firstFrameFrom = openingFrame && fs.existsSync(openingFrame) ? openingFrame : undefined;
+    // Seam-out: the NEXT segment's own clip, handed to the child as a CLIP — grabbing its opening
+    // frame is the renderer's job (one implementation of that grab, and it is the one that already
+    // knows which end of a neighbour a closing pin wants).
+    const nextClip = closing.end ? m?.jobClips?.[closing.end.to?.jobId] : null;
+    const lastFrameFrom = nextClip && fs.existsSync(nextClip) ? nextClip : undefined;
+
+    // Every job this take will render — the cascade jobs land in the SAME take dir, so they read the
+    // same snapshot (that is why it is taken once, here, and not per enqueue).
+    const overrides = reserved(takeDir, () => snapshotPromptOverrides(dir, takeDir, [jobId, ...cascadeJobs]));
     updateManifest(dir, (mm) => {
-      mm.takes.push({ id: takeId, mode: 'job', jobId, cascade, revision: mm.revisions.at(-1)?.id ?? null, createdAt: now().toISOString(), estUsd: est.totalUsd, feedback: feedback ?? null });
+      mm.takes.push({ id: takeId, mode: 'job', jobId, cascade, revision: mm.revisions.at(-1)?.id ?? null, createdAt: now().toISOString(), estUsd: est.totalUsd, feedback: feedback ?? null, promptSource: overrides.promptSource });
       mm.costLedger.push({ ts: now().toISOString(), action: `rerender ${jobId}${cascade ? ' + downstream' : ''}`, ...ledgerLine(est) });
       mm.lastError = null;
       return mm;
     });
-    if (cascadeJobs.length) pendingCascade.set(runId, { takeDir, takeId, jobs: [...cascadeJobs], feedback, take });
-    const queued = enqueueRenderJob(runId, { jobId, takeDir, seamFrom, feedback, take });
+    if (cascadeJobs.length) pendingCascade.set(runId, { takeDir, takeId, jobs: [...cascadeJobs], feedback, take, promptOverrides: overrides.args[1] ?? null, lastFrameFrom });
+    const queued = enqueueRenderJob(runId, {
+      jobId, takeDir, seamFrom, firstFrameFrom,
+      lastFrameFrom: cascadeJobs.length ? undefined : lastFrameFrom, // the last cascade job gets it
+      feedback, take, promptOverrides: overrides.args[1] ?? null,
+    });
     emitStatus(runId);
-    return { takeId, queued, estUsd: est.totalUsd, cascadeJobs };
+    // What was actually pinned, not what was asked for: a boundary whose frame is not on disk is
+    // reported as unpinned, so the dialog never claims a join this take will not have.
+    const applied = {
+      mode,
+      start: seamFrom ? opening.start : null,
+      end: lastFrameFrom ? closing.end : null,
+      startMode: seamFrom ? opening.startMode : 'none',
+      endMode: lastFrameFrom ? closing.endMode : 'none',
+    };
+    return { takeId, queued, estUsd: est.totalUsd, cascadeJobs, boundaries: applied };
   }
 
   function assemble(runId, { composition } = {}) {
+    assertNotFinalized(runId);
     const dir = dirFor(runId);
     if (composition) {
       const spec = readJson(path.join(dir, 'spec.json'));
@@ -543,10 +851,9 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
       throw Object.assign(new Error('nothing to approve — no assembled master exists'), { statusCode: 409, hint: 'render and let the stitch finish first (assemble is free)' });
     }
     if (!upscale) {
-      const m = updateManifest(dir, (mm) => {
-        mm.approved = { cut: chosen?.id ?? mm.cuts.at(-1)?.id ?? null, final: master, upscaled: false, at: now().toISOString() };
-        return mm;
-      });
+      const m = updateManifest(dir, (mm) => recordFinal(mm, {
+        cut: chosen?.id ?? mm.cuts.at(-1)?.id ?? null, final: master, upscaled: false, at: now().toISOString(),
+      }));
       emitStatus(runId);
       return { final: m.approved.final, queued: null };
     }
@@ -629,7 +936,8 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
   }
 
   return {
-    onEvent, createRun, plan, render, revise, reviseForContentPolicy, rerenderJob, assemble, approve, cancel, dismissError, detail,
+    onEvent, createRun, plan, render, revise, reviseForContentPolicy, rerenderJob, assemble, approve, reopen, cancel, dismissError, detail,
+    promptOverrideChanged,
     list: () => listRuns(runsDir, { isAlive }).map(withLiveStatus),
     ringFor, dirFor,
     /** Boot-time reconciliation: interrupted runs become visible without any event. */

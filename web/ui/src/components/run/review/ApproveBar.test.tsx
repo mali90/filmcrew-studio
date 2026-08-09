@@ -7,6 +7,15 @@ import { ApproveBar } from './ApproveBar';
 
 afterEach(clearPaidState);
 
+/** A delivered run the user reopened: `approved` and its file survive, `reopenedAt` is newer. */
+function reopenedRun() {
+  const run = makeRun('review');
+  run.manifest!.approved = { cut: 'c1', final: '/abs/out/ocean-final.mp4', upscaled: false, at: '2026-07-04T10:05:00.000Z' };
+  run.manifest!.reopenedAt = '2026-07-04T11:00:00.000Z';
+  run.manifest!.finals = [{ id: 'final-1', cut: 'c1', final: '/abs/out/ocean-final.mp4', upscaled: false, at: '2026-07-04T10:05:00.000Z' }];
+  return run;
+}
+
 function captureApprove() {
   const captured: { body: unknown } = { body: null };
   server.use(
@@ -178,5 +187,51 @@ describe('ApproveBar', () => {
     // no explicit cut ⇒ "latest render" selection, so the HD render metadata still guards against a paid no-op
     renderReview(<ApproveBar run={run} />);
     expect(screen.getByRole('checkbox')).toBeDisabled();
+  });
+
+  // ── After a reopen (WS2-P6, spec D26) ─────────────────────────────────────
+  // The same button now delivers a SECOND time. "Replace" is only an honest word because replacing
+  // costs nothing and deletes nothing, so the caption has to carry both halves of that.
+  it('reads "Replace final" once the run has been reopened, and names the file that stays', () => {
+    renderReview(<ApproveBar run={reopenedRun()} />);
+
+    expect(screen.getByRole('button', { name: /^Replace final$/ })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: /^Approve$/ })).not.toBeInTheDocument();
+
+    const caption = screen.getByText(/This writes a new final/).textContent ?? '';
+    expect(caption).toMatch(/Approving is free\./);          // true: a manifest write, no provider call
+    expect(caption).toMatch(/ocean-final\.mp4 stays on disk/); // and nothing is deleted
+  });
+
+  it('the plain replace is not a paid button; only the "& upscale" variant is', async () => {
+    markPaidConfirmed();
+    const { rerender } = renderReview(<ApproveBar run={reopenedRun()} />);
+
+    // plain: no CostTag, no price, nothing that reads as a charge
+    expect(screen.queryByLabelText(/estimated cost/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/≈ \$/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /Upscale to ~1080p with Topaz/ }));
+    expect(await screen.findByRole('button', { name: /Replace final & upscale/ })).toBeInTheDocument();
+    // the Topaz tail is real spend and says its price on the button
+    await screen.findByLabelText('estimated cost $4.16');
+    // and the free claim is dropped the moment money is involved
+    const caption = screen.getByText(/This writes a new final/).textContent ?? '';
+    expect(caption).not.toMatch(/free/i);
+    expect(caption).toMatch(/ocean-final\.mp4 stays on disk/);
+
+    // a run delivered again since the reopen is no longer "replacing" anything
+    const delivered = reopenedRun();
+    delivered.manifest!.approved!.at = '2026-07-04T12:00:00.000Z'; // newer than reopenedAt
+    rerender(<ApproveBar run={delivered} />);
+    expect(screen.getByRole('button', { name: /^Approve & upscale/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Replace final/ })).not.toBeInTheDocument();
+  });
+
+  it('replacing the final submits the same approve payload as a first approval', async () => {
+    const captured = captureApprove();
+    renderReview(<ApproveBar run={reopenedRun()} />);
+    fireEvent.click(screen.getByRole('button', { name: /^Replace final$/ }));
+    await waitFor(() => expect(captured.body).toEqual({ upscale: false }));
   });
 });

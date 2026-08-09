@@ -13,6 +13,7 @@ import {
   PROVIDERS,
   RENDER_MODELS,
   aspectsFor as registryAspectsFor,
+  capsFor as registryCapsFor,
   castLimitFor as registryCastLimitFor,
   normalizeBackend as registryNormalizeBackend,
 } from '../../src/lib/render-models.js';
@@ -81,3 +82,86 @@ export function backendIdFor(model: string, provider: string): Backend {
 export const castLimitFor = (value: string): number => registryCastLimitFor(value) as number;
 /** The ratios this model renders, in menu order (never 'adaptive'/'auto'). */
 export const aspectsFor = (value: string): Aspect[] => registryAspectsFor(value) as Aspect[];
+
+// ── Seams: how strongly this backend can pin a boundary frame (WS2-P5) ──────────────────────────
+//
+// The re-render dialog has to SAY, before anything is paid for, how a boundary frame will be
+// applied — and only a real first/last-frame anchor may ever be called "seamless". There is exactly
+// ONE implementation of that rule (src/lib/seam-rule.js, which the renderers, web/server and this
+// bundle all import); the functions below only type it and default its arguments. It is safe in the
+// browser for the same reason the registry is: zero env reads, no node builtins, no config.
+import {
+  chooseSeamMode as registryChooseSeamMode,
+  pinStrengths as registryPinStrengths,
+  castRefCountFor as registryCastRefCountFor,
+} from '../../src/lib/seam-rule.js';
+
+/** How a boundary frame gets applied: a true anchor, a reference-guided likeness, or nothing. */
+export type PinStrength = 'native' | 'soft' | 'none';
+
+/** Only the caps fields the seam rule reads — the registry is untyped JS. */
+interface SeamCaps {
+  family?: string;
+  nativeFirstFrame?: boolean;
+  nativeLastFrame?: boolean;
+  firstFrameExcludesRefs?: boolean;
+  maxImages?: number;
+  maxCombinedRefs?: number | null;
+  argMap?: Record<string, string | null> | null;
+}
+
+/** The merged caps bundle for a backend id (throws on an id no provider entry serves). */
+export const capsFor = (value: Backend | string): SeamCaps => registryCapsFor(value) as SeamCaps;
+
+type SeamArgs = { caps: SeamCaps; castRefCount?: number; hasSeamIn?: boolean; hasSeamOut?: boolean };
+const chooseSeamMode = registryChooseSeamMode as (p: SeamArgs) => { in: { mode: PinStrength }; out: { mode: PinStrength } };
+const pinStrengths = registryPinStrengths as (p: SeamArgs & { otherRefCount?: number }) => { in: PinStrength; out: PinStrength };
+
+/**
+ * How many cast image references a segment carries — the one thing the seam rule asks about the
+ * cast. A job that names no elements inherits the WHOLE roster (N paid uploads), not zero, which is
+ * why this is read from the registry helper rather than spelled out at each call site.
+ */
+export const castRefCountFor = registryCastRefCountFor as (spec: unknown, jobId: string) => number;
+
+/**
+ * Can this backend pin that end AT ALL? The model's own answer (`chooseSeamMode`), with no
+ * reference-budget arithmetic: used for capability probes ("does a closing pin even exist here?"),
+ * never to promise a user a particular join — that is `pinStrengthsFor` below.
+ */
+export function pinStrengthFor(
+  backend: Backend | string,
+  { castRefCount = 0, end }: { castRefCount?: number; end: 'in' | 'out' },
+): PinStrength {
+  let caps: SeamCaps;
+  try {
+    caps = capsFor(backend);
+  } catch {
+    // An id this build cannot resolve promises nothing — the weakest honest answer. 'soft' would
+    // read as "near-seamless (reference-guided)" in the UI, which is a promise, not an unknown.
+    return 'none';
+  }
+  const seam = chooseSeamMode({ caps, castRefCount, hasSeamIn: end === 'in', hasSeamOut: end === 'out' });
+  return end === 'in' ? seam.in.mode : seam.out.mode;
+}
+
+/**
+ * How both ends WOULD really be pinned, reference budget included — what the dialog's plain-words
+ * sentence is built from. A soft pin only holds while there is an image slot left for it: at a full
+ * cast, SEAM_PRIORITY drops the closing pin, then the opening one, and the renderer records the
+ * joint as a scene cut. Selling "near-seamless" for a pin that will be dropped is the one thing
+ * this must never do, so both ends are asked together (they compete for the same slots).
+ */
+export function pinStrengthsFor(
+  backend: Backend | string,
+  { castRefCount = 0, hasSeamIn = false, hasSeamOut = false }:
+    { castRefCount?: number; hasSeamIn?: boolean; hasSeamOut?: boolean },
+): { in: PinStrength; out: PinStrength } {
+  let caps: SeamCaps;
+  try {
+    caps = capsFor(backend);
+  } catch {
+    return { in: 'none', out: 'none' };
+  }
+  return pinStrengths({ caps, castRefCount, hasSeamIn, hasSeamOut });
+}

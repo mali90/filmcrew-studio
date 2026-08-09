@@ -5,3 +5,4 @@ export { ChangeRequestPanel } from './ChangeRequestPanel';
 export { ApproveBar } from './ApproveBar';
 export { TakesHistory } from './TakesHistory';
 export { FinalCard } from './FinalCard';
+export { PromptSheet, PromptSheetProvider, PromptButton, PROMPT_SHEET_ID } from './PromptSheet';

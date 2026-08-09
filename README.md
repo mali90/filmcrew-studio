@@ -90,7 +90,7 @@ npm run engine -- --brief "your idea here" --render --probe   # long multi-job v
 | `npm run doctor` | Health check (keys, ffmpeg, and everything a render needs). |
 | `npm run engine -- --brief "..." --render` | Plan a one-line idea and render it. Add `--probe` (multi-job plans: first job only), `--upscale`, `--backend seedance`, `--cast <names>`, `--environment <name>`; drop `--render` for the plan only. |
 | `npm run revise -- --from runs/<id> --feedback "..."` | Send director feedback back through the owning agents. |
-| `npm run render-job -- --from runs/<id> --job K2` | Re-render one job as a new take (seam-chained). |
+| `npm run render-job -- --from runs/<id> --job K2` | Re-render one job as a new take (seam-chained). Pin either end to a neighbour with `--first-frame-from` / `--last-frame-from`, and send edited words with `--prompt-overrides`. |
 | `npm run render -- --spec <spec.json>` | Render an existing plan. |
 | `npm run assemble -- --from runs/<id>/renders/<take>` | Finish or re-stitch a prior render — free, no API calls. |
 | `npm run mint-voice -- <name> <clip.mp3>` | Give a character a persistent voice (once per character). |
@@ -105,7 +105,8 @@ Three video models across two providers: **Kling 3.0** (default, fal-only), **Se
 - **Environments that persist**: a purely descriptive world/mood/palette bible (`environments/<slug>.md`, no images or voice), managed on the Cast page and set per idea to steer every shot's look. A sample environment, **Neon City**, ships in the box — open the Cast page or add `--environment neon-city` to any idea to try it.
 - **Seam-invisible stitching**: a video over the model's window renders as several chained jobs, and the local stitch colour-matches each chained joint, drops the frame the two clips share and crossfades — so a long cut reads as one take instead of popping at every seam. Pure local ffmpeg, no API and no spend; optional (`pip3 install numpy pillow`), and without it the plain hard-cut stitch still runs. [docs/STITCHING.md](docs/STITCHING.md)
 - **Honest money UX**: a price on every render button, first-job probes on multi-job plans, free re-assembly, upscale only when you choose it.
-- **Review like an editor**: per-clip strip with take history, scoped re-renders with seam-cascade warnings, change requests that re-run the engine.
+- **Review like an editor**: per-clip strip with take history and a chip on every join saying whether the two clips actually run together, scoped re-renders that can be pinned to the clip on either side, change requests that re-run the engine. **See the exact prompt each clip is sent, and edit it** — metered in the bytes the model counts, with the system's share re-composed at render time so your words go out verbatim ([docs/PROMPTS.md](docs/PROMPTS.md)); saving an edit is a local file write and spends nothing.
+- **Approved is not the end**: a delivered run can be reopened for changes, and until it is, the server itself refuses to spend on it. Your delivered file stays on disk — a later approval writes a new one beside it and keeps the history.
 - **A fully mocked test suite** — every test runs without keys, network, or spend.
 
 ## See it in action
@@ -167,6 +168,7 @@ Rendering is **paid, pay-as-you-go** at your render provider — every render sp
 - [docs/SETUP.md](docs/SETUP.md) — manual setup, custom characters, config reference
 - [docs/PROVIDERS.md](docs/PROVIDERS.md) — video models, planners, `.env` options
 - [docs/COST.md](docs/COST.md) — model limits and current prices
+- [docs/PROMPTS.md](docs/PROMPTS.md) — what gets sent per clip, the byte budgets, and editing it
 - [docs/STITCHING.md](docs/STITCHING.md) — how the clips become one video (seamless vs hard-cut seams)
 - [web/README.md](web/README.md) — web app architecture (for contributors)
 - [CHANGELOG.md](CHANGELOG.md)

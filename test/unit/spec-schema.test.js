@@ -85,9 +85,14 @@ test('text-to-video: empty kling.elements (and unscoped jobs) passes; ghost elem
   assert.match(errStr(validateSpec(bad, { upTo: 7 })), /not in kling\.elements/);
 });
 
-test('last_frame requires first_frame', () => {
-  const s = loadGoldenSpec(); s.kling.jobs[0].last_frame = 'elements/last-frame/x.png';
-  assert.match(errStr(validateSpec(s, { upTo: 7 })), /last_frame requires first_frame/);
+// WS2-P1: the two ends are decided independently (chooseSeamMode), so a closing frame no longer
+// implies an opening one — a segment that only has to LAND somewhere is exactly what a
+// frame-conditioned re-render asks for. Both are still rejected when present but empty.
+test('last_frame stands on its own; an empty path on either end is still rejected', () => {
+  const ok = loadGoldenSpec(); ok.kling.jobs[0].last_frame = 'elements/last-frame/x.png';
+  assert.equal(validateSpec(ok, { upTo: 7 }).ok, true, 'a closing frame without an opening one is legal');
+  const empty = loadGoldenSpec(); empty.kling.jobs[0].last_frame = '  ';
+  assert.match(errStr(validateSpec(empty, { upTo: 7 })), /last_frame must be a non-empty path/);
 });
 
 test('bad kling.model_name fails at upTo>=6', () => {

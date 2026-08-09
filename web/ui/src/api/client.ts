@@ -2,7 +2,8 @@
 // server's {error, hint} body — surfaces verbatim in the UI's error states.
 import type {
   CharactersResponse, CliStatus, CreateRunBody, DoctorReport, EnvironmentsResponse, Estimate, InstallCliEvent, ModelsResponse,
-  ReferencesList, RunDetail, RunSummary, SetupStatus, VoicesList,
+  PromptView, PromptsResponse, ReferencesList, RerenderJobBody, RerenderJobResult, RunDetail, RunSummary,
+  SetPromptBody, SetupStatus, VoicesList,
 } from '../../../shared/api-types';
 
 const BASE = '/api';
@@ -90,16 +91,31 @@ export const api = {
   deleteRun: (id: string) => del<{ deleted: boolean; bytes: number }>(`/runs/${id}`),
   spec: (id: string, file?: string) => get<unknown>(`/runs/${id}/spec${file ? `?file=${encodeURIComponent(file)}` : ''}`),
   log: (id: string, cursor = 0) => get<{ lines: { cursor: number; line: string }[]; nextCursor: number }>(`/runs/${id}/log?cursor=${cursor}`),
+  /** The prompt one job will be sent — or, with `take`, the immutable text a past take sent. */
+  prompt: (id: string, q: { job: string; take?: string }) =>
+    get<PromptView>(`/runs/${id}/prompt?job=${encodeURIComponent(q.job)}${q.take ? `&take=${encodeURIComponent(q.take)}` : ''}`),
+  prompts: (id: string) => get<PromptsResponse>(`/runs/${id}/prompts`),
+  /** Save one job's prompt. Free: a local file write — nothing is submitted and nothing is billed.
+   *  Over budget the server refuses with the byte numbers rather than truncating silently. */
+  putPrompt: (id: string, body: SetPromptBody) =>
+    req<PromptView>(`/runs/${id}/prompt`, { method: 'PUT', body: JSON.stringify(body) }),
+  /** Discard one job's edit and go back to the agents' text. Also free, and also local. */
+  deletePrompt: (id: string, job: string) =>
+    del<PromptView>(`/runs/${id}/prompt?job=${encodeURIComponent(job)}`),
   estimate: (id: string, q: { mode: string; jobId?: string; cascade?: boolean; cut?: string }) =>
     get<Estimate>(`/runs/${id}/estimate?mode=${q.mode}${q.jobId ? `&jobId=${q.jobId}` : ''}${q.cascade ? '&cascade=1' : ''}${q.cut ? `&cut=${q.cut}` : ''}`),
 
   render: (id: string, mode: 'probe' | 'full') => post<{ takeId: string; estUsd: number | null }>(`/runs/${id}/render`, { mode }),
   revise: (id: string, body: { feedback: string; scope?: string }) => post<{ revisionId: string }>(`/runs/${id}/revise`, body),
-  rerenderJob: (id: string, body: { jobId: string; cascade?: boolean; feedback?: string }) =>
-    post<{ takeId: string; estUsd: number | null; cascadeJobs: string[] }>(`/runs/${id}/rerender-job`, body),
+  /** Paid. `boundaries` says which ends to pin (default `auto` — mirror the joins the cut has). */
+  rerenderJob: (id: string, body: RerenderJobBody) =>
+    post<RerenderJobResult>(`/runs/${id}/rerender-job`, body),
   assemble: (id: string, composition?: Record<string, string>) => post<unknown>(`/runs/${id}/assemble`, { composition }),
   approve: (id: string, upscale: boolean, cut?: string) =>
     post<{ final: string | null }>(`/runs/${id}/approve`, { upscale, ...(cut ? { cut } : {}) }),
+  /** Reopen a delivered run so it can be changed again. Free, and nothing is lost: it moves one
+   *  timestamp in the manifest — the delivered file stays on disk and stays downloadable. */
+  reopen: (id: string) => post<{ reopenedAt: string; final: string }>(`/runs/${id}/reopen`),
   cancel: (id: string) => post<{ cancelled: 'queued' | 'active' | 'stale' | false }>(`/runs/${id}/cancel`),
   dismissError: (id: string) => post<{ dismissed: boolean }>(`/runs/${id}/dismiss-error`),
   replan: (id: string) => post<{ queued: unknown }>(`/runs/${id}/plan`),
