@@ -8,11 +8,13 @@
 // Read-only by design in WS2-P2: clicking a tile seeks the master, nothing here spends money.
 import { Fragment, useState } from 'react';
 import clsx from 'clsx';
-import { ChevronRight } from 'lucide-react';
+import { ChevronRight, Film } from 'lucide-react';
 import type { ContinuityEntry, JobView, RunDetail } from '../../../../../shared/api-types';
 import { jobSeconds, jointKindOf, jointSentence, type JointKind } from './lib';
 import { SegmentTile, THUMB_HEIGHT, type TileSize } from './SegmentTile';
 import { PromptButton } from './PromptSheet';
+import { SegmentRerenderDialog } from './SegmentRerenderDialog';
+import { Button } from '../../ui/Button';
 import type { SegmentClipState } from './ContinuityBadge';
 
 /** Connector column width per size (spec D1) — narrow enough that six 16:9 tiles still fit at `sm`. */
@@ -84,6 +86,9 @@ export function ClipStrip({ run, jobs, takeCountFor, promptStateFor, onSeek }: {
   // Selection is the menu (spec D11): picking a clip reveals that clip's actions in an ordinary row
   // beneath the strip — no hover-only affordance, no overflow menu (Don't #10). Escape clears it.
   const [selected, setSelected] = useState<number | null>(null);
+  // The re-render dialog is MOUNTED only while it is open: it estimates a price on open, and a
+  // dialog that queried in the background would price a render nobody asked for.
+  const [rerendering, setRerendering] = useState<string | null>(null);
 
   const size: TileSize = jobs.length >= 5 ? 'sm' : 'md';
   const aspect = run.aspect ?? '9:16';
@@ -174,7 +179,21 @@ export function ClipStrip({ run, jobs, takeCountFor, promptStateFor, onSeek }: {
         <div className="mt-2 flex items-center justify-center gap-2" data-testid="segment-actions">
           <span className="font-mono text-caption text-ink-secondary">{selectedJob.jobId}</span>
           <PromptButton target={selectedJob.jobId} ariaLabel={`Prompt for ${selectedJob.jobId}`} />
+          {/* Opens the paid dialog; the price and the one-time confirm live on ITS PaidButton, so
+              nothing here spends and the strip stays free of money buttons it cannot price. */}
+          <Button
+            variant="ghost"
+            size="sm"
+            icon={<Film size={13} aria-hidden />}
+            onClick={() => setRerendering(selectedJob.jobId)}
+          >
+            Re-render {selectedJob.jobId}
+          </Button>
         </div>
+      )}
+
+      {rerendering && (
+        <SegmentRerenderDialog run={run} jobId={rerendering} open onClose={() => setRerendering(null)} />
       )}
     </div>
   );

@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { ContinuityEntry, JobView, ProductionSpec, RunDetail } from '../../../../../shared/api-types';
 import { makeRun } from '../../../test/fixtures';
+import { renderReview } from './test-helpers';
 import { ClipStrip } from './ClipStrip';
 
 const clip = (jobId: string): JobView => ({
@@ -141,6 +142,20 @@ describe('ClipStrip', () => {
     expect(screen.getAllByText('rendering')).toHaveLength(1);
     expect(screen.getAllByTestId('clip-joint-pending')).toHaveLength(2);
     expect(screen.queryByText('joined')).not.toBeInTheDocument();
+  });
+
+  it('picking a segment reveals its actions, and Re-render opens the one paid dialog', async () => {
+    const run = threeSegmentRun({ continuity: [entry('K2', 1), entry('K3', 2)] });
+    renderReview(
+      <ClipStrip run={run} jobs={run.latestRender!.jobs} takeCountFor={() => 1} onSeek={vi.fn()} />,
+    );
+    // Nothing is selected: no money affordance is on screen at all (spec D11).
+    expect(screen.queryByRole('button', { name: /Re-render/ })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Play from K2' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Re-render K2' }));
+    // The price and the one-time paid confirm live on the dialog's PaidButton — the strip states none.
+    expect(await screen.findByRole('dialog', { name: 'Re-render K2' })).toBeInTheDocument();
   });
 
   // No legend: the strip explains itself with the drawing and one sentence (Don't #9).

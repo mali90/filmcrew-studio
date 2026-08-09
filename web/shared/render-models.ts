@@ -13,6 +13,7 @@ import {
   PROVIDERS,
   RENDER_MODELS,
   aspectsFor as registryAspectsFor,
+  capsFor as registryCapsFor,
   castLimitFor as registryCastLimitFor,
   normalizeBackend as registryNormalizeBackend,
 } from '../../src/lib/render-models.js';
@@ -81,3 +82,61 @@ export function backendIdFor(model: string, provider: string): Backend {
 export const castLimitFor = (value: string): number => registryCastLimitFor(value) as number;
 /** The ratios this model renders, in menu order (never 'adaptive'/'auto'). */
 export const aspectsFor = (value: string): Aspect[] => registryAspectsFor(value) as Aspect[];
+
+// ── Seams: how strongly this backend can pin a boundary frame (WS2-P5) ──────────────────────────
+//
+// The re-render dialog has to SAY, before anything is paid for, how a boundary frame will be
+// applied — and only a real first/last-frame anchor may ever be called "seamless". The renderer's
+// own answer is `chooseSeamMode` in src/lib/prompt-compose.js, which the browser cannot import (it
+// pulls in node:crypto for the prompt fingerprint), so the rule is mirrored here over the SAME caps
+// bundle and pinned by a parity test asserting the two agree over every backend × cast count
+// (web/ui/src/components/run/review/SegmentRerenderDialog.test.tsx). Never edit one without the
+// other: a dialog that promised a seam the renderer only approximates would be selling a guarantee
+// the model never gave.
+
+/** How a boundary frame gets applied: a true anchor, a reference-guided likeness, or nothing. */
+export type PinStrength = 'native' | 'soft' | 'none';
+
+/** Only the caps fields the seam rule reads — the registry is untyped JS. */
+interface SeamCaps {
+  family?: string;
+  nativeFirstFrame?: boolean;
+  nativeLastFrame?: boolean;
+  firstFrameExcludesRefs?: boolean;
+  argMap?: Record<string, string | null> | null;
+}
+
+/** The merged caps bundle for a backend id (throws on an id no provider entry serves). */
+export const capsFor = (value: Backend | string): SeamCaps => registryCapsFor(value) as SeamCaps;
+
+/** Does this model have a usable anchor argument for that end? (mirrors prompt-compose's nativeSlot) */
+const nativeSlot = (caps: SeamCaps, end: 'in' | 'out'): boolean => Boolean(
+  end === 'in'
+    ? caps.nativeFirstFrame && (caps.argMap ? caps.argMap.firstFrame : true)
+    : caps.nativeLastFrame && (caps.argMap ? caps.argMap.lastFrame : true),
+);
+
+/**
+ * How a boundary frame WOULD be applied at one end of one segment, given how many cast references
+ * that segment carries. Mirrors `chooseSeamMode(...).in|out.mode` for a boundary that exists; an
+ * end with no frame at all is the caller's own 'none', not this function's business.
+ */
+export function pinStrengthFor(
+  backend: Backend | string,
+  { castRefCount = 0, end }: { castRefCount?: number; end: 'in' | 'out' },
+): PinStrength {
+  let caps: SeamCaps;
+  try {
+    caps = capsFor(backend);
+  } catch {
+    // An id this build cannot resolve promises nothing — the weakest honest answer, never 'native'.
+    return 'soft';
+  }
+  if (!nativeSlot(caps, end)) return 'soft';
+  // Kling seeds a frame through its Elements set: a text-to-video job has nothing to attach it to.
+  if (caps.family === 'kling') return castRefCount > 0 ? 'native' : 'none';
+  // Segmind's native slots are mutually exclusive with reference_images: the renderer keeps the
+  // cast (identity) and pins by reference rather than render a stranger on a perfect seam.
+  if (caps.firstFrameExcludesRefs && castRefCount > 0) return 'soft';
+  return 'native';
+}

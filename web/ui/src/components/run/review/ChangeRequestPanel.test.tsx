@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { server, http, HttpResponse } from '../../../test/msw';
 import { makeRun } from '../../../test/fixtures';
@@ -48,7 +48,9 @@ describe('ChangeRequestPanel', () => {
     renderReview(<ChangeRequestPanel run={run} />);
 
     expect(screen.getByText('The plan changed since this cut.')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Send to the engine/ })).not.toBeInTheDocument();
+    // The plan moving is a consequence to act on, not a fourth choice — the three ways to change
+    // something stay right where they were, under it (spec D30).
+    expect(screen.getByRole('button', { name: /Tell the agents/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Re-render K1 only/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Re-render K1 \+ downstream/ })).toBeInTheDocument();
     expect(
@@ -73,7 +75,50 @@ describe('ChangeRequestPanel', () => {
     // money buttons stay disabled until their price is stated — wait for the estimate first
     await waitFor(() => expect(screen.getAllByLabelText('estimated cost $4.16').length).toBeGreaterThan(0));
     fireEvent.click(screen.getByRole('button', { name: /Re-render K1 \+ downstream/ }));
-    await waitFor(() => expect(body).toEqual({ jobId: 'K1', cascade: true }));
+    await waitFor(() => expect(body).toEqual({ jobId: 'K1', boundaries: 'auto', cascade: true }));
+  });
+
+  it('row 3 opens the segment dialog, and that dialog is the only re-render implementation', async () => {
+    markPaidConfirmed();
+    const run = makeRun('review');
+    const bodies: unknown[] = [];
+    server.use(
+      http.post('/api/runs/:id/rerender-job', async ({ request }) => {
+        bodies.push(await request.json());
+        return HttpResponse.json({ takeId: 't2', estUsd: 4.16, cascadeJobs: [], boundaries: { mode: 'both' } });
+      }),
+    );
+
+    renderReview(<ChangeRequestPanel run={run} />);
+    // Row 3 states its cost in words; the figure belongs to the dialog's PaidButton, so the rail
+    // never carries a second, un-priced money button (spec D29).
+    const row = screen.getByRole('button', { name: /Re-render one segment/ });
+    expect(row).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(row);
+    expect(row).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.queryByText(/≈ \$/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('radio', { name: 'K2' }));      // the segment picker
+    fireEvent.click(screen.getByRole('button', { name: /^Re-render K2…$/ }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Re-render K2' });
+    expect(within(dialog).getByTestId('boundary-plan-sentence')).toHaveTextContent("K2 will start from K1's last frame");
+    await screen.findByLabelText('estimated cost $4.16');
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Custom' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Re-render K2 estimated/ }));
+    await waitFor(() => expect(bodies).toEqual([{ jobId: 'K2', boundaries: 'start' }]));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('one row is open at a time, and the prompt row spends nothing', () => {
+    renderReview(<ChangeRequestPanel run={makeRun('review')} />);
+    expect(screen.getByRole('button', { name: /Tell the agents/ })).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.click(screen.getByRole('button', { name: /Edit a prompt/ }));
+    expect(screen.getByRole('button', { name: /Tell the agents/ })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByRole('button', { name: /Open K1's prompt/ })).toBeInTheDocument();
+    // "free" is only ever said about something that really is: saving words is a local file write.
+    expect(screen.getByText(/Saving is free — you pay only when you re-render/)).toBeInTheDocument();
   });
 
   it('offers a single full re-render when the revision scope was the whole video', async () => {

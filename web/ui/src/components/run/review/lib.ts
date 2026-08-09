@@ -1,5 +1,8 @@
 // Small pure helpers shared by the review/deliver components.
 import type { ContinuityEntry, ProductionSpec } from '../../../../../shared/api-types';
+import type { PinStrength } from '../../../../../shared/render-models';
+
+export type { PinStrength };
 
 /** Client-side basename of an absolute fs path. */
 export const basename = (p: string) => p.split('/').pop() ?? p;
@@ -72,4 +75,77 @@ export function jointSentence(prevJobId: string, jobId: string, kind: JointKind)
     case 'isolated': return `${jobId} starts on a scene cut — nothing pins it to ${prevJobId}.`;
     default: return `We can't tell whether ${jobId} starts on ${prevJobId}'s last frame.`;
   }
+}
+
+// ── Boundary vocabulary (WS2-P5) ─────────────────────────────────────────────────────────────────
+// The re-render dialog sells a paid render on one sentence, so the sentence is a pure function of
+// the plan and the pin STRENGTH the renderer would really use (pinStrengthFor, mirrored from
+// chooseSeamMode). The honesty rule it exists to keep (UX spec D15, tightened by the implementer
+// correction): a native first/last-frame anchor is the only thing that may be called "seamless"; a
+// frame that rides as an extra reference image plus a prompt pin is "near-seamless
+// (reference-guided)"; nothing pinned is a scene cut.
+
+/** Which ends a re-render pins. `auto` = every end that HAS a neighbour, resolved by the caller. */
+export type BoundaryChoice = 'auto' | 'both' | 'start' | 'end' | 'none';
+
+/** The strength of a pin, in words. Reused verbatim wherever a joint is described. */
+export function seamStrengthWords(strength: PinStrength): string {
+  switch (strength) {
+    case 'native': return 'seamless';
+    case 'soft': return 'near-seamless (reference-guided)';
+    default: return 'a scene cut — the picture may jump';
+  }
+}
+
+/**
+ * What a re-render will do to this segment's two joins, in plain words — the D14 sentence, live.
+ *
+ * A neighbour that does not exist is never named (an end of the cut cannot be pinned to anything),
+ * and a pin strength of 'none' is described as a scene cut rather than as a weak seam.
+ */
+export function boundaryPlanSentence({ jobId, prev, next, boundaries, pinStrength }: {
+  jobId: string;
+  prev?: { jobId: string } | null;
+  next?: { jobId: string } | null;
+  boundaries: BoundaryChoice;
+  pinStrength: PinStrength;
+}): string {
+  const prevId = prev?.jobId ?? null;
+  const nextId = next?.jobId ?? null;
+  if (!prevId && !nextId) return `${jobId} is the only segment in this cut — there's nothing to join.`;
+
+  const pins = pinStrength !== 'none';
+  const wantStart = Boolean(prevId) && pins && (boundaries === 'auto' || boundaries === 'both' || boundaries === 'start');
+  const wantEnd = Boolean(nextId) && pins && (boundaries === 'auto' || boundaries === 'both' || boundaries === 'end');
+  const words = seamStrengthWords(pinStrength);
+  const verb = pinStrength === 'native' ? 'will start from' : 'will aim to start on';
+
+  // Nothing pinned at either end: say which joins become scene cuts, naming only real neighbours.
+  if (!wantStart && !wantEnd) {
+    const sides = prevId && nextId
+      ? 'The joins on both sides become scene cuts.'
+      : prevId
+        ? `The join from ${prevId} becomes a scene cut.`
+        : `The cut into ${nextId} becomes a scene cut.`;
+    return `${jobId} will be rendered on its own. ${sides}`;
+  }
+
+  if (wantStart && wantEnd) {
+    return pinStrength === 'native'
+      ? `${jobId} will start from ${prevId}'s last frame and end on ${nextId}'s opening frame — both joins stay ${words}.`
+      : `${jobId} will aim to start on ${prevId}'s last frame and end on ${nextId}'s opening frame — ${words}.`;
+  }
+
+  if (wantStart) {
+    const tail = nextId
+      ? ` Nothing pins its ending, so the cut into ${nextId} stays a scene cut.`
+      : ' Nothing pins its ending — it is the last segment in the cut.';
+    return `${jobId} ${verb} ${prevId}'s last frame — that join is ${words}.${tail}`;
+  }
+
+  // Only the ending is pinned: either the head of the cut, or an explicit end-only plan.
+  const head = prevId
+    ? `Nothing pins its start, so the join from ${prevId} stays a scene cut.`
+    : `${jobId} opens the cut, so nothing pins its start.`;
+  return `${head} It will ${pinStrength === 'native' ? 'end on' : 'aim to end on'} ${nextId}'s opening frame — that join is ${words}.`;
 }

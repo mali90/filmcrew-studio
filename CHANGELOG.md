@@ -3,6 +3,25 @@
 ## Unreleased
 
 ### Added
+- **Re-rendering one segment now shows you what it will do to its two joins, in plain words, before
+  it spends anything.** Picking a clip in the review strip (or the rail's *Re-render one segment*
+  row — both open the same dialog and post to the same endpoint) shows the neighbour it would start
+  on, the clip that gets replaced, and the neighbour it would end on, with one live sentence
+  underneath: *"K2 will start from K1's last frame and end on K3's opening frame — both joins stay
+  seamless."* That last word is the point. **"Seamless" is said only where the model has a real
+  first/last-frame anchor**; where a boundary frame rides as an extra reference image plus a prompt
+  pin — every Seedance render on fal, and any Segmind segment carrying cast references — the
+  sentence reads *"reference-guided, near-seamless"* and an amber row says plainly that the pin is
+  close but not guaranteed frame-perfect. Nothing pinned reads as a scene cut. The strength comes
+  from the renderer's own rule, so the sentence and the render cannot disagree. `Auto` mirrors the
+  joins the cut already has and `Custom` opens on exactly what Auto would have done, so the first
+  click changes nothing by surprise. Where the next clip really does start on this one's last frame,
+  a warn row offers to re-render the tail as well and re-prices the button; where the ending is
+  being pinned it says so instead of predicting a break it is preventing. On Segmind, a segment with
+  cast references cannot have both an exact frame and its cast — the trade the renderer made, and
+  why, is stated rather than swallowed. Every figure on the screen belongs to the paid button, which
+  says `rate not on file` rather than invent one, and the one-time "this spends real money"
+  confirmation appears *inside* the dialog: never a second scrim over the first.
 - **A re-render can now be pinned to the clips on either side of it, and by default it keeps the
   joins the cut already has.** `POST /api/runs/:id/rerender-job` takes `boundaries` —
   `auto` · `both` · `start` · `end` · `none`. `auto` mirrors the cut as it stands: a joint that is
