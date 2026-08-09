@@ -164,6 +164,10 @@ function validateJobs(spec, P, elementIds, caps, enforceModelAspects = false) {
     // DROPPABLE — SEAM_PRIORITY gives up the closing pin, then the opening one, before it gives up
     // a single identity reference. Reserving a slot up front would reject a legal max-cast job to
     // protect a hint the renderer is willing to lose.
+    // The pre-flight signal that a pin WILL be dropped did not disappear with the old reservation
+    // rule, it moved to where the user can act on it for free: `pinStrengths()` runs the same
+    // SEAM_PRIORITY arithmetic, and the prompt sheet's seam line plus the re-render dialog's
+    // plain-words sentence both report the pin as dropped BEFORE the paid button is pressed.
     // An omitted/empty job.elements INHERITS the whole roster at render time (characterGroups()
     // expands it to every kling.elements entry), so the budget judges what will actually be sent —
     // a literal zero here with a nine-entry roster is nine paid uploads, not none.

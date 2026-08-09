@@ -162,7 +162,9 @@ export function reopenedFinal(manifest: Manifest | null | undefined): { path: st
   const reopenedAt = manifest?.reopenedAt;
   const approved = manifest?.approved;
   if (!reopenedAt || !approved?.final) return null;
-  if (String(approved.at ?? '') > String(reopenedAt)) return null; // delivered again since the reopen
+  // `>=`: an approval cannot precede the reopen that enabled it, so an equal stamp is the newer
+  // fact — exactly how `finalizedFinal()` reads it server-side.
+  if (String(approved.at ?? '') >= String(reopenedAt)) return null; // delivered again since the reopen
   return { path: approved.final, fileName: basename(approved.final), at: reopenedAt };
 }
 

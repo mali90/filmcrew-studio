@@ -20,10 +20,11 @@
 // Input is a plain run record (the runs service assembles it); output is ids only — a take/job pair
 // is meaningful to the UI, a host directory is a leak.
 //
-// The one import is `chooseSeamMode`, the single place that decides how a backend applies a boundary
-// frame. A re-render dialog that answered that question for itself would eventually promise a
-// "seamless" join the renderer soft-pins — so it asks the same function the renderer asks.
-import { chooseSeamMode } from '../../../src/lib/prompt-compose.js';
+// The one import is `pinStrengths`, the single place that decides how a backend applies a boundary
+// frame (the seam rule plus the reference budget that can drop a soft pin). A re-render dialog that
+// answered that question for itself would eventually promise a "seamless" join the renderer
+// soft-pins — so it asks the same function the renderer asks.
+import { pinStrengths } from '../../../src/lib/seam-rule.js';
 
 /** Joint verdicts, in the order of how much the UI is allowed to promise. */
 export const JOINT_KINDS = Object.freeze(['linked', 'broken', 'isolated', 'unknown']);
@@ -278,15 +279,14 @@ export function serializeContinuity(lineage) {
 /**
  * What a re-render of one segment should pin at each end — and how strongly the UI may describe it.
  *
- * Two ways to name the segment, one answer:
- *   resolveBoundaries(lineage, 1)                                  by cut position; mode = 'auto'
- *   resolveBoundaries({ jobIds, jobId, continuity, caps, castRefCount, mode })
+ * One call shape: resolveBoundaries({ jobIds, jobId | index, continuity, caps, castRefCount, mode }).
+ * The segment is named by `jobId` (what the routes have) or by `index` (its cut position).
  *
  * `first`/`last` are the CANDIDATES — the neighbours that exist at all, so the dialog can say
  * "opens on a cut" instead of naming a segment that is not there. `start`/`end` are the DECISION for
  * `mode`, and `startMode`/`endMode` say how this backend would really apply each one (straight from
- * chooseSeamMode, so the dialog's sentence and the renderer cannot disagree about which joins may be
- * called seamless).
+ * pinStrengths, so the dialog's sentence and the renderer cannot disagree about which joins may be
+ * called seamless — or about which soft pin the reference budget is going to drop).
  *
  * The modes:
  *   auto            mirror the cut as it stands — a joint that is linked today stays linked, one
@@ -301,18 +301,16 @@ export function serializeContinuity(lineage) {
  * filesystem. An opening pin takes the previous clip's LAST frame; a closing pin takes the next
  * clip's FIRST frame. Backwards, it would pin the wrong end of the neighbour and pay for it.
  *
- * @param {{segments:Segment[]}|{jobIds?:string[], jobId?:string, index?:number,
+ * @param {{jobIds?:string[], jobId?:string, index?:number,
  *          continuity?:{segments:Segment[]}|Segment[], caps?:object, castRefCount?:number,
- *          mode?:string}} input
- * @param {number} [index]  cut position — supplying it selects the positional call shape
+ *          mode?:string}} opts
  * @returns {{mode:string, index:number, jobId:string|null,
  *            first:Neighbour|null, last:Neighbour|null,
  *            start:{frame:'last', from:Neighbour|null}|null,
  *            end:{frame:'first', to:Neighbour|null}|null,
  *            startMode:string, endMode:string}}
  */
-export function resolveBoundaries(input, index) {
-  const opts = index === undefined ? (input ?? {}) : { continuity: input, index };
+export function resolveBoundaries(opts = {}) {
   const mode = opts.mode ?? 'auto';
   if (!BOUNDARY_MODES.includes(mode)) {
     throw new Error(`unknown boundary mode "${mode}" — expected one of ${BOUNDARY_MODES.join(', ')}`);
@@ -348,7 +346,9 @@ export function resolveBoundaries(input, index) {
   const wantEnd = Boolean(next)
     && (mode === 'both' || mode === 'end' || (mode === 'auto' && joined(next.seg, false)));
 
-  const seam = chooseSeamMode({
+  // Budget included: at a full cast the image budget drops the closing pin, then the opening one,
+  // and a mode reported here is quoted to the user before they pay for the take.
+  const seam = pinStrengths({
     caps: opts.caps,
     castRefCount: Number(opts.castRefCount) || 0,
     hasSeamIn: wantStart,
@@ -362,8 +362,8 @@ export function resolveBoundaries(input, index) {
     last: face(next),
     start: wantStart ? { frame: 'last', from: face(prev) } : null,
     end: wantEnd ? { frame: 'first', to: face(next) } : null,
-    startMode: seam.in.mode,
-    endMode: seam.out.mode,
+    startMode: seam.in,
+    endMode: seam.out,
   };
 }
 

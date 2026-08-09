@@ -96,12 +96,17 @@ const PENDING = FF_SKIP ? { skip: FF_SKIP } : pending(READY, 'WS2-P6: assertNotF
 test('every spending action 409s on a finalized run — the UI is no longer the only lock', PENDING, async () => {
   const runId = await approvedRun('a keeper closing the light for the last time');
   const submitsBefore = fal.requests.filter((q) => q.method === 'POST').length;
+  const specBefore = fs.readFileSync(path.join(runsDir, runId, 'spec.json'), 'utf8');
 
   for (const [url, payload] of [
     [`/api/runs/${runId}/render`, { mode: 'full' }],
     [`/api/runs/${runId}/revise`, { feedback: 'warmer ending', scope: 'all' }],
     [`/api/runs/${runId}/rerender-job`, { jobId: 'K1' }],
     [`/api/runs/${runId}/assemble`, {}],
+    // Replanning is the same class of action as revising, and strictly worse on a delivered run: a
+    // full engine pass (LLM spend) that REWRITES spec.json under a file the user already has, which
+    // would desynchronise the prompt views, the lineage and the finals history from that file.
+    [`/api/runs/${runId}/plan`, {}],
   ]) {
     const r = await post(url, payload);
     assert.equal(r.statusCode, 409, `${url} must refuse work on a delivered run (got ${r.statusCode})`);
@@ -110,6 +115,8 @@ test('every spending action 409s on a finalized run — the UI is no longer the 
   await sleep(300); // any child that slipped past the guard would have submitted by now
   assert.equal(fal.requests.filter((q) => q.method === 'POST').length, submitsBefore,
     'a refused action must cost exactly nothing — not one job was submitted');
+  assert.equal(fs.readFileSync(path.join(runsDir, runId, 'spec.json'), 'utf8'), specBefore,
+    'and the plan behind the delivered file is byte-for-byte where it was');
 });
 
 test('the guard is on the SERVICE, so a stale tab cannot spend by racing the UI', PENDING, async () => {
@@ -197,6 +204,23 @@ test('reopen on a run that was never approved is a 409, not a silent success', P
   const r = await post(`/api/runs/${runId}/reopen`, {});
   assert.equal(r.statusCode, 409);
   assert.equal(manifestOf(runId).reopenedAt ?? null, null);
+});
+
+// P2 set the contract for the sibling feature ("continuity exposes take/job ids only, never fs
+// paths"). The delivery history has no reason to be looser: the UI takes basename() of every entry
+// it draws, so the host's directory layout was riding the wire for nothing.
+test('the delivery history reaches the browser as file NAMES, never host paths', PENDING, async () => {
+  const runId = await approvedRun('a sixth keeper');
+  await post(`/api/runs/${runId}/reopen`, {});
+  const m = (await get(`/api/runs/${runId}`)).json().run.manifest;
+
+  for (const entry of [...(m.finals ?? []), ...(m.history ?? [])]) {
+    if (!entry.final) continue;
+    assert.ok(!/[/\\]/.test(entry.final), `${entry.final} is a path, not a name`);
+    assert.match(entry.final, /\.mp4$/, 'the NAME survives — it is what the copy and the media url use');
+  }
+  // On disk the manifest still holds the real path: nothing about the delivery moved, only the view.
+  assert.ok(path.isAbsolute(manifestOf(runId).finals[0].final), 'the server keeps the path it needs');
 });
 
 test('the take history records the reopen so the user can see what happened when', PENDING, async () => {

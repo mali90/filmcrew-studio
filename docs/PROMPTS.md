@@ -111,8 +111,10 @@ two ways depending on the backend:
   That sentence is part of the system's share, and it costs bytes — which is why the meter's
   denominator moves when a segment gains a pin.
 
-Which one you get is decided once, in `chooseSeamMode()`, from the backend's declared caps — never
-guessed per surface. fal's Seedance endpoints have no frame anchor at all and are therefore *always*
+Which one you get is decided once, in `src/lib/seam-rule.js`, from the backend's declared caps and
+its reference budget — never guessed per surface. A soft pin needs a free image slot, and at a full
+cast it does not get one: `SEAM_PRIORITY` gives up the closing pin, then the opening one, before it
+gives up a single identity reference, and the sheet reports that end as a cut before you pay. fal's Seedance endpoints have no frame anchor at all and are therefore *always*
 soft; Segmind's native slots exclude reference images, so a segment with cast references keeps the
 cast and soft-pins the frame; Kling anchors the opening frame natively and treats the closing frame
 as best-effort. The full matrix is in [PROVIDERS.md](PROVIDERS.md#seam-modes-how-a-boundary-frame-is-actually-applied).

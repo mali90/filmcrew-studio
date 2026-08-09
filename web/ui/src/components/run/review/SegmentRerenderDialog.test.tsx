@@ -14,7 +14,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Backend, ContinuityEntry, JobView, ProductionSpec, RunDetail } from '../../../../../shared/api-types';
-import { ALL_BACKENDS, capsFor, pinStrengthFor } from '../../../../../shared/render-models';
+import { ALL_BACKENDS, capsFor, pinStrengthFor, pinStrengthsFor } from '../../../../../shared/render-models';
 import { chooseSeamMode } from '../../../../../../src/lib/prompt-compose.js';
 import { server, http, HttpResponse } from '../../../test/msw';
 import { makeRun } from '../../../test/fixtures';
@@ -393,10 +393,11 @@ describe('SegmentRerenderDialog — the money (D13/D17)', () => {
 });
 
 // ── The rule the copy hangs on ──────────────────────────────────────────────────────────────────
-// `pinStrengthFor` is a TypeScript mirror of the renderer's `chooseSeamMode` (the real one imports
-// node:crypto and cannot enter the browser bundle). A mirror that drifted would let this dialog
-// promise a seam the render only approximates — the exact failure the whole screen is built to
-// avoid — so the two are compared here over every backend the registry serves.
+// The dialog does not mirror the renderer's seam rule any more, it CALLS it: `pinStrengthFor` and
+// `pinStrengthsFor` are typed wrappers over src/lib/seam-rule.js, the same module render-seedance.js
+// and web/server import. These tests keep that true — a wrapper that started deciding anything for
+// itself would let the dialog promise a seam the render only approximates, which is the exact
+// failure the whole screen is built to avoid.
 describe('pin strength agrees with the renderer, backend for backend', () => {
   it('matches chooseSeamMode for every backend × cast count × end', () => {
     for (const backend of ALL_BACKENDS) {
@@ -411,6 +412,28 @@ describe('pin strength agrees with the renderer, backend for backend', () => {
     }
   });
 
+  // The promise the user actually reads goes through pinStrengthsFor, which ALSO runs the reference
+  // budget: a soft pin only holds while there is an image slot left for it. seedance-2.0@fal takes
+  // 9 images, so two seven-element characters fill the budget on their own and SEAM_PRIORITY gives
+  // up the closing pin, then the opening one. Neither may then be sold as "reference-guided".
+  it('a cast that fills the image budget leaves nothing to pin with', () => {
+    const backend = 'seedance-2.0@fal';
+    expect(pinStrengthsFor(backend, { castRefCount: 2, hasSeamIn: true, hasSeamOut: true }))
+      .toEqual({ in: 'soft', out: 'soft' });
+    expect(pinStrengthsFor(backend, { castRefCount: 8, hasSeamIn: true, hasSeamOut: true }))
+      .toEqual({ in: 'soft', out: 'none' });
+    expect(pinStrengthsFor(backend, { castRefCount: 14, hasSeamIn: true, hasSeamOut: true }))
+      .toEqual({ in: 'none', out: 'none' });
+  });
+
+  // An end with no neighbour is 'none' whatever the budget says, and the budget never touches a
+  // NATIVE anchor: it rides its own argument, not the image list.
+  it('an unasked end is none, and a native anchor is budget-proof', () => {
+    expect(pinStrengthsFor('seedance-2.0@fal', { castRefCount: 0, hasSeamIn: true, hasSeamOut: false }).out).toBe('none');
+    expect(pinStrengthsFor('kling-o3@fal', { castRefCount: 9, hasSeamIn: true, hasSeamOut: true }))
+      .toEqual({ in: 'native', out: 'native' });
+  });
+
   it('no Seedance-on-fal combination ever answers "native" — fal soft-pins (the implementer correction)', () => {
     for (const backend of ALL_BACKENDS.filter((b) => String(b).startsWith('seedance') && String(b).endsWith('@fal'))) {
       for (const end of ['in', 'out'] as const) {
@@ -420,7 +443,12 @@ describe('pin strength agrees with the renderer, backend for backend', () => {
     }
   });
 
-  it('an id this build cannot resolve promises the weaker thing, never native', () => {
-    expect(pinStrengthFor('nonsense@nowhere', { castRefCount: 0, end: 'in' })).toBe('soft');
+  // 'none' reads as "this join is a scene cut" — the weakest thing the UI can say. 'soft' would
+  // render as "near-seamless (reference-guided)", which is a PROMISE, and a build that cannot even
+  // resolve the backend id has no business making one.
+  it('an id this build cannot resolve promises nothing at all', () => {
+    expect(pinStrengthFor('nonsense@nowhere', { castRefCount: 0, end: 'in' })).toBe('none');
+    expect(pinStrengthsFor('nonsense@nowhere', { castRefCount: 0, hasSeamIn: true, hasSeamOut: true }))
+      .toEqual({ in: 'none', out: 'none' });
   });
 });

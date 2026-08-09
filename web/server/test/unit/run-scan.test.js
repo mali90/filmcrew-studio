@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { scanRun, listRuns } from '../../lib/run-scan.js';
+import { scanRun, listRuns, finalizedFinal } from '../../lib/run-scan.js';
 import { newManifest, writeManifest } from '../../lib/web-manifest.js';
 
 const mkRunsDir = () => {
@@ -287,6 +287,27 @@ test('re-approved after a reopen: approved.at newer than reopenedAt → complete
     const r = scanRun(dir);
     assert.equal(r.status, 'complete');
     assert.equal(r.phase, 'deliver');
+  } finally { t.cleanup(); }
+});
+
+// Both stamps come from the same injectable clock: reopen() and approve() landing in the same
+// millisecond is deterministic under a fixed clock (the tests, the demo seeder) and merely unlikely
+// in production. Read as "superseded", such a run would sit out of `complete` FOREVER while
+// assertNotFinalized returned null — the delivered file locked out of review and every spend
+// endpoint wide open. An approval cannot precede the reopen that enabled it, so equal is newer.
+test('a re-approval stamped in the SAME millisecond as the reopen counts as delivered', () => {
+  const t = mkRunsDir();
+  try {
+    const at = '2026-07-04T13:00:00.000Z';
+    const dir = deliveredRun(t.dir, 'web-sametick', { reopenedAt: at });
+    writeManifest(dir, {
+      ...JSON.parse(fs.readFileSync(path.join(dir, 'web.json'), 'utf8')),
+      approved: { cut: 'c2', final: path.join(dir, 'final.mp4'), upscaled: false, at },
+    });
+    assert.equal(scanRun(dir).status, 'complete');
+    // …and the guard agrees, which is the half that decides whether money can still be spent.
+    assert.ok(finalizedFinal(JSON.parse(fs.readFileSync(path.join(dir, 'web.json'), 'utf8'))),
+      'the finalize guard and the status ladder must never disagree about one manifest');
   } finally { t.cleanup(); }
 });
 

@@ -216,7 +216,16 @@ test('runs with nothing rendered answer null — the strip claims nothing it can
   assert.equal(planOnly.status, 'plan-ready');
   assert.equal(planOnly.continuity, null);
 
+  // The LIBRARY list is deliberately continuity-free. Computing it costs a render.json read per
+  // take per run, and the list re-fetches on every SSE status tick during a render — dozens of
+  // synchronous disk reads on the event loop that is streaming that tick, for a field no list
+  // surface reads (only ClipStrip and the re-render dialog do, both on the run page).
   const list = (await get('/api/runs')).json().runs;
   const listed = list.find((r) => r.id === 'b1nx');
-  assert.deepEqual(listed.continuity.map((c) => c.continuesFromPrev), [false, false], 'the library read model agrees with the detail one');
+  assert.equal(listed.continuity, undefined, 'the library list does not pay for continuity');
+  assert.deepEqual(
+    (await continuityOf('b1nx')).continuity.map((c) => c.continuesFromPrev),
+    [false, false],
+    'the detail read model is where the strip gets its facts',
+  );
 });

@@ -160,7 +160,7 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
     import(path.join(root, 'src/lib/text.js')),
   ]);
   const { capsFor, normalizeBackend, refLabel } = models;
-  const { composeKlingStoryboard, composeSeedanceJobPrompt, applyOverride, pinBytesOf, promptFingerprint, chooseSeamMode, planSeamRefs } = compose;
+  const { composeKlingStoryboard, composeSeedanceJobPrompt, applyOverride, pinBytesOf, promptFingerprint, chooseSeamMode, planSeamRefs, appliedSeamModes } = compose;
   const { klingPromptSettings, seedancePromptSettings } = promptSettings;
   const { characterGroups, jobSpeakers } = castGroups;
   const { slug } = text;
@@ -338,7 +338,10 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
       maxBytes: Number(settings.promptMaxBytes),
       segmentMaxBytes: null,
       pinBytes: pinBytesOf('seedance', job, spec, settings, opts),
-      seam: { in: seam.in.mode, out: seam.out.mode },
+      // What the render will really APPLY, not what it wished for: a soft pin whose reference lost
+      // its slot to the image budget (a full cast at maxImages) pins nothing, and the sheet must say
+      // so — this is the pre-flight signal that a joint is going to be a scene cut.
+      seam: appliedSeamModes(seam, plan.imageRefs),
       draft,
       draftSegments: null,
       // The agents' current text, offered alongside an override — never in place of it.
@@ -601,7 +604,10 @@ export async function savePromptOverride({ root, envRoot, childEnv, runDir, spec
  */
 export async function discardPromptOverride({ root, envRoot, childEnv, runDir, spec, backend, voicesDir, jobId }) {
   const planned = (spec?.kling?.jobs ?? []).some((j) => j?.job_id === jobId);
-  const had = Boolean(readOverrides(runDir).jobs?.[jobId]);
+  // `Object.hasOwn`, never a bracket read: `jobs` is a plain object literal, so `jobs['__proto__']`
+  // and `jobs['toString']` resolve to INHERITED members and would answer "yes, there was an edit" —
+  // a bogus 200, an SSE broadcast to every tab and a junk History row for a job that never existed.
+  const had = Object.hasOwn(readOverrides(runDir).jobs, jobId);
   // An orphaned override (its job is gone from the plan) is still discardable — that is the only way
   // the "1 edited prompt has no segment any more" row can be cleared.
   if (!planned && !had) return null;

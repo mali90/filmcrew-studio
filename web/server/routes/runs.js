@@ -120,6 +120,21 @@ export function registerRunRoutes(app) {
     return null;
   };
 
+  /**
+   * The manifest, minus the host paths the browser has no use for. `approved.final` keeps its
+   * absolute path (that is the explicit "Reveal in Finder / Copy path" contract, mirrored by
+   * `finalFsPath`); the P6 delivery HISTORY does not — the UI only ever takes `basename()` of those
+   * entries, so shipping the host's directory layout for every past final is pure leak. Same
+   * contract `serializeContinuity` keeps for the sibling feature: ids and names, never fs paths.
+   */
+  const redactManifest = (m) => {
+    if (!m || typeof m !== 'object') return m;
+    const name = (p) => (p ? path.basename(String(p)) : p);
+    const finals = Array.isArray(m.finals) ? m.finals.map((f) => (f?.final ? { ...f, final: name(f.final) } : f)) : m.finals;
+    const history = Array.isArray(m.history) ? m.history.map((h) => (h?.final ? { ...h, final: name(h.final) } : h)) : m.history;
+    return { ...m, ...(finals ? { finals } : {}), ...(history ? { history } : {}) };
+  };
+
   const serializeRender = (lr) => lr && {
     ...lr,
     masterUrl: lr.masterExists ? urlFor(lr.master) : null,
@@ -127,15 +142,23 @@ export function registerRunRoutes(app) {
     jobs: lr.jobs.map((j) => ({ ...j, clipUrl: j.clipExists ? urlFor(j.clip) : null })),
   };
 
-  const serializeRun = (run) => run && {
+  /**
+   * One run for the wire. `continuity` is DETAIL-only: it reads the cut's render.json and one
+   * render.json per take it names, and the library list re-fetches on every SSE status tick — a
+   * dozen synchronous disk reads per run, per tick, on the event loop that is streaming that tick,
+   * for a field no list surface (only ClipStrip and the re-render dialog) ever reads.
+   */
+  const serializeRun = (run, { continuity = false } = {}) => run && {
     ...run,
     dir: undefined,
-    continuity: continuityOf(run),
+    manifest: redactManifest(run.manifest),
+    ...(continuity ? { continuity: continuityOf(run) } : {}),
     latestRender: serializeRender(run.latestRender),
     coverUrl: urlFor(run.cover),
     finalUrl: run.manifest?.approved?.final ? urlFor(run.manifest.approved.final) : null,
     finalFsPath: run.manifest?.approved?.final ?? null,
   };
+  const serializeDetail = (run) => serializeRun(run, { continuity: true });
 
   const load = (id) => {
     if (!isRunId(id)) return null;
@@ -143,7 +166,8 @@ export function registerRunRoutes(app) {
   };
   const notFound = (reply) => reply.code(404).send({ error: 'no such run', hint: 'it may have been deleted — check the library' });
 
-  app.get('/api/runs', async () => ({ runs: svc.list().map(serializeRun) }));
+  // The LIST is deliberately continuity-free (see serializeRun) — it re-fetches on every SSE tick.
+  app.get('/api/runs', async () => ({ runs: svc.list().map((r) => serializeRun(r)) }));
 
   app.post('/api/runs', async (req, reply) => {
     const { idea, backend = 'kling', aspect = '9:16', durationS = null, cast = [], environment = null } = req.body ?? {};
@@ -216,7 +240,7 @@ export function registerRunRoutes(app) {
   app.get('/api/runs/:id', async (req, reply) => {
     const run = load(req.params.id);
     if (!run) return notFound(reply);
-    return { run: serializeRun(run) };
+    return { run: serializeDetail(run) };
   });
 
   app.delete('/api/runs/:id', async (req, reply) => {
@@ -379,7 +403,8 @@ export function registerRunRoutes(app) {
   });
 
   // internal helper other routes reuse
-  app.decorate('serializeRun', serializeRun);
+  // The SSE snapshot is the run PAGE's first payload — same shape as GET /api/runs/:id, continuity included.
+  app.decorate('serializeRun', serializeDetail);
 }
 
 export default { registerRunRoutes };

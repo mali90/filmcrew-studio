@@ -15,8 +15,18 @@
 // Nothing here reads the environment, loads dotenv, or imports config.js — a spec asserts that
 // transitively over every relative import below.
 import { createHash } from 'node:crypto';
-import { refLabel } from './render-models.js';
+// The seam rule (how a boundary frame is applied on a backend, and which pins survive the reference
+// budget) lives in its own module: this one imports node:crypto for the fingerprint below, which the
+// browser bundle cannot take, and the re-render dialog must call the SAME rule the renderer calls.
+// Re-exported here so every existing `from './prompt-compose.js'` import is unchanged.
+import {
+  SEAM_MODES, SEAM_PRIORITY, chooseSeamMode, seamPinSentence, planSeamRefs, appliedSeamModes, pinStrengths,
+} from './seam-rule.js';
 import { sanitizeSpeech, slug } from './text.js';
+
+export {
+  SEAM_MODES, SEAM_PRIORITY, chooseSeamMode, seamPinSentence, planSeamRefs, appliedSeamModes, pinStrengths,
+};
 
 // ── Shared vocabulary (both backends describe shots the same way) ───────────────────────────────
 
@@ -429,115 +439,6 @@ export function pinBytesOf(backend, job, spec, settings, opts = {}) {
   return utf8Bytes(seedanceFrontMatter(job, spec, settings, opts)) + utf8Bytes('\n\n');
 }
 
-// ── Seams: how a clip is pinned to its neighbours ───────────────────────────────────────────────
-//
-// Answered in exactly ONE place so the renderers, the server preview and the re-render dialog's
-// plain-words sentence can never disagree about what the user is being sold:
-//
-//   'native'      the model has a real first/last-frame anchor and it is used → a true seam. ONLY
-//                 this may ever be described to a user as "seamless".
-//   'soft'        no anchor available, so the frame rides as an extra reference image plus a prompt
-//                 pin → "near-seamless (reference-guided)". A likeness, not a guarantee.
-//   'none'        no frame to pin (a first segment, a text-to-video job) — a missing seam, not a
-//                 broken one.
-//   'unsupported' a RUNTIME downgrade: the provider rejected the anchor we sent (see the Kling
-//                 end_image_url fallback). chooseSeamMode never returns it.
-
-/** The closed vocabulary the sidecars, the lineage and the UI copy all share. */
-export const SEAM_MODES = Object.freeze(['native', 'soft', 'none', 'unsupported']);
-
-/** Drop order when the reference budget bites: a boundary pin is a nicety, a cast ref is identity. */
-export const SEAM_PRIORITY = Object.freeze(['seamOut', 'seamIn', 'cast']);
-
-/** Does this caps bundle actually have a usable anchor argument for that end? */
-const nativeSlot = (caps, end) => Boolean(
-  end === 'in'
-    ? caps?.nativeFirstFrame && (caps?.argMap ? caps.argMap.firstFrame : true)
-    : caps?.nativeLastFrame && (caps?.argMap ? caps.argMap.lastFrame : true),
-);
-
-/**
- * Decide, per end, HOW this job's boundary frames get applied on this backend.
- * Pure: reads `caps` and two booleans, mutates nothing.
- * @param {{caps:object, castRefCount?:number, hasSeamIn?:boolean, hasSeamOut?:boolean}} p
- * @returns {{in:{mode:string, reason:string}, out:{mode:string, reason:string}}}
- */
-export function chooseSeamMode({ caps, castRefCount = 0, hasSeamIn = false, hasSeamOut = false }) {
-  const excludesRefs = Boolean(caps?.firstFrameExcludesRefs);
-  const pick = (has, end) => {
-    if (!has) return { mode: 'none', reason: 'no boundary frame for this end' };
-    if (!nativeSlot(caps, end)) return { mode: 'soft', reason: `${caps?.label ?? 'this model'} has no ${end === 'in' ? 'first' : 'last'}-frame anchor — the frame rides as a reference image + a prompt pin` };
-    // Kling seeds a frame through its Elements set: a text-to-video job (no cast reference at all)
-    // has nothing to attach it to, so there is no seam to claim.
-    if (caps?.family === 'kling') {
-      return castRefCount > 0
-        ? { mode: 'native', reason: 'native storyboard frame anchor' }
-        : { mode: 'none', reason: 'text-to-video job — no element to seed the frame from' };
-    }
-    // Segmind's native slots are mutually exclusive with reference_images: keep the CAST (identity)
-    // and soft-pin the frame rather than render a stranger on a perfect seam.
-    if (excludesRefs && castRefCount > 0) {
-      return { mode: 'soft', reason: 'the native frame slot excludes cast references — keeping the cast and pinning by reference' };
-    }
-    return { mode: 'native', reason: 'native frame anchor' };
-  };
-  return { in: pick(hasSeamIn, 'in'), out: pick(hasSeamOut, 'out') };
-}
-
-/** The prompt sentence that pins a soft seam. The START wording is frozen: it is what today's
- *  renders already send, and moving it would move every existing prompt's bytes. */
-export const seamPinSentence = (label, end) => (end === 'in'
-  ? `Use ${label} as the literal first frame of this clip and continue its motion seamlessly forward.`
-  : `Use ${label} as the literal last frame of this clip; the shot must arrive on that exact image.`);
-
-/**
- * Lay out a job's image references when boundary frames are soft-pinned: the cast first (so a prompt
- * that already names @Image1 keeps pointing at the same character), then up to two reserved slots
- * for the seam frames, then the prompt sentences that cite them.
- *
- * When the model's reference budget cannot hold everything, SEAM_PRIORITY decides: the END pin goes
- * first, then the START pin, and only once both are gone may a cast reference be dropped. A dropped
- * frame takes its prompt sentence with it — no reference, no claim.
- *
- * @param {{caps:object, castRefs?:string[], seamIn?:string|null, seamOut?:string|null,
- *          otherRefCount?:number}} p  `otherRefCount` = refs already spent from a COMBINED budget
- *          (fal 2.5 counts images + audio + video together)
- * @returns {{imageRefs:{kind:'cast'|'seamIn'|'seamOut', url:string, label:string}[],
- *           pins:string[], dropped:{kind:string, url:string, reason:string}[]}}
- */
-export function planSeamRefs({ caps, castRefs = [], seamIn = null, seamOut = null, otherRefCount = 0 }) {
-  const byImages = Number(caps?.maxImages) || Infinity;
-  const byCombined = Number(caps?.maxCombinedRefs) ? caps.maxCombinedRefs - (Number(otherRefCount) || 0) : Infinity;
-  const budget = Math.max(0, Math.min(byImages, byCombined));
-  const capName = byCombined < byImages
-    ? `the ${caps.maxCombinedRefs}-reference combined budget`
-    : `the ${caps?.maxImages}-image reference cap`;
-
-  let wanted = [
-    ...castRefs.map((url) => ({ kind: 'cast', url })),
-    ...(seamIn ? [{ kind: 'seamIn', url: seamIn }] : []),
-    ...(seamOut ? [{ kind: 'seamOut', url: seamOut }] : []),
-  ];
-  const dropped = [];
-  for (const kind of SEAM_PRIORITY) {
-    // Cast refs are dropped from the TAIL (the lead character is listed first).
-    while (wanted.length > budget && wanted.some((r) => r.kind === kind)) {
-      let i = -1;
-      for (let j = wanted.length - 1; j >= 0; j--) if (wanted[j].kind === kind) { i = j; break; }
-      dropped.push({ ...wanted[i], reason: `over ${capName}` });
-      wanted = wanted.filter((_, j) => j !== i);
-    }
-  }
-
-  const imageRefs = wanted.map((r, i) => ({ ...r, label: refLabel(caps, 'Image', i + 1) }));
-  const pins = [];
-  for (const end of ['in', 'out']) {
-    const hit = imageRefs.find((r) => r.kind === (end === 'in' ? 'seamIn' : 'seamOut'));
-    if (hit) pins.push(seamPinSentence(hit.label, end));
-  }
-  return { imageRefs, pins, dropped };
-}
-
 // ── The staleness oracle behind the "this prompt was edited before X changed" banner ────────────
 
 /**
@@ -578,6 +479,8 @@ export default {
   chooseSeamMode,
   planSeamRefs,
   seamPinSentence,
+  appliedSeamModes,
+  pinStrengths,
   SEAM_MODES,
   SEAM_PRIORITY,
   pinBytesOf,

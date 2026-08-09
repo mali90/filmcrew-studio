@@ -183,6 +183,41 @@
   costs nothing.
 
 ### Fixed
+- **A pin the reference budget is about to drop is no longer sold as a join.** The re-render dialog
+  and the prompt sheet asked the model *"can you pin this end?"* but not the budget *"is there a slot
+  left for it?"* — so on a segment carrying a full cast (a Seedance model takes nine images; two
+  characters with seven references each fill that on their own) both screens promised
+  *"near-seamless (reference-guided)"* and the render, correctly, dropped the pin and delivered a
+  scene cut. Both now read the same composed answer the renderer acts on, so a boundary that cannot
+  be pinned says so **before** the paid button, not afterwards in the clip strip. The seam rule and
+  its budget arithmetic now live in one module that the renderers, the server and the browser all
+  import, replacing the hand-kept TypeScript copy of the rule.
+- **Replanning a delivered run was still possible.** `render`, `revise`, `rerender-job` and
+  `assemble` refuse a finalized run, but `POST /api/runs/:id/plan` — a full engine pass that also
+  rewrites `spec.json` — did not, leaving the plan behind your delivered file rewritable from a
+  stale tab. It is guarded like the rest now.
+- **A prompt edit can no longer be silently dropped from a render you paid for.** If the saved-edits
+  sidecar existed but could not be read or copied into the take, the web path used to fall back to
+  the agents' words, label the take `plan`, and say nothing. It now refuses the render (409) and
+  names the file — the same refusal the command line has always made.
+- **A transient fal fetch race no longer looks like an unsupported field.** fal answers HTTP 422
+  both when a Kling argument is wrong *and* when its worker briefly cannot fetch a reference URL we
+  just uploaded — and the second message names the field too. The closing-frame fallback read that
+  as a rejection, permanently recorded `seam_out: unsupported` (a lie the continuity strip and the
+  seamless stitcher then acted on) and submitted a **second billed render**. It now tells the two
+  apart, exactly as the ordinary retry loop already did.
+- **The provider's own closing still is kept under the name the seam reads.** The downloaded frame
+  was matched by the URL's filename, which real CDNs content-hash — so outside the test mocks the
+  paid-for frame was never found, every seam fell back to an ffmpeg grab, and a stray PNG was left
+  in the take. The transport now names that file at download time (and the mocks serve hashed URLs,
+  so the test can fail again).
+- A re-approval landing in the **same millisecond** as the reopen that enabled it was read as
+  superseded: the run sat out of `complete` forever while every spending endpoint stayed unlocked on
+  a delivered file. An approval cannot precede its own reopen, so equal timestamps now count as
+  delivered.
+- `DELETE /api/runs/:id/prompt?job=__proto__` (or `constructor`, or `toString`) answered 200,
+  broadcast a prompt-override event to every open tab and filed a history row for a job that never
+  existed. Inherited object members are no longer mistaken for saved edits.
 - A provider's **closing still is a courtesy, not the purchase**: a `return_last_frame` image that is
   advertised and then fails to download (an expired CDN record) no longer throws away the render it
   came with. The clip has already been generated and billed by that point, and the same frame is
@@ -193,6 +228,17 @@
   asked for depends on which provider your backend bills), and the test walks it that way.
 
 ### Changed
+- **The library list no longer pays for continuity.** Per-segment join facts are read from disk, and
+  the list re-fetches on every progress tick during a render — so a busy library was doing dozens of
+  synchronous reads a second on the same loop that streams progress, for a field only the run page
+  uses. `GET /api/runs/:id` (and the run's live stream) still carry it; the library list does not.
+- **The delivery history reaches the browser as file names, not host paths.** `finals[]` and the
+  reopen entries in `history[]` used to ship absolute paths from the machine running the server; the
+  interface only ever showed the file name. The current final keeps its full path, which is what
+  *Reveal in Finder* and *Copy path* are for.
+- Prompt-edit and prompt-discard rows in the history panel are capped at the most recent twenty.
+  Editing a prompt is free and iterative, and every save used to be filed forever — in the run's
+  manifest and in every state payload the page received. Reopens, takes and cuts are never compacted.
 - **The zero-spend demo boots with a run whose cut has a broken join.**
   `npm --prefix web/server run demo` seeds a three-segment cut in which the middle clip was
   re-rendered under its neighbour — so the join chips, the prompt sheet's "as sent" take versions,

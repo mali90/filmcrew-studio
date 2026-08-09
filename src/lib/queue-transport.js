@@ -1,14 +1,19 @@
 // Provider-neutral plumbing for queue-style render APIs (submit → poll → download). fal.ai is the
 // only provider today, but none of this is fal-specific: a second queue-based provider reuses the
-// same result-shape reader, downloader and error classifiers. Config-free by construction — every
-// caller passes what it needs, so this module can be imported from anywhere (including the web
-// server, whose static-import chain must stay config-free).
+// same result-shape reader, downloader and error classifiers. It takes NO configuration of its own —
+// every caller passes what it needs, so nothing here reads config.js or a provider's env. (It is not
+// in web/server's static graph, and must not be put there without checking the note on the logger
+// import below.)
 //
 // Extracted verbatim from fal.js, which imports and re-exports every symbol here so no downstream
 // import ever changed.
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import log from './logger.js'; // zero imports of its own — the config-free promise above still holds
+// logger.js reads LOG_LEVEL off process.env, so it is not itself config-free; queue-transport is in
+// neither web/server's nor prompt-compose's static graph, which is why that is fine HERE and not a
+// licence to import it from either. (util.js pulls it in too — that is exactly why the pure text
+// helpers had to move to src/lib/text.js.)
+import log from './logger.js';
 import { fetchRetry, writeBuffer, ensureDir } from './util.js';
 
 const MIME = {
@@ -59,22 +64,25 @@ export function contentPolicyError(err, endpoint, provider = 'fal') {
 }
 
 /**
- * Every downloadable file in a queue result, tagged with whether the JOB depends on it.
+ * Every downloadable file in a queue result, tagged with whether the JOB depends on it and — where
+ * the destination name MATTERS — what to save it as.
  * `optional: true` marks a courtesy artifact: something the provider threw in that we would like but
  * that is reproducible locally, so failing to fetch it must never discard the paid render.
  */
 function resultFiles(result) {
   const files = [];
-  const push = (v, optional = false) => { if (v?.url) files.push({ url: v.url, optional }); };
+  const push = (v, optional = false, saveAs = null) => { if (v?.url) files.push({ url: v.url, optional, saveAs }); };
   push(result?.video);
   for (const v of result?.videos ?? []) push(v);
   // A provider that was asked for its own closing still (`return_last_frame`) returns it alongside
-  // the video. It downloads to <job>/last_frame.png — the exact file every downstream seam reads —
-  // so the generator's own pixels replace an ffmpeg re-encode of them. OPTIONAL by construction:
-  // the same frame can always be grabbed off the finished clip with ffmpeg (see
+  // the video. `saveAs` is what makes it usable: a result URL is content-hashed (…/<hash>.png) on
+  // both real CDNs, so keying on the URL's basename would land the frame under an arbitrary name and
+  // every downstream seam would silently fall back to an ffmpeg grab of pixels we already paid for.
+  // It lands at <job>/last_frame.png — the exact file every downstream seam reads. OPTIONAL by
+  // construction: the same frame can always be grabbed off the finished clip with ffmpeg (see
   // pipeline.closingFrameFor), and the video is what was paid for.
-  push(result?.last_frame, true);
-  if (typeof result?.url === 'string') files.push({ url: result.url, optional: false });
+  push(result?.last_frame, true, 'last_frame.png');
+  if (typeof result?.url === 'string') files.push({ url: result.url, optional: false, saveAs: null });
   return files;
 }
 
@@ -96,8 +104,8 @@ export async function downloadResultFiles(result, destDir, label) {
   }
   ensureDir(destDir);
   const paths = [];
-  for (const [i, { url, optional }] of files.entries()) {
-    const base = (() => { try { return path.basename(new URL(url).pathname) || `out_${i + 1}.mp4`; } catch { return `out_${i + 1}.mp4`; } })();
+  for (const [i, { url, optional, saveAs }] of files.entries()) {
+    const base = saveAs ?? (() => { try { return path.basename(new URL(url).pathname) || `out_${i + 1}.mp4`; } catch { return `out_${i + 1}.mp4`; } })();
     try {
       const res = await fetchRetry(url, {}, { retries: 3 });
       if (!res.ok) throw new Error(`${label} output download failed (${url.slice(0, 80)}): HTTP ${res.status}`);

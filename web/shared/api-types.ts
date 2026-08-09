@@ -109,9 +109,6 @@ export interface RunSummary {
   planned: boolean;
   agents: AgentProgress;
   latestRender: RenderView | null;
-  // Aligned 1:1 with `latestRender.jobs`; null while a take is still rendering (nothing recorded yet)
-  // or when the run has no cut at all.
-  continuity: ContinuityEntry[] | null;
   coverUrl: string | null;
   finalUrl: string | null;
   finalFsPath: string | null;
@@ -122,6 +119,11 @@ export interface RunSummary {
 }
 
 export interface RunDetail extends RunSummary {
+  // DETAIL only. Aligned 1:1 with `latestRender.jobs`; null while a take is still rendering (nothing
+  // recorded yet) or when the run has no cut at all. The library LIST does not carry it: deriving it
+  // costs a render.json read per take per run, and the list re-fetches on every SSE status tick —
+  // for a field only the run page (ClipStrip, SegmentRerenderDialog) ever reads.
+  continuity: ContinuityEntry[] | null;
   spec: ProductionSpec | null;
   queue: { position: number } | null;
   logCursor: number;

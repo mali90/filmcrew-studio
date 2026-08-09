@@ -32,7 +32,7 @@ import config from '../../config.js';
 import log from './logger.js';
 import { refLabel } from './render-models.js';
 import { buildSeedanceArgs, fitAudioRef, audioWindowFor, nameOf } from './seedance-args.js';
-import { chooseSeamMode, planSeamRefs } from './prompt-compose.js';
+import { appliedSeamModes, chooseSeamMode, planSeamRefs } from './prompt-compose.js';
 import { readJobOverride } from './prompt-overrides.js';
 import { buildSeedanceJobPrompt, seedanceConfigFor, modelKnobs } from './seedance.js';
 import { characterGroups, jobSpeakers } from './cast-groups.js';
@@ -194,30 +194,40 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
     refGroups.push({ name: g.name, refs });
   }
 
-  // Upload the boundary frames only where they will actually be used, then lay out the reference
-  // list. `cache: false`: every seam file is named last_frame.png, so caching by basename would
-  // hand this job the previous one's frame.
+  // Lay the reference list out BEFORE anything leaves the machine: a soft pin the budget drops has
+  // no business being uploaded (a fal-storage round trip, or a base64 encode of a full frame) only
+  // to be thrown away with a log line. The layout is decided over placeholders; the survivors get
+  // the real URLs below.
   const startFrameSource = startFrameSrc ? (job.first_frame ?? path.basename(startFrame ?? startFrameSrc)) : null;
   const endFrameSource = endFrameSrc ? (job.last_frame ?? path.basename(endFrame ?? endFrameSrc)) : null;
-  const seamInUrl = seam.in.mode === 'none' ? null : await adapter.assetUrl(resolveImage(startFrameSrc), mode, { cache: false });
-  const seamOutUrl = seam.out.mode === 'none' ? null : await adapter.assetUrl(resolveImage(endFrameSrc), mode, { cache: false });
-
-  const plan = planSeamRefs({
+  const layout = planSeamRefs({
     caps,
     castRefs: castUrls,
-    seamIn: seam.in.mode === 'soft' ? seamInUrl : null,
-    seamOut: seam.out.mode === 'soft' ? seamOutUrl : null,
+    seamIn: seam.in.mode === 'soft' ? 'seam:in' : null,
+    seamOut: seam.out.mode === 'soft' ? 'seam:out' : null,
     otherRefCount: caps.maxCombinedRefs != null ? voiceRefs.length : 0,
   });
-  for (const d of plan.dropped) log.warn(`[${job.job_id}] dropped the ${d.kind} reference — ${d.reason}.`);
+  for (const d of layout.dropped) log.warn(`[${job.job_id}] dropped the ${d.kind} reference — ${d.reason}.`);
 
-  const imageUrls = plan.imageRefs.map((r) => r.url);
-  const startFrameRef = plan.imageRefs.find((r) => r.kind === 'seamIn')?.label ?? null;
-  const endFrameRef = plan.imageRefs.find((r) => r.kind === 'seamOut')?.label ?? null;
+  const startFrameRef = layout.imageRefs.find((r) => r.kind === 'seamIn')?.label ?? null;
+  const endFrameRef = layout.imageRefs.find((r) => r.kind === 'seamOut')?.label ?? null;
   // What was APPLIED, not what was wished for: a soft pin whose reference lost its slot pinned
   // nothing, and must be recorded as no seam rather than as a promise the clip cannot keep.
-  const appliedIn = seam.in.mode === 'soft' && !startFrameRef ? 'none' : seam.in.mode;
-  const appliedOut = seam.out.mode === 'soft' && !endFrameRef ? 'none' : seam.out.mode;
+  const applied = appliedSeamModes(seam, layout.imageRefs);
+  const appliedIn = applied.in;
+  const appliedOut = applied.out;
+  // Upload only the frames that are really going to ride. `cache: false`: every seam file is named
+  // last_frame.png, so caching by basename would hand this job the previous one's frame.
+  const seamInUrl = (appliedIn === 'native' || startFrameRef)
+    ? await adapter.assetUrl(resolveImage(startFrameSrc), mode, { cache: false }) : null;
+  const seamOutUrl = (appliedOut === 'native' || endFrameRef)
+    ? await adapter.assetUrl(resolveImage(endFrameSrc), mode, { cache: false }) : null;
+  const plan = {
+    ...layout,
+    imageRefs: layout.imageRefs.map((r) => (
+      r.kind === 'seamIn' ? { ...r, url: seamInUrl } : r.kind === 'seamOut' ? { ...r, url: seamOutUrl } : r)),
+  };
+  const imageUrls = plan.imageRefs.map((r) => r.url);
   const firstFrameUrl = appliedIn === 'native' ? seamInUrl : null;
   const lastFrameUrl = appliedOut === 'native' ? seamOutUrl : null;
 
@@ -358,8 +368,9 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
     },
   });
   const clip = oneMp4(outs);
-  // The provider's own closing still, if we asked for one and it came back: it downloads straight to
-  // <job>/last_frame.png, which is the file every downstream seam reads.
+  // The provider's own closing still, if we asked for one and it came back. The transport saves it
+  // AS last_frame.png (queue-transport's `saveAs`), never under the CDN's own content-hashed name —
+  // that is what makes this match hold against a real provider and not just against the mocks.
   const providerLastFrame = outs.find((p) => path.basename(p) === 'last_frame.png') ?? null;
   log.info(`[${job.job_id}] clip -> ${clip}`);
   return {

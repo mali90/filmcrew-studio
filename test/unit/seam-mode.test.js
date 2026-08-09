@@ -211,3 +211,41 @@ test('every drop is reported with enough detail to log one honest warn line', PE
     assert.ok(typeof d.reason === 'string' && d.reason.length, 'why — the warn line must name the cap that bit');
   }
 });
+
+// ── The budget, read by everything that quotes a seam to a user ─────────────────────────────────
+//
+// chooseSeamMode answers the MODEL's question; planSeamRefs answers the BUDGET's. Both surfaces
+// that promise a join before money moves — the prompt sheet's seam line and the re-render dialog's
+// plain-words sentence — must read the composition of the two, or a pin the image cap is about to
+// drop gets sold as "near-seamless (reference-guided)" and delivered as a scene cut.
+
+test('appliedSeamModes collapses a soft pin that lost its slot, and never touches a native one', PENDING, () => {
+  const soft = { in: { mode: 'soft' }, out: { mode: 'soft' } };
+  assert.deepEqual(compose.appliedSeamModes(soft, [{ kind: 'cast' }, { kind: 'seamIn' }]), { in: 'soft', out: 'none' });
+  assert.deepEqual(compose.appliedSeamModes(soft, [{ kind: 'cast' }]), { in: 'none', out: 'none' });
+  // A native anchor rides its own argument, so the image list has no say over it.
+  assert.deepEqual(compose.appliedSeamModes({ in: { mode: 'native' }, out: { mode: 'native' } }, []), { in: 'native', out: 'native' });
+});
+
+test('pinStrengths = chooseSeamMode + the SEAM_PRIORITY budget, in one answer', PENDING, () => {
+  const caps = capsFor('seedance-2.0@fal'); // 9 images, always soft-pinned
+  const ask = (castRefCount) => compose.pinStrengths({ caps, castRefCount, hasSeamIn: true, hasSeamOut: true });
+  assert.deepEqual(ask(2), { in: 'soft', out: 'soft' }, 'room for both pins');
+  assert.deepEqual(ask(8), { in: 'soft', out: 'none' }, 'one slot left — the END pin goes first');
+  assert.deepEqual(ask(9), { in: 'none', out: 'none' }, 'a full cast keeps every identity ref and no pin');
+  // An end with no frame is 'none' whatever the budget says.
+  assert.equal(compose.pinStrengths({ caps, castRefCount: 0, hasSeamIn: true, hasSeamOut: false }).out, 'none');
+});
+
+test('a declared cap of ZERO means nothing fits — never "unlimited"', PENDING, () => {
+  // Reachable the day a registry entry declares an image-less endpoint. `Number(x) || Infinity`
+  // would read 0 as no cap at all and ship every reference to a model that accepts none.
+  const noImages = { ...capsFor('seedance-2.0@fal'), maxImages: 0 };
+  const plan = compose.planSeamRefs({ caps: noImages, castRefs: castUrls(2), seamIn: SEAM_IN, seamOut: SEAM_OUT });
+  assert.deepEqual(plan.imageRefs, [], 'a zero cap admits nothing');
+  assert.equal(plan.dropped.length, 4);
+  assert.ok(plan.dropped.every((d) => /0-image reference cap/.test(d.reason)), `the warn line names the real cap: ${plan.dropped[0]?.reason}`);
+
+  const noCombined = { ...capsFor('seedance-2.5@fal'), maxCombinedRefs: 0 };
+  assert.deepEqual(compose.planSeamRefs({ caps: noCombined, castRefs: castUrls(1) }).imageRefs, []);
+});

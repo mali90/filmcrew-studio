@@ -118,6 +118,21 @@ test('DELETE discards the edit and restores the agents\' text byte for byte', as
   assert.equal(Buffer.compare(Buffer.from(restored.prompt, 'utf8'), Buffer.from(original, 'utf8')), 0);
 });
 
+// `jobs` is a plain object literal, so a bracket read of '__proto__'/'constructor'/'toString' finds
+// an INHERITED member and answers "yes, there was an edit here". That would turn a 404 into a 200,
+// broadcast a prompt-override event to every open tab and file a discard row in the History panel
+// for a job that never existed.
+test('DELETE /prompt on an Object.prototype key is a 404, not a bogus success', async () => {
+  const runId = await plannedRun();
+  for (const key of ['__proto__', 'constructor', 'toString']) {
+    const r = await del(`/api/runs/${runId}/prompt?job=${encodeURIComponent(key)}`);
+    assert.equal(r.statusCode, 404, `"${key}" is not a job in this plan (got ${r.statusCode}: ${r.body})`);
+  }
+  assert.ok(!fs.existsSync(sidecarOf(runId)), 'and nothing was written on the way out');
+  const m = readManifest(path.join(runsDir, runId));
+  assert.equal((m?.history ?? []).filter((h) => h?.kind === 'prompt-discard').length, 0, 'no junk history row');
+});
+
 test('an over-budget edit is refused WITH the numbers — never silently truncated', async () => {
   const runId = await plannedRun();
   const view = (await get(`/api/runs/${runId}/prompts`)).json().prompts[0];
@@ -278,6 +293,50 @@ test('render() snapshots the sidecar into the RESERVED take dir, flags the child
   assert.ok(args.includes('--prompt-overrides'), 'the render child is told where the words are');
   assert.equal(args[args.indexOf('--prompt-overrides') + 1], snap, 'and it is pointed at the TAKE\'s copy, not the run\'s living one');
   assert.equal(readManifest(dir).takes.at(-1).promptSource, 'override', 'the take records that it rendered an edit');
+});
+
+// A sidecar that EXISTS but cannot be used is the one case where degrading is worse than failing:
+// the render is PAID, and it would silently ship the agents' words in place of the user's, labelled
+// `promptSource:'plan'` with no error anywhere. src/lib/prompt-overrides.js makes the CLI path throw
+// for exactly this reason; the web path — the only one a UI user takes — has to agree.
+// Editing a prompt is free and iterative — someone tuning one segment saves it dozens of times, and
+// every save filed a row that then rode the manifest AND every SSE-triggered detail payload forever.
+// The History panel only draws these chronologically, so keeping the newest N costs nothing visible.
+test('prompt-edit history is capped — a long tuning session does not grow the manifest forever', async () => {
+  const planned = await plannedRun();
+  const spec = readJson(specOf(planned));
+  const jobId = spec.kling.jobs[0].job_id;
+  const runId = 'web-19990101000010-history';
+  const { dir, svc } = fakeService(runId, spec);
+
+  for (let i = 0; i < 60; i++) svc.promptOverrideChanged(runId, { jobId, action: 'saved', source: 'override' });
+  const history = readManifest(dir).history;
+  const edits = history.filter((h) => h.kind === 'prompt-edit');
+  assert.ok(edits.length > 0 && edits.length <= 20, `capped, not unbounded (got ${edits.length})`);
+  assert.equal(new Set(edits.map((h) => h.id)).size, edits.length, 'ids stay unique across a compaction');
+  assert.equal(edits.at(-1).id, 'prompt-edit-60', 'the newest row is still numbered for what it is');
+  // Only the edit rows are compacted: a reopen is a lifecycle FACT, and dropping one would rewrite
+  // what happened to the run (its shape is asserted in reopen-finalize.test.js).
+  assert.equal(history.filter((h) => h.kind !== 'prompt-edit' && h.kind !== 'prompt-discard').length,
+    0, 'this fixture only ever filed edits — nothing else was touched');
+});
+
+test('a corrupt overrides sidecar REFUSES the render (409) rather than quietly rendering the plan', async () => {
+  const planned = await plannedRun();
+  const spec = readJson(specOf(planned));
+  const runId = 'web-19990101000009-corrupt';
+  const { dir, svc, enqueued } = fakeService(runId, spec);
+  const before = enqueued.length;
+  fs.writeFileSync(path.join(dir, 'prompt-overrides.json'), '{ "schema": 1, "jobs": { oops');
+
+  assert.throws(() => svc.render(runId, { mode: 'full' }), (e) => {
+    assert.equal(e.statusCode, 409);
+    assert.match(String(e.message), /prompt edits are unusable/i);
+    return true;
+  });
+  assert.equal(enqueued.length, before, 'nothing was queued — a refused render costs exactly nothing');
+  assert.equal(readManifest(dir).takes.length, 0, 'and no take pretends to have happened');
+  assert.ok(!fs.existsSync(path.join(dir, 'renders', 't1')), 'the reserved take dir is released, not left to burn a number');
 });
 
 test('a run with no edits keeps today\'s argv and records promptSource "plan"', async () => {

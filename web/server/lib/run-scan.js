@@ -33,7 +33,11 @@ export const defaultIsAlive = (pid) => { try { process.kill(pid, 0); return true
 export function finalizedFinal(manifest) {
   const approved = manifest?.approved;
   if (!approved?.final) return null;
-  if (manifest.reopenedAt && !(String(approved.at ?? '') > String(manifest.reopenedAt))) return null;
+  // `>=`, not `>`: an approval cannot precede the reopen that enabled it, so a re-approval stamped
+  // in the same millisecond (an injected clock in the tests and the demo seeder, or a fast enough
+  // machine) is the NEWER fact. Read as superseded it would strand the run out of `complete` while
+  // leaving every spend endpoint open on a delivered file — the worst of both answers.
+  if (manifest.reopenedAt && !(String(approved.at ?? '') >= String(manifest.reopenedAt))) return null;
   return approved.final;
 }
 

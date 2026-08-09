@@ -7,16 +7,17 @@
 // INLINE, so there is never a second scrim over the first (spec D13b).
 //
 // The honesty rule this screen exists to keep: what we promise about a join must be what the
-// renderer will really do. The strength of a pin comes from `pinStrengthFor`, mirrored from the
-// renderer's own `chooseSeamMode`, and the sentence from `boundaryPlanSentence` — so "seamless" can
-// only ever be said about a native first/last-frame anchor, and a reference-guided pin says exactly
-// that (spec D14/D15 with the implementer's soft-pin correction).
+// renderer will really do. The strength of a pin comes from `pinStrengthsFor` — the renderer's own
+// seam rule AND its reference-budget arithmetic (src/lib/seam-rule.js), not a mirror of either —
+// and the sentence from `boundaryPlanSentence`, so "seamless" can only ever be said about a native
+// first/last-frame anchor, a reference-guided pin says exactly that, and a pin the image budget
+// will drop is not sold at all (spec D14/D15 with the implementer's soft-pin correction).
 import { useEffect, useState, type ReactNode } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { AlertTriangle, ArrowLeft, ArrowRight } from 'lucide-react';
 import type { Aspect, BoundaryMode, ContinuityEntry, JobView, RunDetail } from '../../../../../shared/api-types';
-import { capsFor, pinStrengthFor, type PinStrength } from '../../../../../shared/render-models';
+import { capsFor, castRefCountFor, pinStrengthFor, pinStrengthsFor, type PinStrength } from '../../../../../shared/render-models';
 import { api, ApiClientError } from '../../../api/client';
 import { Button } from '../../ui/Button';
 import { Dialog } from '../../ui/Dialog';
@@ -133,10 +134,14 @@ export function SegmentRerenderDialog({ run, jobId, open, onClose }: {
     : wantStart && wantEnd ? 'both' : wantStart ? 'start' : wantEnd ? 'end' : 'none';
 
   const backend = run.latestRender?.backend ?? run.backend ?? 'kling';
-  const specJob = (run.spec?.kling?.jobs ?? []).find((j) => j.job_id === jobId);
-  const castRefCount = specJob?.elements?.length || run.spec?.kling?.elements?.length || 0;
-  const startStrength: PinStrength = wantStart ? pinStrengthFor(backend, { castRefCount, end: 'in' }) : 'none';
-  const endStrength: PinStrength = wantEnd ? pinStrengthFor(backend, { castRefCount, end: 'out' }) : 'none';
+  const castRefCount = castRefCountFor(run.spec, jobId);
+  // Both ends at once, and through the BUDGET-aware helper: the two pins compete for the same image
+  // slots, and at a full cast SEAM_PRIORITY drops the closing one (then the opening one) before it
+  // drops a paid identity reference. Asking per end, budget-free, is how a dropped pin gets sold as
+  // "near-seamless (reference-guided)" and delivered as a scene cut.
+  const strengths = pinStrengthsFor(backend, { castRefCount, hasSeamIn: wantStart, hasSeamOut: wantEnd });
+  const startStrength: PinStrength = wantStart ? strengths.in : 'none';
+  const endStrength: PinStrength = wantEnd ? strengths.out : 'none';
   const pinStrength: PinStrength = wantStart && wantEnd
     ? weaker(startStrength, endStrength)
     : wantStart ? startStrength : endStrength;

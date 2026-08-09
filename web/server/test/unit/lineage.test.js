@@ -179,24 +179,24 @@ test('serializeContinuity is what the UI draws from — every joint carries a ki
 
 test('resolveBoundaries names the neighbours a re-render may be pinned to', PENDING, () => {
   const l = lineage.computeLineage(fivemjo);
-  const mid = lineage.resolveBoundaries(l, 1);
+  const mid = lineage.resolveBoundaries({ continuity: l, index: 1 });
   assert.equal(mid.first.jobId, 'K1', "K2 may open on K1's last frame");
   assert.equal(mid.first.take, 't4');
   assert.equal(mid.last.jobId, 'K3', "…and close on K3's opening frame");
   assert.equal(mid.last.take, 't4');
 
-  const head = lineage.resolveBoundaries(l, 0);
+  const head = lineage.resolveBoundaries({ continuity: l, index: 0 });
   assert.equal(head.first, null, 'the first segment has nothing before it — the dialog says "opens on a cut"');
   assert.equal(head.last.jobId, 'K2');
 
-  const tail = lineage.resolveBoundaries(l, 2);
+  const tail = lineage.resolveBoundaries({ continuity: l, index: 2 });
   assert.equal(tail.first.jobId, 'K2');
   assert.equal(tail.last, null);
 });
 
 test('resolveBoundaries on a single-segment cut offers nothing to join to', PENDING, () => {
   const run = { ...structuredClone(fivemjo), cut: [{ jobId: 'K1', take: 't4' }] };
-  const only = lineage.resolveBoundaries(lineage.computeLineage(run), 0);
+  const only = lineage.resolveBoundaries({ continuity: lineage.computeLineage(run), index: 0 });
   assert.equal(only.first, null);
   assert.equal(only.last, null);
 });

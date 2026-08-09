@@ -16,6 +16,9 @@ import { safeChild } from './paths.js';
 // pure function over a run record, and the model registry imports nothing at all.
 import { computeLineage, resolveBoundaries, BOUNDARY_MODES } from './lineage.js';
 import { capsFor, normalizeBackend } from '../../../src/lib/render-models.js';
+// The cast count the seam rule reads, from the module that owns the rule — a job with no elements
+// of its own inherits the WHOLE roster, and that subtlety is worth deriving in exactly one place.
+import { castRefCountFor } from '../../../src/lib/seam-rule.js';
 // config-FREE import: run-service is loaded eagerly by app.js, and the demo/e2e server sets FAL_BASE_URL
 // only AFTER its static import chain — importing anything that pulls config.js here would snapshot the
 // wrong (real) fal endpoint and make the validators/renders miss the mock.
@@ -330,13 +333,6 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
   /** The model registry's caps for a backend, or null when the run names one we no longer know. */
   const capsOf = (backend) => { try { return capsFor(normalizeBackend(backend).id); } catch { return null; } };
 
-  /** How many cast references a job carries — all chooseSeamMode asks about the cast. Mirrors what
-   *  characterGroups() resolves: the job's own element ids, or the whole roster when it names none. */
-  const castRefCountFor = (spec, jobId) => {
-    const job = (spec?.kling?.jobs ?? []).find((j) => j.job_id === jobId);
-    return job?.elements?.length || (spec?.kling?.elements?.length ?? 0);
-  };
-
   /** Write a full-composition render.json into takeDir: every spec job's newest clip, in order. */
   function composeCut(runId, takeDir) {
     const dir = dirFor(runId);
@@ -439,21 +435,46 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
   // is answerable from t3 alone.
 
   const OVERRIDES_FILE = 'prompt-overrides.json';
+  /** How many prompt-edit/discard rows the History panel keeps (the newest ones). */
+  const PROMPT_HISTORY_MAX = 20;
 
   /**
    * Snapshot the run's prompt overrides into a reserved take dir.
+   *
+   * A sidecar that EXISTS but cannot be read or copied refuses the render (409). Degrading to the
+   * agents' text would spend the user's money rendering words they replaced, and label the take
+   * `promptSource:'plan'` — silently ignoring an edit is the one failure a user cannot see in the
+   * output, which is exactly what src/lib/prompt-overrides.js exists to prevent on the CLI path.
+   * No sidecar at all is not a failure: that run simply renders the plan.
+   *
    * @param {string} dir  the run dir
    * @param {string} takeDir  the take reserved for this render
    * @param {string[]} jobIds  the jobs this render will actually submit
    * @returns {{args:string[], promptSource:'plan'|'override'}} the CLI flag, and whose words the
    *   take is rendering — recorded on the take so a past render explains itself.
    */
+  /** Run `fn` against an already-reserved take dir, releasing the reservation if it throws — a take
+   *  number must not be burned by a render that never got as far as the queue. */
+  function reserved(takeDir, fn) {
+    try {
+      return fn();
+    } catch (e) {
+      fs.rmSync(takeDir, { recursive: true, force: true });
+      throw e;
+    }
+  }
+
   function snapshotPromptOverrides(dir, takeDir, jobIds) {
     const src = path.join(dir, OVERRIDES_FILE);
-    const jobs = readJson(src)?.jobs;
-    if (!jobs || typeof jobs !== 'object') return { args: [], promptSource: 'plan' };
+    if (!fs.existsSync(src)) return { args: [], promptSource: 'plan' };
+    const unusable = (why) => Object.assign(new Error(`this run's saved prompt edits are unusable (${why})`), {
+      statusCode: 409, hint: 'discard the edited prompt (or fix prompt-overrides.json) — rendering the plan instead would spend money on words you replaced',
+    });
+    let jobs;
+    try { jobs = JSON.parse(fs.readFileSync(src, 'utf8'))?.jobs; } catch { throw unusable(`${OVERRIDES_FILE} is not readable JSON`); }
+    if (!jobs || typeof jobs !== 'object' || Array.isArray(jobs)) throw unusable(`${OVERRIDES_FILE} has no jobs object`);
     const dest = path.join(takeDir, OVERRIDES_FILE);
-    try { fs.copyFileSync(src, dest); } catch { return { args: [], promptSource: 'plan' }; }
+    try { fs.copyFileSync(src, dest); } catch (e) { throw unusable(`it could not be snapshotted into the take — ${String(e?.message ?? e).slice(0, 80)}`); }
     // 'override' only when an edit really reaches one of the jobs being rendered — a sidecar that
     // only holds K1's edit must not label a K2-only re-render as edited.
     return { args: ['--prompt-overrides', dest], promptSource: jobIds.some((id) => jobs[id]) ? 'override' : 'plan' };
@@ -472,7 +493,19 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     try {
       updateManifest(dirFor(runId), (m) => {
         m.history = Array.isArray(m.history) ? m.history : [];
-        m.history.push({ id: `${kind}-${m.history.filter((h) => h?.kind === kind).length + 1}`, kind, job: jobId, at: now().toISOString() });
+        // Ids stay unique across a compaction by counting from the highest one still present, never
+        // from how many rows survive.
+        const nth = m.history.reduce((n, h) => (h?.kind === kind ? Math.max(n, Number(/-(\d+)$/.exec(h.id ?? '')?.[1] ?? 0)) : n), 0) + 1;
+        m.history.push({ id: `${kind}-${nth}`, kind, job: jobId, at: now().toISOString() });
+        // A prompt edit is free and iterative — someone tuning one segment can save it fifty times,
+        // and every row would then ride the manifest AND every detail payload forever. Only the
+        // newest PROMPT_HISTORY_MAX edit rows are kept; reopens/takes/cuts are lifecycle facts and
+        // are never compacted.
+        const edits = m.history.filter((h) => h?.kind === 'prompt-edit' || h?.kind === 'prompt-discard');
+        if (edits.length > PROMPT_HISTORY_MAX) {
+          const drop = new Set(edits.slice(0, edits.length - PROMPT_HISTORY_MAX));
+          m.history = m.history.filter((h) => !drop.has(h));
+        }
         return m;
       });
     } catch { /* no manifest (a CLI run) — the event below is still the fact that matters */ }
@@ -501,6 +534,11 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
 
   /** Re-run the engine on an existing run (recovery after a failed/interrupted plan). LLM cost, no render. */
   function plan(runId) {
+    // Guarded exactly like revise(): replanning both SPENDS (a full engine pass) and rewrites
+    // spec.json under a file the user already has — the strongest form of "rewrites the plan behind
+    // a delivered final", since the prompt views, the lineage and the finals history would all then
+    // describe a plan the delivered video was never made from.
+    assertNotFinalized(runId);
     const dir = dirFor(runId);
     const m = readManifest(dir);
     if (!m) throw Object.assign(new Error('not a web run'), { statusCode: 409, hint: 'CLI-created runs are planned from the terminal' });
@@ -625,7 +663,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     const est = estimateRender(spec, { backend, mode, ...estOpts(backend) });
     const specJobs = (spec.kling?.jobs ?? []).map((j) => j.job_id);
     // a probe renders only the FIRST job, so only its edit can be in play
-    const overrides = snapshotPromptOverrides(dir, takeDir, mode === 'probe' ? specJobs.slice(0, 1) : specJobs);
+    const overrides = reserved(takeDir, () => snapshotPromptOverrides(dir, takeDir, mode === 'probe' ? specJobs.slice(0, 1) : specJobs));
     updateManifest(dir, (m) => {
       m.takes.push({ id: takeId, mode, revision: m.revisions.at(-1)?.id ?? null, createdAt: now().toISOString(), estUsd: est.totalUsd, promptSource: overrides.promptSource });
       m.costLedger.push({ ts: now().toISOString(), action: mode, ...ledgerLine(est) });
@@ -723,7 +761,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
 
     // Every job this take will render — the cascade jobs land in the SAME take dir, so they read the
     // same snapshot (that is why it is taken once, here, and not per enqueue).
-    const overrides = snapshotPromptOverrides(dir, takeDir, [jobId, ...cascadeJobs]);
+    const overrides = reserved(takeDir, () => snapshotPromptOverrides(dir, takeDir, [jobId, ...cascadeJobs]));
     updateManifest(dir, (mm) => {
       mm.takes.push({ id: takeId, mode: 'job', jobId, cascade, revision: mm.revisions.at(-1)?.id ?? null, createdAt: now().toISOString(), estUsd: est.totalUsd, feedback: feedback ?? null, promptSource: overrides.promptSource });
       mm.costLedger.push({ ts: now().toISOString(), action: `rerender ${jobId}${cascade ? ' + downstream' : ''}`, ...ledgerLine(est) });

@@ -66,11 +66,14 @@ export async function startFalServer({ videoBytes = Buffer.from('FAKE-MP4'), opt
       // `return_last_frame` models that hand back the generator's OWN closing still — the exact
       // pixels the next segment should open on, rather than an ffmpeg re-encode of them.
       // `opts.omitLastFrame` reproduces the provider quietly not sending it (→ ffmpeg fallback).
+      // The URL is CONTENT-HASHED, exactly as fal's real CDN serves it: a renderer that found the
+      // frame by the url's basename would pass against a friendly name and fail in production, so
+      // the transport has to be the thing that lands it at <job>/last_frame.png.
       const body200 = { video: { url: `${base}/dl/out.mp4` } };
-      if (opts.returnLastFrame && !opts.omitLastFrame) body200.last_frame = { url: `${base}/dl/last_frame.png` };
+      if (opts.returnLastFrame && !opts.omitLastFrame) body200.last_frame = { url: `${base}/dl/9f2c1ab7e4.png` };
       return json(200, body200);
     }
-    if (u.pathname === '/dl/last_frame.png') {
+    if (u.pathname === '/dl/9f2c1ab7e4.png') {
       res.writeHead(200, { 'content-type': 'image/png' });
       return res.end(opts.lastFrameBytes ?? Buffer.from('PROVIDER-PNG'));
     }

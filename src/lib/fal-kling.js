@@ -20,7 +20,7 @@ import { buildKlingStoryboard, klingConfigFor } from './kling.js';
 import { chooseSeamMode } from './prompt-compose.js';
 import { readJobOverride } from './prompt-overrides.js';
 import { capsFor } from './render-models.js';
-import { generateKling, toFalInput, falRef, isValidationError } from './fal.js';
+import { generateKling, toFalInput, falRef, isValidationError, isTransientFalError } from './fal.js';
 import { characterGroups, jobSpeakers } from './cast-groups.js';
 import { resolveImage } from './elements.js';
 import { getVoiceId } from './voices.js';
@@ -171,12 +171,20 @@ export async function renderKlingJobFal({ job, spec, runDir, seed, lowRes = fals
   // with ONE fallback: a validation rejection that NAMES it re-submits the identical payload minus
   // that field and records the downgrade. Anything else propagates on the first attempt — fal bills
   // per accepted submit, and a blanket retry would double the bill on every unrelated 422.
+  //
+  // `!isTransientFalError` is the other half of that predicate, and it is load-bearing: fal returns
+  // HTTP 422 "…is not valid: timeout while fetching resource" — naming the very field it could not
+  // fetch — when a worker transiently misses a reference URL we just uploaded. Read as a schema
+  // rejection, a CDN race on the closing frame would permanently write `seam_out.mode:'unsupported'`
+  // (a lie the lineage and the stitcher then act on) AND buy a second render. generateKling's own
+  // retry loop pairs the two predicates the same way.
   const submit = (body) => generateKling(body, { endpoint, destDir: dir, timeoutMs: 1200000 });
   let outs;
   try {
     outs = await submit(payload);
   } catch (e) {
-    const rejectedEndFrame = payload.end_image_url && isValidationError(e) && /end_image_url/.test(String(e?.message ?? ''));
+    const rejectedEndFrame = payload.end_image_url && isValidationError(e) && !isTransientFalError(e)
+      && /end_image_url/.test(String(e?.message ?? ''));
     if (!rejectedEndFrame) throw e;
     log.warn(`[${job.job_id}] fal Kling rejected end_image_url (${String(e.message).slice(0, 120)}) — retrying once without the closing-frame pin; this clip's ending may jump.`);
     const { end_image_url: _dropped, ...withoutEndFrame } = payload;

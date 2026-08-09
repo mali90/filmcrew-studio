@@ -13,7 +13,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { ChevronDown, Film, MessageSquare, PenLine } from 'lucide-react';
 import type { RunDetail } from '../../../../../shared/api-types';
-import { pinStrengthFor } from '../../../../../shared/render-models';
+import { castRefCountFor, pinStrengthFor } from '../../../../../shared/render-models';
 import { api, ApiClientError } from '../../../api/client';
 import { Button } from '../../ui/Button';
 import { SegmentedControl } from '../../ui/SegmentedControl';
@@ -98,8 +98,7 @@ export function ChangeRequestPanel({ run }: { run: RunDetail }) {
   // frame AND this backend could have ended a segment on a given frame at all (plan P5:
   // supportsEndFrame && feedsNext) — otherwise it is warning about a join nobody made or could make.
   const backend = run.latestRender?.backend ?? run.backend ?? 'kling';
-  const specJob = (run.spec?.kling.jobs ?? []).find((j) => j.job_id === scopedJob);
-  const castRefCount = specJob?.elements?.length || run.spec?.kling?.elements?.length || 0;
+  const castRefCount = scopedJob ? castRefCountFor(run.spec, scopedJob) : 0;
   const supportsEndFrame = pinStrengthFor(backend, { castRefCount, end: 'out' }) !== 'none';
   const nextEntry = (run.continuity ?? []).find((e) => e.jobId === downstream[0]) ?? null;
   const feedsNext = downstream.length > 0 && jointKindOf(nextEntry) === 'linked';

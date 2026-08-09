@@ -121,6 +121,26 @@ test('a validation error naming something else → EXACTLY one submit, error pro
   } finally { delete fal.opts.validationFailNaming; cleanup(); }
 });
 
+// The nastiest shape: fal answers HTTP 422 and NAMES end_image_url, but the complaint is that its
+// worker could not FETCH the frame we just uploaded (a CDN propagation race), not that the field is
+// unsupported. isValidationError matches it; isTransientFalError is what tells the two apart. Read
+// as a schema rejection this would buy a second render AND permanently write a seam_out lie into
+// prompts.json — which lineage.js and seamstitch.js then act on.
+test('a TRANSIENT fetch 422 that happens to name end_image_url is not a schema rejection', PENDING, async () => {
+  const { dir, cleanup } = mkTmp('kef-transient');
+  fal.opts.validationFailNaming = {
+    field: 'end_image_url', times: 1,
+    msg: 'The parameter `end_image_url` specified in the request is not valid: timeout while fetching resource. Request id: t1',
+  };
+  try {
+    const before = fal.requests.length;
+    await assert.rejects(() => renderJob(endFrameSpec(), 'K1', { runDir: dir }), /timeout while fetching resource/);
+    assert.equal(submitsSince(before).length, 1, 'no fallback submit — a transient fetch race must never be billed twice');
+    assert.notEqual(sidecar(dir).seam_out.mode, 'unsupported',
+      'the model never refused the pin, so nothing may record that it did');
+  } finally { delete fal.opts.validationFailNaming; cleanup(); }
+});
+
 test('the fallback fires at most once: a second end_image_url rejection is fatal', PENDING, async () => {
   const { dir, cleanup } = mkTmp('kef-twice');
   fal.opts.validationFailNaming = { field: 'end_image_url', times: 2 };

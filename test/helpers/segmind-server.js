@@ -46,6 +46,9 @@ const readBody = (req) => new Promise((r) => { let b = ''; req.on('data', (c) =>
  *                         the paid clip must still land, with the frame grabbed locally instead
  * @returns {Promise<{baseUrl:string, requests:object[], queued:object[], opts:object, close:()=>Promise<void>}>}
  */
+/** Where the mock serves the generator's closing still — content-hashed, like the real CDN. */
+const LAST_FRAME_PATH = '/dl/2f9c1ab7e40d.png';
+
 export async function startSegmindServer({ videoBytes = Buffer.from('FAKE-MP4'), opts = {} } = {}) {
   let statusHits = 0;
   let nextId = 1;
@@ -64,7 +67,11 @@ export async function startSegmindServer({ videoBytes = Buffer.from('FAKE-MP4'),
     // `opts.upscaledBytes` answers the Topaz download with a DIFFERENT file — that is how a test
     // reproduces Topaz handing back a clip whose audio track it dropped.
     if (u.pathname.startsWith('/dl/')) {
-      if (u.pathname.endsWith('last_frame.png')) {
+      // Content-HASHED, exactly as Segmind's real CDN serves a result file. A renderer that found
+      // the closing still by the url's basename would pass here under a friendly name and then
+      // never find it in production, so the name is deliberately opaque: the transport has to be
+      // the thing that lands it at <job>/last_frame.png.
+      if (u.pathname === LAST_FRAME_PATH) {
         // `lastFrameFail` is the provider that ADVERTISED its closing still and then cannot serve it
         // (an expired CDN record is the common one). The clip is already generated and billed, so
         // this must degrade to an ffmpeg grab — never fail the render.
@@ -140,7 +147,7 @@ export async function startSegmindServer({ videoBytes = Buffer.from('FAKE-MP4'),
       // A job that ASKED for `return_last_frame` gets the generator's own closing still back — the
       // exact pixels the next segment should open on. `opts.omitLastFrame` reproduces a provider
       // that accepted the flag and sent nothing, which must fall back to an ffmpeg frame grab.
-      if (job?.args?.return_last_frame && !opts.omitLastFrame) out.last_frame = { url: `${base}/dl/last_frame.png` };
+      if (job?.args?.return_last_frame && !opts.omitLastFrame) out.last_frame = { url: `${base}${LAST_FRAME_PATH}` };
       return json(200, out);
     }
 

@@ -87,15 +87,16 @@ vendors:
 
 When a segment is pinned to its neighbour — chained inside a long render, or re-rendered with
 `--first-frame-from` / `--last-frame-from` — the frame reaches the model in one of two ways, and
-which one you get is not a preference. `chooseSeamMode()` in `src/lib/prompt-compose.js` decides it
-once, from the backend's declared caps, and the renderer, the prompt preview and the re-render
-dialog's wording all read that one answer.
+which one you get is not a preference. `src/lib/seam-rule.js` decides it once — `chooseSeamMode()`
+from the backend's declared caps, then `planSeamRefs()` for whether the reference budget can hold the
+pin at all — and the renderer, the prompt preview, the browser bundle and the re-render dialog's
+wording all import that one module rather than mirroring it.
 
 | Mode | What happens | What the UI may call it |
 |---|---|---|
 | `native` | The frame goes in the model's own first/last-frame input. The generator is anchored to those exact pixels. | **seamless** |
 | `soft` | The frame rides as an extra **reference image**, cited by a prompt sentence pinning it as the literal first/last frame. Close, not guaranteed frame-perfect. | **near-seamless (reference-guided)** |
-| `none` | Nothing was pinned — a scene cut by design, or a job with nothing to attach a frame to. | a cut |
+| `none` | Nothing was pinned — a scene cut by design, a job with nothing to attach a frame to, or a soft pin the image budget could not hold. | a cut |
 | `unsupported` | Sent natively and rejected by the provider; the render went through without it. | a cut (and it says so) |
 
 Per backend:
