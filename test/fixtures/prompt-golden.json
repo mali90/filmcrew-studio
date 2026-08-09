@@ -1,0 +1,441 @@
+{
+  "kling/K1/bare": {
+    "totalDuration": 13,
+    "segments": [
+      {
+        "prompt": "Extreme wide shot, distant eye level from the water. A lighthouse beam sweeps across a black, storm-flecked sea at night, spray catching the light, the tower's lamp room glowing warm against cold blue darkness, lonely and cinematic. Keeper says: \"Forty years I kept this light.\" Camera: slow push in toward the tower.",
+        "duration": 5,
+        "speaker": "keeper",
+        "bytes": 317
+      },
+      {
+        "prompt": "Medium close-up, slight low angle. Inside the warm lamp room, the keeper polishes the huge brass-and-glass lens by hand, reflections drifting across the curved glass, dust in the lamplight, a quiet reverent mood. Gull says: \"The light stays on.\" Camera: static lock-off.",
+        "duration": 4,
+        "speaker": "gull",
+        "bytes": 270
+      },
+      {
+        "prompt": "Wide shot, eye level from the doorway. Pale dawn light fills the room as the great lamp dims and goes dark for the last time; the keeper steps out and quietly pulls the heavy door closed, the sea calm and silver behind. No dialogue in this shot; ambient sound and SFX only. Camera: gentle pull back.",
+        "duration": 4,
+        "speaker": null,
+        "bytes": 299
+      }
+    ]
+  },
+  "kling/K1/fal-compact": {
+    "totalDuration": 13,
+    "segments": [
+      {
+        "prompt": "@Element1 Extreme wide shot, distant eye level from the water. A lighthouse beam sweeps across a black, storm-flecked sea at night, spray catching the light, the tower's lamp room glowing warm against cold blue darkness, lonely and cinematic. @Element1 says: \"forty years i kept this light.\" Camera: slow push in toward the tower.",
+        "duration": 5,
+        "speaker": "keeper",
+        "bytes": 330
+      },
+      {
+        "prompt": "@Element1 Medium close-up, slight low angle. Inside the warm lamp room, the keeper polishes the huge brass-and-glass lens by hand, reflections drifting across the curved glass, dust in the lamplight, a quiet reverent mood. @Element2 says: \"the light stays on.\" Camera: static lock-off.",
+        "duration": 4,
+        "speaker": "gull",
+        "bytes": 285
+      },
+      {
+        "prompt": "@Element1 Wide shot, eye level from the doorway. Pale dawn light fills the room as the great lamp dims and goes dark for the last time; the keeper steps out and quietly pulls the heavy door closed, the sea calm and silver behind. No dialogue in this shot; ambient sound and SFX only. Camera: gentle pull back.",
+        "duration": 4,
+        "speaker": null,
+        "bytes": 309
+      }
+    ]
+  },
+  "kling/K2/fal-compact": {
+    "totalDuration": 9,
+    "segments": [
+      {
+        "prompt": "@Element1 Medium shot, handheld eye level. The keeper crosses the gallery deck against a rising gale, one hand on the rail, salt spray sheeting off the glass while the lamp turns behind him and the horizon goes white. The keeper crosses the gallery deck against a rising gale, one hand on the rail, salt spray sheeting off the glass while the lamp turns behind him and the horizon goes white. The keeper crosses the ga... @Element1 says: \"every night, in every weather.\" Camera: slow arc to the left.",
+        "duration": 5,
+        "speaker": "keeper",
+        "bytes": 500
+      },
+      {
+        "prompt": "@Element1 Close-up. Rain hammers the lamp room glass. Rain hammers the lamp room glass. Rain hammers the lamp room glass. Rain hammers the lamp room glass. Rain hammers the lamp room glass. Rain hammers the lamp room glass. Rain hammers the lamp room glass. Rain hammers the lamp room glass. Rain hammers the lamp room glass. café—naïve—œuvre 🌊 café—naïve—œuvre 🌊 café—naïve—œuvre 🌊 café—naïve—œuvre 🌊 c... No dialogue in this shot; ambient sound and SFX only.",
+        "duration": 4,
+        "speaker": null,
+        "bytes": 500
+      }
+    ]
+  },
+  "kling/K3/fal-compact": {
+    "totalDuration": 4,
+    "segments": [
+      {
+        "prompt": "@Element1 @Element2 says: \"we ran the lamp by hand every single night, in every weather the atlantic could think of, and not one ship went onto those rocks while i stood the watch, not one, we ran the lamp by hand every single night, in every weather the atlantic could think of, and not one ship went onto those rocks while i stood the watch, not one, we ran the lamp by hand every single night, in every weather the atlantic could think of, and not one ship went onto those rocks while i stood the\"",
+        "duration": 4,
+        "speaker": "gull",
+        "bytes": 500
+      }
+    ]
+  },
+  "kling/K2/fal-bracket": {
+    "totalDuration": 9,
+    "segments": [
+      {
+        "prompt": "[Element1] Medium shot, handheld eye level. The keeper crosses the gallery deck against a rising gale, one hand on the rail, salt spray sheeting off the glass while the lamp turns behind him and the horizon goes white. The keeper crosses the gallery deck against a rising gale, one hand on the rail, salt spray sheeting off the glass while the lamp turns behind him and the horizon goes white. The keeper crosses the... [Element1] says: \"every night, in every weather.\" Camera: slow arc to the left.",
+        "duration": 5,
+        "speaker": "keeper",
+        "bytes": 499
+      },
+      {
+        "prompt": "[Element1] Close-up. Rain hammers the lamp room glass. Rain hammers the lamp room glass. Rain hammers the lamp room glass. Rain hammers the lamp room glass. Rain hammers the lamp room glass. Rain hammers the lamp room glass. Rain hammers the lamp room glass. Rain hammers the lamp room glass. Rain hammers the lamp room glass. café—naïve—œuvre 🌊 café—naïve—œuvre 🌊 café—naïve—œuvre 🌊 café—naïve—œuvre 🌊... No dialogue in this shot; ambient sound and SFX only.",
+        "duration": 4,
+        "speaker": null,
+        "bytes": 499
+      }
+    ]
+  },
+  "kling/K3/text-to-video": {
+    "totalDuration": 4,
+    "segments": [
+      {
+        "prompt": "Gull says: \"we ran the lamp by hand every single night, in every weather the atlantic could think of, and not one ship went onto those rocks while i stood the watch, not one, we ran the lamp by hand every single night, in every weather the atlantic could think of, and not one ship went onto those rocks while i stood the watch, not one, we ran the lamp by hand every single night, in every weather the atlantic could think of, and not one ship went onto those rocks while i stood the watch, not one\"",
+        "duration": 4,
+        "speaker": "gull",
+        "bytes": 500
+      }
+    ]
+  },
+  "kling/K1/audio-off": {
+    "totalDuration": 13,
+    "segments": [
+      {
+        "prompt": "@Element1 Extreme wide shot, distant eye level from the water. A lighthouse beam sweeps across a black, storm-flecked sea at night, spray catching the light, the tower's lamp room glowing warm against cold blue darkness, lonely and cinematic. Camera: slow push in toward the tower.",
+        "duration": 5,
+        "speaker": null,
+        "bytes": 281
+      },
+      {
+        "prompt": "@Element1 Medium close-up, slight low angle. Inside the warm lamp room, the keeper polishes the huge brass-and-glass lens by hand, reflections drifting across the curved glass, dust in the lamplight, a quiet reverent mood. Camera: static lock-off.",
+        "duration": 4,
+        "speaker": null,
+        "bytes": 247
+      },
+      {
+        "prompt": "@Element1 Wide shot, eye level from the doorway. Pale dawn light fills the room as the great lamp dims and goes dark for the last time; the keeper steps out and quietly pulls the heavy door closed, the sea calm and silver behind. Camera: gentle pull back.",
+        "duration": 4,
+        "speaker": null,
+        "bytes": 255
+      }
+    ]
+  },
+  "seedance/K1/compact/connectors/plain": {
+    "prompt": "Recurring characters: Keeper = @Image1/@Image2; Gull = @Image3. Keep each exactly on-model and identical across every shot. No on-screen text, letters, captions, or signs anywhere in frame. Speech rule: characters speak ONLY the exact words in a shot's says: \"…\" line; in shots without one they do not speak — generate ambient sound and SFX only, never invented or mumbled dialogue. @Audio1 is the sound of Keeper's voice — a voice reference only; do NOT speak the words contained in that clip. Keeper speaks ONLY the \"…\" lines written in the shots below, in that voice.\n\nOpen on the payoff; the key subject and action are fully visible and legible from the first frame. Extreme wide shot, distant eye level from the water. A lighthouse beam sweeps across a black, storm-flecked sea at night, spray catching the light, the tower's lamp room glowing warm against cold blue darkness, lonely and cinematic. Camera: slow push in toward the tower. Keeper says: \"Forty years I kept this light.\".\nMatch cut to: Medium close-up, slight low angle. Inside the warm lamp room, the keeper polishes the huge brass-and-glass lens by hand, reflections drifting across the curved glass, dust in the lamplight, a quiet reverent mood. Camera: static lock-off. Gull says: \"The light stays on.\".\nCut to: Wide shot, eye level from the doorway. Pale dawn light fills the room as the great lamp dims and goes dark for the last time; the keeper steps out and quietly pulls the heavy door closed, the sea calm and silver behind. Camera: gentle pull back.",
+    "promptBytes": 1537,
+    "shotPrompts": [
+      "Open on the payoff; the key subject and action are fully visible and legible from the first frame. Extreme wide shot, distant eye level from the water. A lighthouse beam sweeps across a black, storm-flecked sea at night, spray catching the light, the tower's lamp room glowing warm against cold blue darkness, lonely and cinematic. Camera: slow push in toward the tower. Keeper says: \"Forty years I kept this light.\".",
+      "Medium close-up, slight low angle. Inside the warm lamp room, the keeper polishes the huge brass-and-glass lens by hand, reflections drifting across the curved glass, dust in the lamplight, a quiet reverent mood. Camera: static lock-off. Gull says: \"The light stays on.\".",
+      "Wide shot, eye level from the doorway. Pale dawn light fills the room as the great lamp dims and goes dark for the last time; the keeper steps out and quietly pulls the heavy door closed, the sea calm and silver behind. Camera: gentle pull back."
+    ],
+    "shotPromptBytes": [
+      417,
+      271,
+      245
+    ],
+    "totalDuration": 13,
+    "speakers": [
+      "keeper"
+    ]
+  },
+  "seedance/K1/compact/connectors/pinned-take2-note": {
+    "prompt": "Recurring characters: Keeper = @Image1/@Image2; Gull = @Image3. Keep each exactly on-model and identical across every shot. No on-screen text, letters, captions, or signs anywhere in frame. Speech rule: characters speak ONLY the exact words in a shot's says: \"…\" line; in shots without one they do not speak — generate ambient sound and SFX only, never invented or mumbled dialogue. Director note: hold the lamp room wider and keep the lens in frame Alternate take 2: vary the staging, camera framing, and timing from the previous take while keeping the same story, characters, and shots. Use @Image4 as the literal first frame of this clip and continue its motion seamlessly forward. @Audio1 is the sound of Keeper's voice — a voice reference only; do NOT speak the words contained in that clip. Keeper speaks ONLY the \"…\" lines written in the shots below, in that voice.\n\nOpen on the payoff; the key subject and action are fully visible and legible from the first frame. Extreme wide shot, distant eye level from the water. A lighthouse beam sweeps across a black, storm-flecked sea at night, spray catching the light, the tower's lamp room glowing warm against cold blue darkness, lonely and cinematic. Camera: slow push in toward the tower. Keeper says: \"Forty years I kept this light.\".\nMatch cut to: Medium close-up, slight low angle. Inside the warm lamp room, the keeper polishes the huge brass-and-glass lens by hand, reflections drifting across the curved glass, dust in the lamplight, a quiet reverent mood. Camera: static lock-off. Gull says: \"The light stays on.\".\nCut to: Wide shot, eye level from the doorway. Pale dawn light fills the room as the great lamp dims and goes dark for the last time; the keeper steps out and quietly pulls the heavy door closed, the sea calm and silver behind. Camera: gentle pull back.",
+    "promptBytes": 1839,
+    "shotPrompts": [
+      "Open on the payoff; the key subject and action are fully visible and legible from the first frame. Extreme wide shot, distant eye level from the water. A lighthouse beam sweeps across a black, storm-flecked sea at night, spray catching the light, the tower's lamp room glowing warm against cold blue darkness, lonely and cinematic. Camera: slow push in toward the tower. Keeper says: \"Forty years I kept this light.\".",
+      "Medium close-up, slight low angle. Inside the warm lamp room, the keeper polishes the huge brass-and-glass lens by hand, reflections drifting across the curved glass, dust in the lamplight, a quiet reverent mood. Camera: static lock-off. Gull says: \"The light stays on.\".",
+      "Wide shot, eye level from the doorway. Pale dawn light fills the room as the great lamp dims and goes dark for the last time; the keeper steps out and quietly pulls the heavy door closed, the sea calm and silver behind. Camera: gentle pull back."
+    ],
+    "shotPromptBytes": [
+      417,
+      271,
+      245
+    ],
+    "totalDuration": 13,
+    "speakers": [
+      "keeper"
+    ]
+  },
+  "seedance/K1/compact/numbered/plain": {
+    "prompt": "Recurring characters: Keeper = @Image1/@Image2; Gull = @Image3. Keep each exactly on-model and identical across every shot. No on-screen text, letters, captions, or signs anywhere in frame. Speech rule: characters speak ONLY the exact words in a shot's says: \"…\" line; in shots without one they do not speak — generate ambient sound and SFX only, never invented or mumbled dialogue. @Audio1 is the sound of Keeper's voice — a voice reference only; do NOT speak the words contained in that clip. Keeper speaks ONLY the \"…\" lines written in the shots below, in that voice.\n\nShot 1: Open on the payoff; the key subject and action are fully visible and legible from the first frame. Extreme wide shot, distant eye level from the water. A lighthouse beam sweeps across a black, storm-flecked sea at night, spray catching the light, the tower's lamp room glowing warm against cold blue darkness, lonely and cinematic. Camera: slow push in toward the tower. Keeper says: \"Forty years I kept this light.\".\nShot 2: Medium close-up, slight low angle. Inside the warm lamp room, the keeper polishes the huge brass-and-glass lens by hand, reflections drifting across the curved glass, dust in the lamplight, a quiet reverent mood. Camera: static lock-off. Gull says: \"The light stays on.\".\nShot 3: Wide shot, eye level from the doorway. Pale dawn light fills the room as the great lamp dims and goes dark for the last time; the keeper steps out and quietly pulls the heavy door closed, the sea calm and silver behind. Camera: gentle pull back.",
+    "promptBytes": 1539,
+    "shotPrompts": [
+      "Open on the payoff; the key subject and action are fully visible and legible from the first frame. Extreme wide shot, distant eye level from the water. A lighthouse beam sweeps across a black, storm-flecked sea at night, spray catching the light, the tower's lamp room glowing warm against cold blue darkness, lonely and cinematic. Camera: slow push in toward the tower. Keeper says: \"Forty years I kept this light.\".",
+      "Medium close-up, slight low angle. Inside the warm lamp room, the keeper polishes the huge brass-and-glass lens by hand, reflections drifting across the curved glass, dust in the lamplight, a quiet reverent mood. Camera: static lock-off. Gull says: \"The light stays on.\".",
+      "Wide shot, eye level from the doorway. Pale dawn light fills the room as the great lamp dims and goes dark for the last time; the keeper steps out and quietly pulls the heavy door closed, the sea calm and silver behind. Camera: gentle pull back."
+    ],
+    "shotPromptBytes": [
+      417,
+      271,
+      245
+    ],
+    "totalDuration": 13,
+    "speakers": [
+      "keeper"
+    ]
+  },
+  "seedance/K1/compact/numbered/pinned-take2-note": {
+    "prompt": "Recurring characters: Keeper = @Image1/@Image2; Gull = @Image3. Keep each exactly on-model and identical across every shot. No on-screen text, letters, captions, or signs anywhere in frame. Speech rule: characters speak ONLY the exact words in a shot's says: \"…\" line; in shots without one they do not speak — generate ambient sound and SFX only, never invented or mumbled dialogue. Director note: hold the lamp room wider and keep the lens in frame Alternate take 2: vary the staging, camera framing, and timing from the previous take while keeping the same story, characters, and shots. Use @Image4 as the literal first frame of this clip and continue its motion seamlessly forward. @Audio1 is the sound of Keeper's voice — a voice reference only; do NOT speak the words contained in that clip. Keeper speaks ONLY the \"…\" lines written in the shots below, in that voice.\n\nShot 1: Open on the payoff; the key subject and action are fully visible and legible from the first frame. Extreme wide shot, distant eye level from the water. A lighthouse beam sweeps across a black, storm-flecked sea at night, spray catching the light, the tower's lamp room glowing warm against cold blue darkness, lonely and cinematic. Camera: slow push in toward the tower. Keeper says: \"Forty years I kept this light.\".\nShot 2: Medium close-up, slight low angle. Inside the warm lamp room, the keeper polishes the huge brass-and-glass lens by hand, reflections drifting across the curved glass, dust in the lamplight, a quiet reverent mood. Camera: static lock-off. Gull says: \"The light stays on.\".\nShot 3: Wide shot, eye level from the doorway. Pale dawn light fills the room as the great lamp dims and goes dark for the last time; the keeper steps out and quietly pulls the heavy door closed, the sea calm and silver behind. Camera: gentle pull back.",
+    "promptBytes": 1841,
+    "shotPrompts": [
+      "Open on the payoff; the key subject and action are fully visible and legible from the first frame. Extreme wide shot, distant eye level from the water. A lighthouse beam sweeps across a black, storm-flecked sea at night, spray catching the light, the tower's lamp room glowing warm against cold blue darkness, lonely and cinematic. Camera: slow push in toward the tower. Keeper says: \"Forty years I kept this light.\".",
+      "Medium close-up, slight low angle. Inside the warm lamp room, the keeper polishes the huge brass-and-glass lens by hand, reflections drifting across the curved glass, dust in the lamplight, a quiet reverent mood. Camera: static lock-off. Gull says: \"The light stays on.\".",
+      "Wide shot, eye level from the doorway. Pale dawn light fills the room as the great lamp dims and goes dark for the last time; the keeper steps out and quietly pulls the heavy door closed, the sea calm and silver behind. Camera: gentle pull back."
+    ],
+    "shotPromptBytes": [
+      417,
+      271,
+      245
+    ],
+    "totalDuration": 13,
+    "speakers": [
+      "keeper"
+    ]
+  },
+  "seedance/K1/spaced/connectors/plain": {
+    "prompt": "Recurring characters: Keeper = @Image 1/@Image 2; Gull = @Image 3. Keep each exactly on-model and identical across every shot. No on-screen text, letters, captions, or signs anywhere in frame. Speech rule: characters speak ONLY the exact words in a shot's says: \"…\" line; in shots without one they do not speak — generate ambient sound and SFX only, never invented or mumbled dialogue. @Audio 1 is the sound of Keeper's voice — a voice reference only; do NOT speak the words contained in that clip. Keeper speaks ONLY the \"…\" lines written in the shots below, in that voice.\n\nOpen on the payoff; the key subject and action are fully visible and legible from the first frame. Extreme wide shot, distant eye level from the water. A lighthouse beam sweeps across a black, storm-flecked sea at night, spray catching the light, the tower's lamp room glowing warm against cold blue darkness, lonely and cinematic. Camera: slow push in toward the tower. Keeper says: \"Forty years I kept this light.\".\nMatch cut to: Medium close-up, slight low angle. Inside the warm lamp room, the keeper polishes the huge brass-and-glass lens by hand, reflections drifting across the curved glass, dust in the lamplight, a quiet reverent mood. Camera: static lock-off. Gull says: \"The light stays on.\".\nCut to: Wide shot, eye level from the doorway. Pale dawn light fills the room as the great lamp dims and goes dark for the last time; the keeper steps out and quietly pulls the heavy door closed, the sea calm and silver behind. Camera: gentle pull back.",
+    "promptBytes": 1541,
+    "shotPrompts": [
+      "Open on the payoff; the key subject and action are fully visible and legible from the first frame. Extreme wide shot, distant eye level from the water. A lighthouse beam sweeps across a black, storm-flecked sea at night, spray catching the light, the tower's lamp room glowing warm against cold blue darkness, lonely and cinematic. Camera: slow push in toward the tower. Keeper says: \"Forty years I kept this light.\".",
+      "Medium close-up, slight low angle. Inside the warm lamp room, the keeper polishes the huge brass-and-glass lens by hand, reflections drifting across the curved glass, dust in the lamplight, a quiet reverent mood. Camera: static lock-off. Gull says: \"The light stays on.\".",
+      "Wide shot, eye level from the doorway. Pale dawn light fills the room as the great lamp dims and goes dark for the last time; the keeper steps out and quietly pulls the heavy door closed, the sea calm and silver behind. Camera: gentle pull back."
+    ],
+    "shotPromptBytes": [
+      417,
+      271,
+      245
+    ],
+    "totalDuration": 13,
+    "speakers": [
+      "keeper"
+    ]
+  },
+  "seedance/K1/spaced/connectors/pinned-take2-note": {
+    "prompt": "Recurring characters: Keeper = @Image 1/@Image 2; Gull = @Image 3. Keep each exactly on-model and identical across every shot. No on-screen text, letters, captions, or signs anywhere in frame. Speech rule: characters speak ONLY the exact words in a shot's says: \"…\" line; in shots without one they do not speak — generate ambient sound and SFX only, never invented or mumbled dialogue. Director note: hold the lamp room wider and keep the lens in frame Alternate take 2: vary the staging, camera framing, and timing from the previous take while keeping the same story, characters, and shots. Use @Image 4 as the literal first frame of this clip and continue its motion seamlessly forward. @Audio 1 is the sound of Keeper's voice — a voice reference only; do NOT speak the words contained in that clip. Keeper speaks ONLY the \"…\" lines written in the shots below, in that voice.\n\nOpen on the payoff; the key subject and action are fully visible and legible from the first frame. Extreme wide shot, distant eye level from the water. A lighthouse beam sweeps across a black, storm-flecked sea at night, spray catching the light, the tower's lamp room glowing warm against cold blue darkness, lonely and cinematic. Camera: slow push in toward the tower. Keeper says: \"Forty years I kept this light.\".\nMatch cut to: Medium close-up, slight low angle. Inside the warm lamp room, the keeper polishes the huge brass-and-glass lens by hand, reflections drifting across the curved glass, dust in the lamplight, a quiet reverent mood. Camera: static lock-off. Gull says: \"The light stays on.\".\nCut to: Wide shot, eye level from the doorway. Pale dawn light fills the room as the great lamp dims and goes dark for the last time; the keeper steps out and quietly pulls the heavy door closed, the sea calm and silver behind. Camera: gentle pull back.",
+    "promptBytes": 1844,
+    "shotPrompts": [
+      "Open on the payoff; the key subject and action are fully visible and legible from the first frame. Extreme wide shot, distant eye level from the water. A lighthouse beam sweeps across a black, storm-flecked sea at night, spray catching the light, the tower's lamp room glowing warm against cold blue darkness, lonely and cinematic. Camera: slow push in toward the tower. Keeper says: \"Forty years I kept this light.\".",
+      "Medium close-up, slight low angle. Inside the warm lamp room, the keeper polishes the huge brass-and-glass lens by hand, reflections drifting across the curved glass, dust in the lamplight, a quiet reverent mood. Camera: static lock-off. Gull says: \"The light stays on.\".",
+      "Wide shot, eye level from the doorway. Pale dawn light fills the room as the great lamp dims and goes dark for the last time; the keeper steps out and quietly pulls the heavy door closed, the sea calm and silver behind. Camera: gentle pull back."
+    ],
+    "shotPromptBytes": [
+      417,
+      271,
+      245
+    ],
+    "totalDuration": 13,
+    "speakers": [
+      "keeper"
+    ]
+  },
+  "seedance/K1/spaced/numbered/plain": {
+    "prompt": "Recurring characters: Keeper = @Image 1/@Image 2; Gull = @Image 3. Keep each exactly on-model and identical across every shot. No on-screen text, letters, captions, or signs anywhere in frame. Speech rule: characters speak ONLY the exact words in a shot's says: \"…\" line; in shots without one they do not speak — generate ambient sound and SFX only, never invented or mumbled dialogue. @Audio 1 is the sound of Keeper's voice — a voice reference only; do NOT speak the words contained in that clip. Keeper speaks ONLY the \"…\" lines written in the shots below, in that voice.\n\nShot 1: Open on the payoff; the key subject and action are fully visible and legible from the first frame. Extreme wide shot, distant eye level from the water. A lighthouse beam sweeps across a black, storm-flecked sea at night, spray catching the light, the tower's lamp room glowing warm against cold blue darkness, lonely and cinematic. Camera: slow push in toward the tower. Keeper says: \"Forty years I kept this light.\".\nShot 2: Medium close-up, slight low angle. Inside the warm lamp room, the keeper polishes the huge brass-and-glass lens by hand, reflections drifting across the curved glass, dust in the lamplight, a quiet reverent mood. Camera: static lock-off. Gull says: \"The light stays on.\".\nShot 3: Wide shot, eye level from the doorway. Pale dawn light fills the room as the great lamp dims and goes dark for the last time; the keeper steps out and quietly pulls the heavy door closed, the sea calm and silver behind. Camera: gentle pull back.",
+    "promptBytes": 1543,
+    "shotPrompts": [
+      "Open on the payoff; the key subject and action are fully visible and legible from the first frame. Extreme wide shot, distant eye level from the water. A lighthouse beam sweeps across a black, storm-flecked sea at night, spray catching the light, the tower's lamp room glowing warm against cold blue darkness, lonely and cinematic. Camera: slow push in toward the tower. Keeper says: \"Forty years I kept this light.\".",
+      "Medium close-up, slight low angle. Inside the warm lamp room, the keeper polishes the huge brass-and-glass lens by hand, reflections drifting across the curved glass, dust in the lamplight, a quiet reverent mood. Camera: static lock-off. Gull says: \"The light stays on.\".",
+      "Wide shot, eye level from the doorway. Pale dawn light fills the room as the great lamp dims and goes dark for the last time; the keeper steps out and quietly pulls the heavy door closed, the sea calm and silver behind. Camera: gentle pull back."
+    ],
+    "shotPromptBytes": [
+      417,
+      271,
+      245
+    ],
+    "totalDuration": 13,
+    "speakers": [
+      "keeper"
+    ]
+  },
+  "seedance/K1/spaced/numbered/pinned-take2-note": {
+    "prompt": "Recurring characters: Keeper = @Image 1/@Image 2; Gull = @Image 3. Keep each exactly on-model and identical across every shot. No on-screen text, letters, captions, or signs anywhere in frame. Speech rule: characters speak ONLY the exact words in a shot's says: \"…\" line; in shots without one they do not speak — generate ambient sound and SFX only, never invented or mumbled dialogue. Director note: hold the lamp room wider and keep the lens in frame Alternate take 2: vary the staging, camera framing, and timing from the previous take while keeping the same story, characters, and shots. Use @Image 4 as the literal first frame of this clip and continue its motion seamlessly forward. @Audio 1 is the sound of Keeper's voice — a voice reference only; do NOT speak the words contained in that clip. Keeper speaks ONLY the \"…\" lines written in the shots below, in that voice.\n\nShot 1: Open on the payoff; the key subject and action are fully visible and legible from the first frame. Extreme wide shot, distant eye level from the water. A lighthouse beam sweeps across a black, storm-flecked sea at night, spray catching the light, the tower's lamp room glowing warm against cold blue darkness, lonely and cinematic. Camera: slow push in toward the tower. Keeper says: \"Forty years I kept this light.\".\nShot 2: Medium close-up, slight low angle. Inside the warm lamp room, the keeper polishes the huge brass-and-glass lens by hand, reflections drifting across the curved glass, dust in the lamplight, a quiet reverent mood. Camera: static lock-off. Gull says: \"The light stays on.\".\nShot 3: Wide shot, eye level from the doorway. Pale dawn light fills the room as the great lamp dims and goes dark for the last time; the keeper steps out and quietly pulls the heavy door closed, the sea calm and silver behind. Camera: gentle pull back.",
+    "promptBytes": 1846,
+    "shotPrompts": [
+      "Open on the payoff; the key subject and action are fully visible and legible from the first frame. Extreme wide shot, distant eye level from the water. A lighthouse beam sweeps across a black, storm-flecked sea at night, spray catching the light, the tower's lamp room glowing warm against cold blue darkness, lonely and cinematic. Camera: slow push in toward the tower. Keeper says: \"Forty years I kept this light.\".",
+      "Medium close-up, slight low angle. Inside the warm lamp room, the keeper polishes the huge brass-and-glass lens by hand, reflections drifting across the curved glass, dust in the lamplight, a quiet reverent mood. Camera: static lock-off. Gull says: \"The light stays on.\".",
+      "Wide shot, eye level from the doorway. Pale dawn light fills the room as the great lamp dims and goes dark for the last time; the keeper steps out and quietly pulls the heavy door closed, the sea calm and silver behind. Camera: gentle pull back."
+    ],
+    "shotPromptBytes": [
+      417,
+      271,
+      245
+    ],
+    "totalDuration": 13,
+    "speakers": [
+      "keeper"
+    ]
+  },
+  "seedance/K1/bracket/connectors/plain": {
+    "prompt": "Recurring characters: Keeper = [Image1]/[Image2]; Gull = [Image3]. Keep each exactly on-model and identical across every shot. No on-screen text, letters, captions, or signs anywhere in frame. Speech rule: characters speak ONLY the exact words in a shot's says: \"…\" line; in shots without one they do not speak — generate ambient sound and SFX only, never invented or mumbled dialogue. [Audio1] is the sound of Keeper's voice — a voice reference only; do NOT speak the words contained in that clip. Keeper speaks ONLY the \"…\" lines written in the shots below, in that voice.\n\nOpen on the payoff; the key subject and action are fully visible and legible from the first frame. Extreme wide shot, distant eye level from the water. A lighthouse beam sweeps across a black, storm-flecked sea at night, spray catching the light, the tower's lamp room glowing warm against cold blue darkness, lonely and cinematic. Camera: slow push in toward the tower. Keeper says: \"Forty years I kept this light.\".\nMatch cut to: Medium close-up, slight low angle. Inside the warm lamp room, the keeper polishes the huge brass-and-glass lens by hand, reflections drifting across the curved glass, dust in the lamplight, a quiet reverent mood. Camera: static lock-off. Gull says: \"The light stays on.\".\nCut to: Wide shot, eye level from the doorway. Pale dawn light fills the room as the great lamp dims and goes dark for the last time; the keeper steps out and quietly pulls the heavy door closed, the sea calm and silver behind. Camera: gentle pull back.",
+    "promptBytes": 1541,
+    "shotPrompts": [
+      "Open on the payoff; the key subject and action are fully visible and legible from the first frame. Extreme wide shot, distant eye level from the water. A lighthouse beam sweeps across a black, storm-flecked sea at night, spray catching the light, the tower's lamp room glowing warm against cold blue darkness, lonely and cinematic. Camera: slow push in toward the tower. Keeper says: \"Forty years I kept this light.\".",
+      "Medium close-up, slight low angle. Inside the warm lamp room, the keeper polishes the huge brass-and-glass lens by hand, reflections drifting across the curved glass, dust in the lamplight, a quiet reverent mood. Camera: static lock-off. Gull says: \"The light stays on.\".",
+      "Wide shot, eye level from the doorway. Pale dawn light fills the room as the great lamp dims and goes dark for the last time; the keeper steps out and quietly pulls the heavy door closed, the sea calm and silver behind. Camera: gentle pull back."
+    ],
+    "shotPromptBytes": [
+      417,
+      271,
+      245
+    ],
+    "totalDuration": 13,
+    "speakers": [
+      "keeper"
+    ]
+  },
+  "seedance/K1/bracket/connectors/pinned-take2-note": {
+    "prompt": "Recurring characters: Keeper = [Image1]/[Image2]; Gull = [Image3]. Keep each exactly on-model and identical across every shot. No on-screen text, letters, captions, or signs anywhere in frame. Speech rule: characters speak ONLY the exact words in a shot's says: \"…\" line; in shots without one they do not speak — generate ambient sound and SFX only, never invented or mumbled dialogue. Director note: hold the lamp room wider and keep the lens in frame Alternate take 2: vary the staging, camera framing, and timing from the previous take while keeping the same story, characters, and shots. Use [Image4] as the literal first frame of this clip and continue its motion seamlessly forward. [Audio1] is the sound of Keeper's voice — a voice reference only; do NOT speak the words contained in that clip. Keeper speaks ONLY the \"…\" lines written in the shots below, in that voice.\n\nOpen on the payoff; the key subject and action are fully visible and legible from the first frame. Extreme wide shot, distant eye level from the water. A lighthouse beam sweeps across a black, storm-flecked sea at night, spray catching the light, the tower's lamp room glowing warm against cold blue darkness, lonely and cinematic. Camera: slow push in toward the tower. Keeper says: \"Forty years I kept this light.\".\nMatch cut to: Medium close-up, slight low angle. Inside the warm lamp room, the keeper polishes the huge brass-and-glass lens by hand, reflections drifting across the curved glass, dust in the lamplight, a quiet reverent mood. Camera: static lock-off. Gull says: \"The light stays on.\".\nCut to: Wide shot, eye level from the doorway. Pale dawn light fills the room as the great lamp dims and goes dark for the last time; the keeper steps out and quietly pulls the heavy door closed, the sea calm and silver behind. Camera: gentle pull back.",
+    "promptBytes": 1844,
+    "shotPrompts": [
+      "Open on the payoff; the key subject and action are fully visible and legible from the first frame. Extreme wide shot, distant eye level from the water. A lighthouse beam sweeps across a black, storm-flecked sea at night, spray catching the light, the tower's lamp room glowing warm against cold blue darkness, lonely and cinematic. Camera: slow push in toward the tower. Keeper says: \"Forty years I kept this light.\".",
+      "Medium close-up, slight low angle. Inside the warm lamp room, the keeper polishes the huge brass-and-glass lens by hand, reflections drifting across the curved glass, dust in the lamplight, a quiet reverent mood. Camera: static lock-off. Gull says: \"The light stays on.\".",
+      "Wide shot, eye level from the doorway. Pale dawn light fills the room as the great lamp dims and goes dark for the last time; the keeper steps out and quietly pulls the heavy door closed, the sea calm and silver behind. Camera: gentle pull back."
+    ],
+    "shotPromptBytes": [
+      417,
+      271,
+      245
+    ],
+    "totalDuration": 13,
+    "speakers": [
+      "keeper"
+    ]
+  },
+  "seedance/K1/bracket/numbered/plain": {
+    "prompt": "Recurring characters: Keeper = [Image1]/[Image2]; Gull = [Image3]. Keep each exactly on-model and identical across every shot. No on-screen text, letters, captions, or signs anywhere in frame. Speech rule: characters speak ONLY the exact words in a shot's says: \"…\" line; in shots without one they do not speak — generate ambient sound and SFX only, never invented or mumbled dialogue. [Audio1] is the sound of Keeper's voice — a voice reference only; do NOT speak the words contained in that clip. Keeper speaks ONLY the \"…\" lines written in the shots below, in that voice.\n\nShot 1: Open on the payoff; the key subject and action are fully visible and legible from the first frame. Extreme wide shot, distant eye level from the water. A lighthouse beam sweeps across a black, storm-flecked sea at night, spray catching the light, the tower's lamp room glowing warm against cold blue darkness, lonely and cinematic. Camera: slow push in toward the tower. Keeper says: \"Forty years I kept this light.\".\nShot 2: Medium close-up, slight low angle. Inside the warm lamp room, the keeper polishes the huge brass-and-glass lens by hand, reflections drifting across the curved glass, dust in the lamplight, a quiet reverent mood. Camera: static lock-off. Gull says: \"The light stays on.\".\nShot 3: Wide shot, eye level from the doorway. Pale dawn light fills the room as the great lamp dims and goes dark for the last time; the keeper steps out and quietly pulls the heavy door closed, the sea calm and silver behind. Camera: gentle pull back.",
+    "promptBytes": 1543,
+    "shotPrompts": [
+      "Open on the payoff; the key subject and action are fully visible and legible from the first frame. Extreme wide shot, distant eye level from the water. A lighthouse beam sweeps across a black, storm-flecked sea at night, spray catching the light, the tower's lamp room glowing warm against cold blue darkness, lonely and cinematic. Camera: slow push in toward the tower. Keeper says: \"Forty years I kept this light.\".",
+      "Medium close-up, slight low angle. Inside the warm lamp room, the keeper polishes the huge brass-and-glass lens by hand, reflections drifting across the curved glass, dust in the lamplight, a quiet reverent mood. Camera: static lock-off. Gull says: \"The light stays on.\".",
+      "Wide shot, eye level from the doorway. Pale dawn light fills the room as the great lamp dims and goes dark for the last time; the keeper steps out and quietly pulls the heavy door closed, the sea calm and silver behind. Camera: gentle pull back."
+    ],
+    "shotPromptBytes": [
+      417,
+      271,
+      245
+    ],
+    "totalDuration": 13,
+    "speakers": [
+      "keeper"
+    ]
+  },
+  "seedance/K1/bracket/numbered/pinned-take2-note": {
+    "prompt": "Recurring characters: Keeper = [Image1]/[Image2]; Gull = [Image3]. Keep each exactly on-model and identical across every shot. No on-screen text, letters, captions, or signs anywhere in frame. Speech rule: characters speak ONLY the exact words in a shot's says: \"…\" line; in shots without one they do not speak — generate ambient sound and SFX only, never invented or mumbled dialogue. Director note: hold the lamp room wider and keep the lens in frame Alternate take 2: vary the staging, camera framing, and timing from the previous take while keeping the same story, characters, and shots. Use [Image4] as the literal first frame of this clip and continue its motion seamlessly forward. [Audio1] is the sound of Keeper's voice — a voice reference only; do NOT speak the words contained in that clip. Keeper speaks ONLY the \"…\" lines written in the shots below, in that voice.\n\nShot 1: Open on the payoff; the key subject and action are fully visible and legible from the first frame. Extreme wide shot, distant eye level from the water. A lighthouse beam sweeps across a black, storm-flecked sea at night, spray catching the light, the tower's lamp room glowing warm against cold blue darkness, lonely and cinematic. Camera: slow push in toward the tower. Keeper says: \"Forty years I kept this light.\".\nShot 2: Medium close-up, slight low angle. Inside the warm lamp room, the keeper polishes the huge brass-and-glass lens by hand, reflections drifting across the curved glass, dust in the lamplight, a quiet reverent mood. Camera: static lock-off. Gull says: \"The light stays on.\".\nShot 3: Wide shot, eye level from the doorway. Pale dawn light fills the room as the great lamp dims and goes dark for the last time; the keeper steps out and quietly pulls the heavy door closed, the sea calm and silver behind. Camera: gentle pull back.",
+    "promptBytes": 1846,
+    "shotPrompts": [
+      "Open on the payoff; the key subject and action are fully visible and legible from the first frame. Extreme wide shot, distant eye level from the water. A lighthouse beam sweeps across a black, storm-flecked sea at night, spray catching the light, the tower's lamp room glowing warm against cold blue darkness, lonely and cinematic. Camera: slow push in toward the tower. Keeper says: \"Forty years I kept this light.\".",
+      "Medium close-up, slight low angle. Inside the warm lamp room, the keeper polishes the huge brass-and-glass lens by hand, reflections drifting across the curved glass, dust in the lamplight, a quiet reverent mood. Camera: static lock-off. Gull says: \"The light stays on.\".",
+      "Wide shot, eye level from the doorway. Pale dawn light fills the room as the great lamp dims and goes dark for the last time; the keeper steps out and quietly pulls the heavy door closed, the sea calm and silver behind. Camera: gentle pull back."
+    ],
+    "shotPromptBytes": [
+      417,
+      271,
+      245
+    ],
+    "totalDuration": 13,
+    "speakers": [
+      "keeper"
+    ]
+  },
+  "seedance/K2/compact/connectors/plain": {
+    "prompt": "Recurring characters: Keeper = @Image1/@Image2; Gull = @Image3. Keep each exactly on-model and identical across every shot. No on-screen text, letters, captions, or signs anywhere in frame. Speech rule: characters speak ONLY the exact words in a shot's says: \"…\" line; in shots without one they do not speak — generate ambient sound and SFX only, never invented or mumbled dialogue. @Audio1 is the sound of Keeper's voice — a voice reference only; do NOT speak the words contained in that clip. Keeper speaks ONLY the \"…\" lines written in the shots below, in that voice.\n\nMedium shot, handheld eye level. The keeper crosses the gallery deck against a rising gale, one hand on the rail, salt spray sheeting off the glass while the lamp turns behind him and the horizon goes white. The keeper crosses the gallery deck against a rising gale, one hand on the rail, salt spray sheeting off the glass while the lamp turns behind him and the horizon goes white. The keeper crosses the gallery deck against a rising gale, one hand on the rail, salt spray sheeting off the glass while the lamp turns behind him and the horizon goes white. The keeper crosses the gallery deck against a rising gale, one hand on the rail, salt spray sheeting off the glass while the lamp turns behind him and the horizon goes white. Camera: slow arc to the left. Keeper says: \"Every night, in every weather.\" (tone: weary).\nWhip pan to: Close-up. Rain hammers the lamp room glass. Rain hammers the lamp room glass. Rain hammers the lamp room glass. Rain hammers the lamp room glass. Rain hammers the lamp room glass. Rain hammers the lamp room glass. Rain hammers the lamp room glass. Rain hammers the lamp room glass. Rain hammers the lamp room glass. café—naïve—œuvre 🌊 café—naïve—œuvre 🌊 café—naïve—œuvre 🌊 café—naïve—œuvre 🌊 café—naïve—œuvre 🌊 café—naïve—œuvre 🌊 café—naïve—œuvre 🌊 café—naïve—œuvre 🌊 café—naïve—œuvre 🌊 café—naïve—œuvre 🌊 café—naïve—œuvre 🌊 café—naïve—œuvre 🌊",
+    "promptBytes": 2080,
+    "shotPrompts": [
+      "Medium shot, handheld eye level. The keeper crosses the gallery deck against a rising gale, one hand on the rail, salt spray sheeting off the glass while the lamp turns behind him and the horizon goes white. The keeper crosses the gallery deck against a rising gale, one hand on the rail, salt spray sheeting off the glass while the lamp turns behind him and the horizon goes white. The keeper crosses the gallery deck against a rising gale, one hand on the rail, salt spray sheeting off the glass while the lamp turns behind him and the horizon goes white. The keeper crosses the gallery deck against a rising gale, one hand on the rail, salt spray sheeting off the glass while the lamp turns behind him and the horizon goes white. Camera: slow arc to the left. Keeper says: \"Every night, in every weather.\" (tone: weary).",
+      "Close-up. Rain hammers the lamp room glass. Rain hammers the lamp room glass. Rain hammers the lamp room glass. Rain hammers the lamp room glass. Rain hammers the lamp room glass. Rain hammers the lamp room glass. Rain hammers the lamp room glass. Rain hammers the lamp room glass. Rain hammers the lamp room glass. café—naïve—œuvre 🌊 café—naïve—œuvre 🌊 café—naïve—œuvre 🌊 café—naïve—œuvre 🌊 café—naïve—œuvre 🌊 café—naïve—œuvre 🌊 café—naïve—œuvre 🌊 café—naïve—œuvre 🌊 café—naïve—œuvre 🌊 café—naïve—œuvre 🌊 café—naïve—œuvre 🌊 café—naïve—œuvre 🌊"
+    ],
+    "shotPromptBytes": [
+      823,
+      663
+    ],
+    "totalDuration": 9,
+    "speakers": [
+      "keeper"
+    ]
+  },
+  "seedance/K3/compact/numbered/plain": {
+    "prompt": "Recurring characters: Keeper = @Image1/@Image2; Gull = @Image3. Keep each exactly on-model and identical across every shot. No on-screen text, letters, captions, or signs anywhere in frame. Speech rule: characters speak ONLY the exact words in a shot's says: \"…\" line; in shots without one they do not speak — generate ambient sound and SFX only, never invented or mumbled dialogue. @Audio2 is the sound of Gull's voice — a voice reference only; do NOT speak the words contained in that clip. Gull speaks ONLY the \"…\" lines written in the shots below, in that voice.\n\nShot 1: Medium-wide shot, low angle. The keeper leans on the rail beside a grey gull, both looking out at the flat morning sea. Camera: static lock-off. Gull says: \"We ran the lamp by hand every single night, in every weather the Atlantic could think of, and not one ship went onto those rocks while I stood the watch, not one, We ran the lamp by hand every single night, in every weather the Atlantic could think of, and not one ship went onto those rocks while I stood the watch, not one, We ran the lamp by hand every single night, in every weather the Atlantic could think of, and not one ship went onto those rocks while I stood the watch, not one,\".",
+    "promptBytes": 1231,
+    "shotPrompts": [
+      "Medium-wide shot, low angle. The keeper leans on the rail beside a grey gull, both looking out at the flat morning sea. Camera: static lock-off. Gull says: \"We ran the lamp by hand every single night, in every weather the Atlantic could think of, and not one ship went onto those rocks while I stood the watch, not one, We ran the lamp by hand every single night, in every weather the Atlantic could think of, and not one ship went onto those rocks while I stood the watch, not one, We ran the lamp by hand every single night, in every weather the Atlantic could think of, and not one ship went onto those rocks while I stood the watch, not one,\"."
+    ],
+    "shotPromptBytes": [
+      647
+    ],
+    "totalDuration": 4,
+    "speakers": [
+      "gull"
+    ]
+  },
+  "seedance/K1/compact/connectors/audio-off": {
+    "prompt": "Recurring characters: Keeper = @Image1/@Image2; Gull = @Image3. Keep each exactly on-model and identical across every shot. No on-screen text, letters, captions, or signs anywhere in frame.\n\nOpen on the payoff; the key subject and action are fully visible and legible from the first frame. Extreme wide shot, distant eye level from the water. A lighthouse beam sweeps across a black, storm-flecked sea at night, spray catching the light, the tower's lamp room glowing warm against cold blue darkness, lonely and cinematic. Camera: slow push in toward the tower.\nMatch cut to: Medium close-up, slight low angle. Inside the warm lamp room, the keeper polishes the huge brass-and-glass lens by hand, reflections drifting across the curved glass, dust in the lamplight, a quiet reverent mood. Camera: static lock-off.\nCut to: Wide shot, eye level from the doorway. Pale dawn light fills the room as the great lamp dims and goes dark for the last time; the keeper steps out and quietly pulls the heavy door closed, the sea calm and silver behind. Camera: gentle pull back.",
+    "promptBytes": 1067,
+    "shotPrompts": [
+      "Open on the payoff; the key subject and action are fully visible and legible from the first frame. Extreme wide shot, distant eye level from the water. A lighthouse beam sweeps across a black, storm-flecked sea at night, spray catching the light, the tower's lamp room glowing warm against cold blue darkness, lonely and cinematic. Camera: slow push in toward the tower.",
+      "Medium close-up, slight low angle. Inside the warm lamp room, the keeper polishes the huge brass-and-glass lens by hand, reflections drifting across the curved glass, dust in the lamplight, a quiet reverent mood. Camera: static lock-off.",
+      "Wide shot, eye level from the doorway. Pale dawn light fills the room as the great lamp dims and goes dark for the last time; the keeper steps out and quietly pulls the heavy door closed, the sea calm and silver behind. Camera: gentle pull back."
+    ],
+    "shotPromptBytes": [
+      370,
+      237,
+      245
+    ],
+    "totalDuration": 13,
+    "speakers": []
+  },
+  "seedance/K1/compact/connectors/clauses": {
+    "prompt": "Rendered in hand-painted watercolor with visible paper grain. Recurring characters: Keeper = @Image1/@Image2; Gull = @Image3. Keep each exactly on-model and identical across every shot. The keeper never wears a hat. Only the word \"FIN\" may appear on screen. Speech rule: characters speak ONLY the exact words in a shot's says: \"…\" line; in shots without one they do not speak — generate ambient sound and SFX only, never invented or mumbled dialogue. @Audio1 is the sound of Keeper's voice — a voice reference only; do NOT speak the words contained in that clip. Keeper speaks ONLY the \"…\" lines written in the shots below, in that voice.\n\nOpen on the payoff; the key subject and action are fully visible and legible from the first frame. Extreme wide shot, distant eye level from the water. A lighthouse beam sweeps across a black, storm-flecked sea at night, spray catching the light, the tower's lamp room glowing warm against cold blue darkness, lonely and cinematic. Camera: slow push in toward the tower. Keeper says: \"Forty years I kept this light.\".\nMatch cut to: Medium close-up, slight low angle. Inside the warm lamp room, the keeper polishes the huge brass-and-glass lens by hand, reflections drifting across the curved glass, dust in the lamplight, a quiet reverent mood. Camera: static lock-off. Gull says: \"The light stays on.\".\nCut to: Wide shot, eye level from the doorway. Pale dawn light fills the room as the great lamp dims and goes dark for the last time; the keeper steps out and quietly pulls the heavy door closed, the sea calm and silver behind. Camera: gentle pull back.",
+    "promptBytes": 1605,
+    "shotPrompts": [
+      "Open on the payoff; the key subject and action are fully visible and legible from the first frame. Extreme wide shot, distant eye level from the water. A lighthouse beam sweeps across a black, storm-flecked sea at night, spray catching the light, the tower's lamp room glowing warm against cold blue darkness, lonely and cinematic. Camera: slow push in toward the tower. Keeper says: \"Forty years I kept this light.\".",
+      "Medium close-up, slight low angle. Inside the warm lamp room, the keeper polishes the huge brass-and-glass lens by hand, reflections drifting across the curved glass, dust in the lamplight, a quiet reverent mood. Camera: static lock-off. Gull says: \"The light stays on.\".",
+      "Wide shot, eye level from the doorway. Pale dawn light fills the room as the great lamp dims and goes dark for the last time; the keeper steps out and quietly pulls the heavy door closed, the sea calm and silver behind. Camera: gentle pull back."
+    ],
+    "shotPromptBytes": [
+      417,
+      271,
+      245
+    ],
+    "totalDuration": 13,
+    "speakers": [
+      "keeper"
+    ]
+  },
+  "seedance/K2/compact/connectors/clamped-900": {
+    "prompt": "Recurring characters: Keeper = @Image1/@Image2; Gull = @Image3. Keep each exactly on-model and identical across every shot. No on-screen text, letters, captions, or signs anywhere in frame. Speech rule: characters speak ONLY the exact words in a shot's says: \"…\" line; in shots without one they do not speak — generate ambient sound and SFX only, never invented or mumbled dialogue. @Audio1 is the sound of Keeper's voice — a voice reference only; do NOT speak the words contained in that clip. Keeper speaks ONLY the \"…\" lines written in the shots below, in that voice.\n\nMedium shot, handheld eye level. The keeper crosses the gallery deck against a rising gale, one hand on the rail, salt spray sheeting off the glass while the lamp turns behind him and the horizon goes white. The keeper crosses the gallery deck against a rising gale, one hand on the rail, salt spray sheeting off the…",
+    "promptBytes": 899,
+    "shotPrompts": [
+      "Medium shot, handheld eye level. The keeper crosses the gallery deck against a rising gale, one hand on the rail, salt spray sheeting off the glass while the lamp turns behind him and the horizon goes white. The keeper crosses the gallery deck against a rising gale, one hand on the rail, salt spray sheeting off the glass while the lamp turns behind him and the horizon goes white. The keeper crosses the gallery deck against a rising gale, one hand on the rail, salt spray sheeting off the glass while the lamp turns behind him and the horizon goes white. The keeper crosses the gallery deck against a rising gale, one hand on the rail, salt spray sheeting off the glass while the lamp turns behind him and the horizon goes white. Camera: slow arc to the left. Keeper says: \"Every night, in every weather.\" (tone: weary).",
+      "Close-up. Rain hammers the lamp room glass. Rain hammers the lamp room glass. Rain hammers the lamp room glass. Rain hammers the lamp room glass. Rain hammers the lamp room glass. Rain hammers the lamp room glass. Rain hammers the lamp room glass. Rain hammers the lamp room glass. Rain hammers the lamp room glass. café—naïve—œuvre 🌊 café—naïve—œuvre 🌊 café—naïve—œuvre 🌊 café—naïve—œuvre 🌊 café—naïve—œuvre 🌊 café—naïve—œuvre 🌊 café—naïve—œuvre 🌊 café—naïve—œuvre 🌊 café—naïve—œuvre 🌊 café—naïve—œuvre 🌊 café—naïve—œuvre 🌊 café—naïve—œuvre 🌊"
+    ],
+    "shotPromptBytes": [
+      823,
+      663
+    ],
+    "totalDuration": 9,
+    "speakers": [
+      "keeper"
+    ]
+  },
+  "seedance/K1/none/connectors/text-to-video": {
+    "prompt": "No on-screen text, letters, captions, or signs anywhere in frame. Speech rule: characters speak ONLY the exact words in a shot's says: \"…\" line; in shots without one they do not speak — generate ambient sound and SFX only, never invented or mumbled dialogue.\n\nOpen on the payoff; the key subject and action are fully visible and legible from the first frame. Extreme wide shot, distant eye level from the water. A lighthouse beam sweeps across a black, storm-flecked sea at night, spray catching the light, the tower's lamp room glowing warm against cold blue darkness, lonely and cinematic. Camera: slow push in toward the tower. Keeper says: \"Forty years I kept this light.\".\nMatch cut to: Medium close-up, slight low angle. Inside the warm lamp room, the keeper polishes the huge brass-and-glass lens by hand, reflections drifting across the curved glass, dust in the lamplight, a quiet reverent mood. Camera: static lock-off. Gull says: \"The light stays on.\".\nCut to: Wide shot, eye level from the doorway. Pale dawn light fills the room as the great lamp dims and goes dark for the last time; the keeper steps out and quietly pulls the heavy door closed, the sea calm and silver behind. Camera: gentle pull back.",
+    "promptBytes": 1221,
+    "shotPrompts": [
+      "Open on the payoff; the key subject and action are fully visible and legible from the first frame. Extreme wide shot, distant eye level from the water. A lighthouse beam sweeps across a black, storm-flecked sea at night, spray catching the light, the tower's lamp room glowing warm against cold blue darkness, lonely and cinematic. Camera: slow push in toward the tower. Keeper says: \"Forty years I kept this light.\".",
+      "Medium close-up, slight low angle. Inside the warm lamp room, the keeper polishes the huge brass-and-glass lens by hand, reflections drifting across the curved glass, dust in the lamplight, a quiet reverent mood. Camera: static lock-off. Gull says: \"The light stays on.\".",
+      "Wide shot, eye level from the doorway. Pale dawn light fills the room as the great lamp dims and goes dark for the last time; the keeper steps out and quietly pulls the heavy door closed, the sea calm and silver behind. Camera: gentle pull back."
+    ],
+    "shotPromptBytes": [
+      417,
+      271,
+      245
+    ],
+    "totalDuration": 13,
+    "speakers": [
+      "keeper"
+    ]
+  }
+}
