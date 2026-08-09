@@ -12,6 +12,7 @@ import { ChevronRight } from 'lucide-react';
 import type { ContinuityEntry, JobView, RunDetail } from '../../../../../shared/api-types';
 import { jobSeconds, jointKindOf, jointSentence, type JointKind } from './lib';
 import { SegmentTile, THUMB_HEIGHT, type TileSize } from './SegmentTile';
+import { PromptButton } from './PromptSheet';
 import type { SegmentClipState } from './ContinuityBadge';
 
 /** Connector column width per size (spec D1) — narrow enough that six 16:9 tiles still fit at `sm`. */
@@ -77,6 +78,9 @@ export function ClipStrip({ run, jobs, takeCountFor, onSeek }: {
   // The shared explanation line mirrors whichever tile is hovered or focused (spec D9) — one line
   // for the whole strip, so nothing pops up over the clips and nothing jumps as it changes.
   const [active, setActive] = useState<number | null>(null);
+  // Selection is the menu (spec D11): picking a clip reveals that clip's actions in an ordinary row
+  // beneath the strip — no hover-only affordance, no overflow menu (Don't #10). Escape clears it.
+  const [selected, setSelected] = useState<number | null>(null);
 
   const size: TileSize = jobs.length >= 5 ? 'sm' : 'md';
   const aspect = run.aspect ?? '9:16';
@@ -118,8 +122,14 @@ export function ClipStrip({ run, jobs, takeCountFor, onSeek }: {
       : jointSentence(jobs[firstDoubt].jobId, jobs[firstDoubt + 1].jobId, joints[firstDoubt]);
   };
 
+  const selectedJob = selected == null ? null : jobs[selected] ?? null;
+
   return (
-    <div className="mt-5" aria-label="Clips in this cut">
+    <div
+      className="mt-5"
+      aria-label="Clips in this cut"
+      onKeyDown={(e) => { if (e.key === 'Escape') setSelected(null); }}
+    >
       <div className="well flex justify-center overflow-x-auto" data-testid="clip-strip">
         <div className="flex min-w-min items-start">
           {jobs.map((job, i) => (
@@ -142,7 +152,8 @@ export function ClipStrip({ run, jobs, takeCountFor, onSeek }: {
                 capStart={kinds[i] === 'linked'}
                 capEnd={i < jobs.length - 1 && kinds[i + 1] === 'linked'}
                 description={sentenceFor(i)}
-                onSeek={() => onSeek(i)}
+                selected={selected === i}
+                onSeek={() => { setSelected(i); onSeek(i); }}
                 onHighlight={(on) => setActive(on ? i : (cur) => (cur === i ? null : cur))}
               />
             </Fragment>
@@ -153,6 +164,13 @@ export function ClipStrip({ run, jobs, takeCountFor, onSeek }: {
       <p className="mt-2 flex h-4 items-center justify-center text-caption text-ink-muted" data-testid="clip-strip-explanation">
         {active === null ? restingLine() : sentenceFor(active)}
       </p>
+
+      {selectedJob && (
+        <div className="mt-2 flex items-center justify-center gap-2" data-testid="segment-actions">
+          <span className="font-mono text-caption text-ink-secondary">{selectedJob.jobId}</span>
+          <PromptButton target={selectedJob.jobId} ariaLabel={`Prompt for ${selectedJob.jobId}`} />
+        </div>
+      )}
     </div>
   );
 }

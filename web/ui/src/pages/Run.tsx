@@ -16,6 +16,7 @@ import { JobCards } from '../components/run/JobCards';
 import { LogViewer } from '../components/run/LogViewer';
 import { AttentionBanner } from '../components/run/AttentionBanner';
 import { ReviewStage, ChangeRequestPanel, ApproveBar, TakesHistory, FinalCard } from '../components/run/review';
+import { PromptSheet, PromptSheetProvider } from '../components/run/review/PromptSheet';
 
 /** The rail's calm fact sheet while clips render. */
 function RunFacts({ run }: { run: RunDetail }) {
@@ -83,6 +84,7 @@ export default function RunPage() {
         <>
           <div id="section-plan"><AgentRail run={run} live={live} collapsed /></div>
           <PlanReview run={run} />
+          <PromptSheet run={run} />
         </>
       );
       rail = <SpecInspector run={run} />;
@@ -106,6 +108,7 @@ export default function RunPage() {
       ) : (
         <>
           <div id="section-render"><JobCards run={run} /></div>
+          <PromptSheet run={run} />
           <LogViewer run={run} live={live} />
         </>
       );
@@ -125,6 +128,7 @@ export default function RunPage() {
           ) : (
             <div id="section-plan"><AgentRail run={run} live={live} /></div>
           )}
+          {hasRenderArtifacts && <PromptSheet run={run} />}
           <LogViewer run={run} live={live} defaultExpanded />
         </>
       );
@@ -141,6 +145,9 @@ export default function RunPage() {
       main = (
         <>
           <div id="section-review"><ReviewStage run={run} cutId={cutId} setCutId={setCutId} /></div>
+          {/* Directly beneath the stage band, pushing the log down — an inline disclosure, never a
+              modal or a side sheet (spec D18). */}
+          <PromptSheet run={run} />
           <LogViewer run={run} live={live} />
         </>
       );
@@ -159,24 +166,28 @@ export default function RunPage() {
   }
 
   return (
-    <div>
-      <PhaseStrip run={run} agents={live.agents} activeKind={live.activeKind} />
-      {run.idea && (
-        <div className="sticky top-[104px] z-20 -mx-6 h-10 border-b border-line bg-surface-0/90 px-6 backdrop-blur">
-          <div className="mx-auto flex h-full max-w-[1280px] items-center gap-3">
-            <span className="shrink-0 text-caption uppercase tracking-wide text-ink-muted">Idea</span>
-            <p className="min-w-0 truncate text-body text-ink-secondary" title={run.idea}>{run.idea}</p>
+    // The prompt sheet's open target is held above `main`: the controls that open it live in the
+    // plan card, the job cards and the clip strip, while the one panel lives under the stage band.
+    <PromptSheetProvider>
+      <div>
+        <PhaseStrip run={run} agents={live.agents} activeKind={live.activeKind} />
+        {run.idea && (
+          <div className="sticky top-[104px] z-20 -mx-6 h-10 border-b border-line bg-surface-0/90 px-6 backdrop-blur">
+            <div className="mx-auto flex h-full max-w-[1280px] items-center gap-3">
+              <span className="shrink-0 text-caption uppercase tracking-wide text-ink-muted">Idea</span>
+              <p className="min-w-0 truncate text-body text-ink-secondary" title={run.idea}>{run.idea}</p>
+            </div>
+          </div>
+        )}
+        <div className="mx-auto w-full max-w-[1280px] px-6 py-6">
+          <div className="flex flex-col gap-6 lg:flex-row">
+            <main className="min-w-0 flex-1 space-y-6">{main}</main>
+            <aside className={`w-full shrink-0 space-y-4 lg:sticky ${run.idea ? 'lg:top-[144px]' : 'lg:top-[104px]'} lg:w-[380px] lg:self-start`}>
+              {rail}
+            </aside>
           </div>
         </div>
-      )}
-      <div className="mx-auto w-full max-w-[1280px] px-6 py-6">
-        <div className="flex flex-col gap-6 lg:flex-row">
-          <main className="min-w-0 flex-1 space-y-6">{main}</main>
-          <aside className={`w-full shrink-0 space-y-4 lg:sticky ${run.idea ? 'lg:top-[144px]' : 'lg:top-[104px]'} lg:w-[380px] lg:self-start`}>
-            {rail}
-          </aside>
-        </div>
       </div>
-    </div>
+    </PromptSheetProvider>
   );
 }

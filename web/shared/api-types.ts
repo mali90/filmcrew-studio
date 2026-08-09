@@ -208,6 +208,9 @@ export interface PromptView {
   stale: boolean;
   /** Hash of exactly the authored inputs this prompt is composed from; null for a past take. */
   fingerprint: string | null;
+  /** Take ids that kept a `prompts.json` for THIS job, newest first — the version picker's options.
+   *  A take that never sent this job is absent, so no option opens onto a 404. */
+  availableTakes: string[];
   prompt: string;
   /** Kling only — one entry per shot; null on Seedance (one prompt per job). */
   segments: PromptSegment[] | null;

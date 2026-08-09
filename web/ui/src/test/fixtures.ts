@@ -1,6 +1,6 @@
 // RunDetail builders per status — the MSW handlers and component tests share these so every test
 // documents exactly which state it renders.
-import type { ProductionSpec, RunDetail, RunStatus } from '../../../shared/api-types';
+import type { ProductionSpec, PromptView, RunDetail, RunStatus } from '../../../shared/api-types';
 
 export const SPEC: ProductionSpec = {
   spec_version: '1.0',
@@ -117,3 +117,68 @@ export const ESTIMATE = {
   currency: 'USD' as const,
   label: 'estimate' as const,
 };
+
+// ── Prompt preview (WS2-P3) ─────────────────────────────────────────────────────────────────────
+// The default run renders on Kling, whose budget is per shot segment — so the default view carries
+// one metered segment per shot, exactly as the server composes it. Every number here comes from the
+// API in real life; the UI never recounts bytes.
+const utf8 = (s: string) => new TextEncoder().encode(s).length;
+
+/** One job's plan prompt, shaped like the server's `PromptView`. */
+export function promptView(jobId: string, over: Partial<PromptView> = {}): PromptView {
+  const shots = SPEC.kling.jobs.find((j) => j.job_id === jobId)?.shots ?? [];
+  const segments = shots.map((shotId) => {
+    const shot = SPEC.shots.find((s) => s.shot_id === shotId);
+    const prompt = `@Element1 ${shot?.kling?.content_prompt ?? 'a shot'}`;
+    return {
+      shotId,
+      prompt,
+      duration: shot?.duration_s ?? null,
+      speaker: null,
+      bytes: utf8(prompt),
+      maxBytes: 500,
+      pinBytes: 64,
+    };
+  });
+  const prompt = segments.map((s) => s.prompt).join('\n\n');
+  return {
+    jobId,
+    backend: 'kling-o3@fal',
+    endpointLabel: 'fal.ai Kling O3',
+    shots,
+    source: 'plan',
+    take: null,
+    sentAt: null,
+    stale: false,
+    fingerprint: 'abc123',
+    availableTakes: [],
+    prompt,
+    segments,
+    shotPrompts: null,
+    refs: [{ ref: '@Element1', character: 'the lighthouse keeper' }],
+    bytes: utf8(prompt),
+    maxBytes: 500 * segments.length,
+    segmentMaxBytes: 500,
+    pinBytes: 64 * segments.length,
+    ...over,
+  };
+}
+
+/** The same job as a past take remembers it: verbatim, with no budget on record. */
+export function sentPromptView(jobId: string, take: string, over: Partial<PromptView> = {}): PromptView {
+  const prompt = `@Element1 the words take ${take} really sent for ${jobId}.`;
+  return {
+    ...promptView(jobId),
+    source: 'take',
+    take,
+    sentAt: '2026-07-04T09:00:00.000Z',
+    fingerprint: null,
+    prompt,
+    segments: [{ shotId: null, prompt, duration: null, speaker: null, bytes: utf8(prompt), maxBytes: null, pinBytes: null }],
+    bytes: utf8(prompt),
+    maxBytes: null,
+    segmentMaxBytes: null,
+    pinBytes: null,
+    ...over,
+  };
+}

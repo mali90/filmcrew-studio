@@ -3,6 +3,18 @@
 ## Unreleased
 
 ### Added
+- **You can now read the prompt before it is sent, from wherever the segment is on screen.** A
+  `Prompt` control on the plan card (every job at once), on each job card, and on a clip you pick in
+  the review strip opens one panel under the stage — an inline disclosure, not a modal, because
+  reading is neither destructive nor paid. It shows the words themselves, the reference legend that
+  rides along with them (`@Element1 = the lighthouse keeper`) and what else is pinned into every
+  prompt for that job, and it meters the text against the model's real budget: `3,880 / 5,000 B`,
+  amber from 90%, and on Kling one counter per shot segment against the 500 bytes fal actually
+  enforces. Every number is the server's own count — nothing is recounted in the browser, because a
+  second implementation of "how big is this prompt" is exactly how a preview starts lying. A version
+  picker switches between the current plan and any past take that kept a `prompts.json`, and a past
+  take is shown verbatim as it was sent, named with the provider **that take** recorded and the time
+  it went out. Read-only in this step: no editing, and nothing here spends.
 - **The prompt each segment will be sent is now readable from the server — composed by the same
   builder the renderer uses.** `GET /api/runs/:id/prompts` (every job of the current plan) and
   `GET /api/runs/:id/prompt?job=K2` return the exact text that would leave for the provider, the

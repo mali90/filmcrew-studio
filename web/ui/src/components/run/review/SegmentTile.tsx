@@ -54,7 +54,7 @@ function Overlays({ compact, takeCount, promptEdited, promptStale }: {
 
 export function SegmentTile({
   job, aspect, size, seconds, takeCount, entry, clipState = 'done', isHead = false,
-  promptEdited = false, promptStale = false, capStart = false, capEnd = false,
+  promptEdited = false, promptStale = false, capStart = false, capEnd = false, selected = false,
   description, onSeek, onHighlight,
 }: {
   job: JobView;
@@ -70,6 +70,8 @@ export function SegmentTile({
   promptStale?: boolean;
   capStart?: boolean;       // 3px cap on the thumb edge: this clip's start/end is pinned (spec D6)
   capEnd?: boolean;
+  /** Picked in the strip — selection is what reveals this segment's actions, in DOM order (spec D11). */
+  selected?: boolean;
   /** The join sentence(s) this tile is about — mirrored by the strip's shared line (spec D9). */
   description: string;
   onSeek: () => void;
@@ -95,7 +97,11 @@ export function SegmentTile({
       onMouseLeave={() => onHighlight(false)}
       onFocus={() => onHighlight(true)}
       onBlur={() => onHighlight(false)}
-      className="flex min-w-[64px] shrink-0 flex-col items-center gap-1.5 rounded-r2 border border-line bg-surface-1 p-2 hover:border-line-strong"
+      className={clsx(
+        'flex min-w-[64px] shrink-0 flex-col items-center gap-1.5 rounded-r2 border p-2',
+        selected ? 'border-accent bg-[var(--accent-soft)]' : 'border-line bg-surface-1 hover:border-line-strong',
+      )}
+      data-selected={selected || undefined}
       data-testid={`segment-tile-${job.jobId}`}
     >
       <span

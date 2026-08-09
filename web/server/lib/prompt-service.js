@@ -117,7 +117,7 @@ const utf8 = (s) => Buffer.byteLength(String(s ?? ''), 'utf8');
  * Everything a run needs to compose any of its jobs, loaded once (`/prompts` composes N jobs).
  * @returns {Promise<{caps:object, jobs:object[], viewFor:(jobId:string)=>object}>}
  */
-async function createComposer({ root, envRoot, childEnv, spec, backend, voicesDir }) {
+async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, voicesDir }) {
   const [models, compose, promptSettings, castGroups, text] = await Promise.all([
     import(path.join(root, 'src/lib/render-models.js')),
     import(path.join(root, 'src/lib/prompt-compose.js')),
@@ -285,6 +285,10 @@ async function createComposer({ root, envRoot, childEnv, spec, backend, voicesDi
       sentAt: null,
       stale: false,
       fingerprint: promptFingerprint(spec, jobId),
+      // The versions the reader can switch to. Derived from what is ON DISK, not from the manifest's
+      // take list: a take that failed before this job, or one made before sidecars existed, has no
+      // "as sent" text to show, and offering it would open onto a 404.
+      availableTakes: takesWithPrompts(runDir, jobId),
     };
     try {
       return { ...head, ...(caps.family === 'kling' ? klingView(job, index) : seedanceView(job, index)) };
@@ -300,6 +304,31 @@ async function createComposer({ root, envRoot, childEnv, spec, backend, voicesDi
 
 const TAKE_DIR_RE = /^(t\d+|render)$/;
 const JOB_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+/** Newest take first: t12 before t3, and the legacy unnumbered `render` dir last. */
+function byTakeNewestFirst(a, b) {
+  const n = (t) => (t === 'render' ? -1 : Number(t.slice(1)));
+  return n(b) - n(a);
+}
+
+/**
+ * The takes that really kept a `prompts.json` for this job, newest first — the version picker's
+ * options, and the only take ids `?take=` will answer for. Ids only: no path leaves this function.
+ */
+function takesWithPrompts(runDir, jobId) {
+  if (!runDir || !JOB_ID_RE.test(String(jobId))) return [];
+  const found = new Set();
+  // Web runs keep takes under renders/; a CLI run keeps them beside the spec (takeView reads both).
+  for (const base of [path.join(runDir, 'renders'), runDir]) {
+    let names = [];
+    try { names = fs.readdirSync(base); } catch { continue; } // no renders/ yet — nothing was sent
+    for (const name of names) {
+      if (!TAKE_DIR_RE.test(name)) continue;
+      if (fs.existsSync(path.join(base, name, String(jobId), 'prompts.json'))) found.add(name);
+    }
+  }
+  return [...found].sort(byTakeNewestFirst);
+}
 
 /** The provider's own name for a past take, from what that take recorded (never today's config). */
 async function labelForRecordedBackend(root, backend, endpoint) {
@@ -351,6 +380,7 @@ async function takeView({ root, runDir, take, jobId }) {
     sentAt,
     stale: false,
     fingerprint: null,
+    availableTakes: takesWithPrompts(runDir, jobId),
     prompt,
     segments: segments
       ? segments.map((s) => ({ shotId: null, prompt: s.prompt, duration: s.duration ?? null, speaker: s.speaker ?? null, bytes: utf8(s.prompt), maxBytes: null, pinBytes: null }))
@@ -377,7 +407,7 @@ async function takeView({ root, runDir, take, jobId }) {
  */
 export async function buildPromptView({ root, envRoot, childEnv, runDir, spec, backend, jobId, take = null, voicesDir }) {
   if (take) return takeView({ root, runDir, take, jobId });
-  const { viewFor } = await createComposer({ root, envRoot, childEnv, spec, backend, voicesDir });
+  const { viewFor } = await createComposer({ root, envRoot, childEnv, runDir, spec, backend, voicesDir });
   return viewFor(jobId);
 }
 
@@ -386,7 +416,7 @@ export async function buildPromptView({ root, envRoot, childEnv, runDir, spec, b
  * @returns {Promise<{backend:string, jobs:string[], prompts:object[]}>}
  */
 export async function buildPromptViews({ root, envRoot, childEnv, runDir, spec, backend, voicesDir }) {
-  const { caps, jobs, viewFor } = await createComposer({ root, envRoot, childEnv, spec, backend, voicesDir });
+  const { caps, jobs, viewFor } = await createComposer({ root, envRoot, childEnv, runDir, spec, backend, voicesDir });
   const ids = jobs.map((j) => j?.job_id).filter(Boolean);
   return { backend: caps.id, jobs: ids, prompts: ids.map((id) => viewFor(id)).filter(Boolean) };
 }

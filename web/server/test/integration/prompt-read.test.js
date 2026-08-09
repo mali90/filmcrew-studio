@@ -253,3 +253,27 @@ test('?take= serves that take\'s prompts.json verbatim — immutable, with its p
 
   assert.equal((await get(`/api/runs/${RUN_ID}/prompt?job=${jobId}&take=t9`)).statusCode, 404, 'a take that sent nothing for this job is a miss');
 });
+
+test('the version picker is offered exactly the takes that kept a sidecar for THAT job', async () => {
+  // The test above wrote t1's sidecar for JOB_IDS[0]; give the same job a second take, and leave
+  // every other job without one.
+  const jobId = JOB_IDS[0];
+  const t2 = path.join(runsDir, RUN_ID, 'renders', 't2', jobId);
+  fs.mkdirSync(t2, { recursive: true });
+  fs.writeFileSync(path.join(t2, 'prompts.json'), JSON.stringify({ job_id: jobId, schema: 2, prompt: 'the second attempt' }));
+
+  const plan = (await get(`/api/runs/${RUN_ID}/prompt?job=${jobId}`)).json();
+  assert.deepEqual(plan.availableTakes, ['t2', 't1'], 'newest first, and only the takes that really sent this job');
+
+  if (JOB_IDS[1]) {
+    const untouched = (await get(`/api/runs/${RUN_ID}/prompt?job=${JOB_IDS[1]}`)).json();
+    assert.deepEqual(untouched.availableTakes, [], 'a job no take ever sent offers no "as sent" version to open onto a 404');
+  }
+
+  // The take view names the same set, so reloading while a past take is on screen keeps the picker.
+  const asSent = (await get(`/api/runs/${RUN_ID}/prompt?job=${jobId}&take=t2`)).json();
+  assert.deepEqual(asSent.availableTakes, ['t2', 't1']);
+
+  const all = (await get(`/api/runs/${RUN_ID}/prompts`)).json();
+  assert.deepEqual(all.prompts.find((p) => p.jobId === jobId).availableTakes, ['t2', 't1']);
+});

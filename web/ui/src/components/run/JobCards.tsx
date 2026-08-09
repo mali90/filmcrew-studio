@@ -10,6 +10,7 @@ import { Button } from '../ui/Button';
 import { useToast } from '../ui/Toast';
 import { elapsed } from '../../lib/format';
 import { jobSeconds } from './SpecInspector';
+import { PromptButton } from './review/PromptSheet';
 
 type JobUiState = 'queued' | 'rendering' | 'done' | 'failed';
 
@@ -101,6 +102,8 @@ function JobCard({ run, job, state, now }: { run: RunDetail; job: JobView; state
             Retry {job.jobId}
           </Button>
         )}
+        {/* What this job is being sent, in its own words — reading it spends nothing. */}
+        <PromptButton target={job.jobId} ariaLabel={`Prompt for ${job.jobId}`} />
       </div>
     </div>
   );
