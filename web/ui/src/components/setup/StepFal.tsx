@@ -58,7 +58,9 @@ export function StepFal({ state, dispatch }: { state: WizardState; dispatch: Dis
         type: 'patch',
         patch: {
           segmindCheck: r.ok
-            ? { state: 'valid', note: 'make sure the account has a few dollars of credit' }
+            // A validation that had to do something anomalous (e.g. it queued a probe job) says so
+            // in `warning` — that beats the generic credit nudge.
+            ? { state: 'valid', note: r.warning ?? 'make sure the account has a few dollars of credit' }
             : { state: 'invalid', reason: r.reason ?? 'That key did not validate.' },
         },
       });

@@ -220,8 +220,21 @@ export async function upscaleVideoSegmind({ inPath, outDir, targetResolution, sl
   const args = segmindTopazArgs(videoUrl, { targetResolution: target, sourceFps });
 
   log.step(`Segmind Topaz upscale → ${args.target_resolution} @ ${args.target_fps}fps : ${path.basename(inPath)}`);
-  const up = await topazUpscaleSegmind(args, { destDir: outDir, slug });
-  return withSourceAudio(inPath, up, outDir, srcHasAudio, 'Segmind Topaz');
+  // Stage the download AWAY from the source: Segmind result URLs can carry the SAME basename as
+  // the input, and landing that in outDir would overwrite the source clip — after which the audio
+  // restore below would read the silent upscale as both sides, and a PAID upscale loses its sound.
+  const stage = fs.mkdtempSync(path.join(outDir, '.segmind-upscale-'));
+  try {
+    const up = await topazUpscaleSegmind(args, { destDir: stage, slug });
+    const result = await withSourceAudio(inPath, up, outDir, srcHasAudio, 'Segmind Topaz');
+    if (result !== up) return result; // re-muxed into outDir — the staged download is scrap
+    // Audio survived, so the staged file IS the result: promote it under a collision-proof name.
+    const final = path.join(outDir, `upscaled_${path.basename(up)}`);
+    fs.renameSync(up, final);
+    return final;
+  } finally {
+    fs.rmSync(stage, { recursive: true, force: true });
+  }
 }
 
 /**

@@ -25,7 +25,9 @@ const readBody = (req) => new Promise((r) => { let b = ''; req.on('data', (c) =>
  *     authFail          — every authenticated route answers 401
  *     validationFail    — POST /v2/:slug answers 422 (deterministic bad args; never retried)
  *     insufficientCredits — POST answers 406 (never retried; actionable message)
- *     submitFailTimes   — the next N POSTs answer 500 (transient; resubmit IS allowed pre-request_id)
+ *     rateLimitTimes    — the next N POSTs answer 429 (a REJECTION — nothing queued; resubmit is safe)
+ *     submitFailTimes   — the next N POSTs answer 500 (AMBIGUOUS: the job may have been queued and
+ *                         billed before the server fell over — the client must stop, never re-POST)
  *     submitHang        — POSTs are accepted and queued but NEVER answered (the client aborts; it
  *                         cannot know the job exists, so it must not re-POST)
  *     unknownSlug       — POST /v2/:slug answers 404 (bad slug or wrong base url)
@@ -77,6 +79,7 @@ export async function startSegmindServer({ videoBytes = Buffer.from('FAKE-MP4'),
       if ((!body.trim() || body.trim() === '{}') && !opts.acceptsEmptyBody) {
         return json(422, { detail: [{ loc: ['body', 'prompt'], msg: 'field required', type: 'missing' }] });
       }
+      if (opts.rateLimitTimes > 0) { opts.rateLimitTimes -= 1; return json(429, { detail: 'rate limited' }); }
       if (opts.submitFailTimes > 0) { opts.submitFailTimes -= 1; res.writeHead(500); return res.end('transient'); }
       // The POST is received and RECORDED (and Segmind-side, queued and billed) but never answered,
       // so the client's own timeout aborts a request the vendor already accepted — the ambiguous

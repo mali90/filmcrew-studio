@@ -34,7 +34,7 @@ const { runSegmind, submitSegmind } = await import('../../src/lib/segmind.js');
 const posts = (from) => sg.requests.slice(from).filter((q) => q.method === 'POST');
 const ARGS = { prompt: 'a harbour at dawn', duration: 5 };
 
-test.afterEach(() => { Object.assign(sg.opts, { submitFailTimes: 0, statusFailOnce: false, validationFail: false, insufficientCredits: false, failed: false, contentPolicy: false, expired: false, processingHits: 0, submitHang: false, authFail: false, unknownSlug: false }); });
+test.afterEach(() => { Object.assign(sg.opts, { submitFailTimes: 0, rateLimitTimes: 0, statusFailOnce: false, validationFail: false, insufficientCredits: false, failed: false, contentPolicy: false, expired: false, processingHits: 0, submitHang: false, authFail: false, unknownSlug: false }); });
 test.after(async () => { await sg.close(); });
 
 // ── THE billing guard ───────────────────────────────────────────────────────
@@ -98,26 +98,29 @@ test('a socket RESET, which may have died AFTER Segmind accepted the POST, stops
   });
 });
 
-test('a transient 5xx BEFORE any request_id IS retried, and never more than SEGMIND_MAX_RETRIES times', async () => {
+test('a 429 rejection IS retried (nothing was queued), never more than SEGMIND_MAX_RETRIES times', async () => {
   const before = sg.requests.length;
-  sg.opts.submitFailTimes = 2; // fails twice, succeeds on the third attempt
+  sg.opts.rateLimitTimes = 2; // rejected twice, accepted on the third attempt
 
   const r = await runSegmind('seedance-2.5', ARGS, { timeoutMs: 30000 });
   assert.ok(r.requestId, 'the third attempt queued the job');
-  const n = posts(before).length;
-  assert.equal(n, 3, 'three attempts — nothing was queued by the first two, so resubmitting is free');
-  assert.ok(n <= 3, 'and never more than SEGMIND_MAX_RETRIES (the POST carries NO transport-level retry of its own)');
+  assert.equal(posts(before).length, 3, 'three attempts — a rate-limit is a REJECTION, so resubmitting is free');
   assert.equal(sg.queued.at(-1).slug, 'seedance-2.5');
 });
 
-test('a submit that keeps failing gives up at SEGMIND_MAX_RETRIES with the provider message attached', async () => {
+test('a 5xx ANSWER to the submit is ambiguous — exactly one POST, and the message points at the console', async () => {
+  // A 500 answered mid-submit may mean "queued and billed, then the server fell over": treating it
+  // as transient (the original design) is how one render becomes two bills. Same rule as a dead
+  // socket after the body was sent.
   const before = sg.requests.length;
   sg.opts.submitFailTimes = 99;
   await assert.rejects(submitSegmind('seedance-2.5', ARGS), (e) => {
     assert.match(e.message, /seedance-2\.5/, 'the slug that failed is named');
+    assert.match(e.message, /MAY already have been queued and billed/);
+    assert.match(e.message, /Console → Requests/);
     return true;
   });
-  assert.equal(posts(before).length, 3, 'exactly SEGMIND_MAX_RETRIES attempts');
+  assert.equal(posts(before).length, 1, 'EXACTLY ONE POST — nothing re-buys on an ambiguous answer');
 });
 
 // ── deterministic failures: never retried, always actionable ────────────────

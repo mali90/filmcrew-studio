@@ -27,6 +27,13 @@ const optionFor = (value: string): string => {
   try { return canonicalBackendFor(value); } catch { return value; }
 };
 
+// A typo'd RENDER_BACKEND in .env survives optionFor as-is (so the picker shows nothing selected
+// rather than lying) — but the ratio lookup must not THROW on it: this card is exactly where the
+// bad default gets corrected, and a crash here locks the user out of the fix.
+const aspectsOf = (value: string): string[] => {
+  try { return aspectsFor(value) as string[]; } catch { return ['9:16', '16:9', '1:1']; }
+};
+
 // Silhouette + plain-word name per ratio; WHICH ratios are offered comes from the chosen model.
 const ASPECT_SHAPE: Record<string, { label: string; box: string }> = {
   '9:16': { label: 'Portrait', box: 'h-7 w-4' },
@@ -53,12 +60,12 @@ export function DefaultsCard() {
     setSeeded(true);
   }, [seeded, q.data]);
 
-  const offeredAspects = aspectsFor(backend) as string[];
+  const offeredAspects = aspectsOf(backend);
   // Saving a pair the create page would refuse helps nobody: switching model trims an unrenderable
   // ratio to that model's first, exactly as the create page does.
   const chooseBackend = (next: string) => {
     setBackend(next);
-    const offered = aspectsFor(next) as string[];
+    const offered = aspectsOf(next);
     if (!offered.includes(aspect)) setAspect(offered[0]!);
   };
 

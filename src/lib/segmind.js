@@ -96,7 +96,13 @@ function submitError(slug, { status, body }) {
     // Moderation can bite at submit time too — keep the token so the web banner still lights up.
     return noRetry(isContentPolicyError(err) ? contentPolicyError(err, slug, 'Segmind') : err);
   }
-  return new Error(`Segmind ${slug}: submit failed with HTTP ${status}: ${detail}`);
+  if (status === 429) {
+    // Rate-limited IS a rejection — nothing was queued, a resubmit is safe.
+    return new Error(`Segmind ${slug}: HTTP 429 — rate limited; retrying. [${detail}]`);
+  }
+  // A 5xx ANSWERED mid-submit is ambiguous: the job may have been queued (and billed) before the
+  // server fell over. Same rule as a dead socket — stop, say what we don't know, never re-buy.
+  return noRetry(new Error(`Segmind ${slug}: submit failed with HTTP ${status}: ${detail} — the job MAY already have been queued and billed; check ${CONSOLE_URL} (Console → Requests) before re-running.`));
 }
 
 /**
