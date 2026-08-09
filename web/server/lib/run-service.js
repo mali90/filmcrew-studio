@@ -10,7 +10,7 @@ import { newManifest, writeManifest, readManifest, updateManifest } from './web-
 import { scanRun, listRuns, defaultIsAlive } from './run-scan.js';
 import { createRingLog } from './ring-log.js';
 import { watchRun } from './artifact-watch.js';
-import { estimateRender, readRenderResolution } from './estimator.js';
+import { estimateRender, readRenderResolution, readUpscaleProvider } from './estimator.js';
 import { safeChild } from './paths.js';
 // config-FREE import: run-service is loaded eagerly by app.js, and the demo/e2e server sets FAL_BASE_URL
 // only AFTER its static import chain — importing anything that pulls config.js here would snapshot the
@@ -552,7 +552,13 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     // a free-lane assemble appending a newer cut mid-upscale must not relabel THIS final onto it.
     pendingApprove.set(runId, chosen?.id ?? cuts.at(-1)?.id ?? null);
     updateManifest(dir, (m) => {
-      m.costLedger.push({ ts: now().toISOString(), action: 'upscale', estUsd: null, unpriced: true, note: 'topaz per-clip — see estimate' });
+      // `unpriced` is reserved for a provider with NO published rate: fal's Topaz has one (the
+      // estimate endpoint quotes it per-clip), so flagging it too would label a priced spend
+      // "not on file" on every fal-upscaled run.
+      const upscaleProvider = readUpscaleProvider(envRoot ?? root, m.backend, childEnv);
+      m.costLedger.push(upscaleProvider === 'fal'
+        ? { ts: now().toISOString(), action: 'upscale', estUsd: null, note: 'topaz per-clip — see estimate' }
+        : { ts: now().toISOString(), action: 'upscale', estUsd: null, unpriced: true, note: 'estimate unavailable — no published rate for this provider' });
       m.lastError = null;
       return m;
     });

@@ -39,6 +39,7 @@ export const api = {
   validateLlm: (body: { provider: string; transport: string; model?: string; apiKey?: string }) =>
     post<{ ok: boolean; reason?: string }>('/setup/validate-llm', body),
   validateFal: (apiKey: string) => post<{ ok: boolean; reason?: string }>('/setup/validate-fal', { apiKey }),
+  validateSegmind: (apiKey: string) => post<{ ok: boolean; reason?: string }>('/setup/validate-segmind', { apiKey }),
 
   envRead: () => get<{ source: string; rows: { key: string; value: string; secret: boolean; set: boolean }[] }>('/settings/env'),
   envPreview: (updates: Record<string, string>) => post<{ rows: { key: string; from: string; to: string }[]; overwritingReal: boolean }>('/settings/env/preview', { updates }),

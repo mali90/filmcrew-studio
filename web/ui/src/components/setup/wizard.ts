@@ -7,7 +7,9 @@ export type Provider = 'claude' | 'openai' | 'gemini' | 'copilot';
 export type Transport = 'api' | 'cli';
 export type Resolution = '720p' | '1080p' | '4k';
 
-export const STEPS = ['welcome', 'llm', 'fal', 'backend', 'presets', 'review', 'doctor', 'done'] as const;
+// `backend` comes BEFORE the render-key step: the key the wizard must collect depends on which
+// provider the chosen backend bills (a Segmind pick needs SEGMIND_API_KEY, not a fal key).
+export const STEPS = ['welcome', 'llm', 'backend', 'fal', 'presets', 'review', 'doctor', 'done'] as const;
 export type StepId = (typeof STEPS)[number];
 
 export interface WizardState {
@@ -21,6 +23,8 @@ export interface WizardState {
   llmCheck: KeyCheck;
   falKey: string;
   falCheck: KeyCheck;
+  segmindKey: string;
+  segmindCheck: KeyCheck;
   backend: Backend;
   aspect: Aspect;
   resolution: Resolution;
@@ -36,6 +40,8 @@ export const initialWizardState: WizardState = {
   llmCheck: { state: 'idle' },
   falKey: '',
   falCheck: { state: 'idle' },
+  segmindKey: '',
+  segmindCheck: { state: 'idle' },
   backend: 'kling',
   aspect: '9:16',
   resolution: '1080p',
@@ -90,6 +96,9 @@ export function buildUpdates(s: WizardState): Record<string, string> {
     LLM_TRANSPORT: s.transport,
     LLM_MODEL: s.model,
     FAL_KEY: s.falKey,
+    // Only when entered: an empty write here would BLANK a configured key if the wizard is ever
+    // re-run over an existing install (fal's unconditional write predates Segmind and stays).
+    ...(s.segmindKey ? { SEGMIND_API_KEY: s.segmindKey } : {}),
     RENDER_BACKEND: s.backend === 'kling' ? '' : s.backend,
     KLING_ASPECT: s.aspect,
     KLING_RESOLUTION: s.resolution,
@@ -104,7 +113,12 @@ export function buildUpdates(s: WizardState): Record<string, string> {
 
 /** The .env delta ONE fix step owns — a fix writes just its named keys, never the whole review. */
 export function fixUpdates(s: WizardState, scope: 'llm' | 'fal' | 'backend'): Record<string, string> {
-  if (scope === 'fal') return { FAL_KEY: s.falKey };
+  if (scope === 'fal') {
+    // Only the keys actually entered: the fix loop also runs on EXISTING installs (doctor → Fix
+    // key), where writing the other provider's empty field would blank a configured key.
+    const keys = { FAL_KEY: s.falKey, SEGMIND_API_KEY: s.segmindKey };
+    return Object.fromEntries(Object.entries(keys).filter(([, v]) => v));
+  }
   if (scope === 'backend') return { RENDER_BACKEND: s.backend === 'kling' ? '' : s.backend };
   const updates: Record<string, string> = { LLM_PROVIDER: s.provider, LLM_TRANSPORT: s.transport, LLM_MODEL: s.model };
   if (s.transport === 'api') {

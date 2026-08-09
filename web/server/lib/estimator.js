@@ -164,7 +164,9 @@ export function readUpscaleProvider(envRoot, backend, childEnv) {
   let runProvider = null;
   try { runProvider = normalizeBackend(backend).provider; } catch { /* unknown/absent backend */ }
   const has = {
-    fal: Boolean(readEnvVar(envRoot, 'FAL_KEY', childEnv)),
+    // BOTH fal spellings: setup and the runtime config accept FAL_API_KEY too — judging only
+    // FAL_KEY would route this estimate to Segmind (unpriced) while the engine bills fal.
+    fal: Boolean(readEnvVar(envRoot, 'FAL_KEY', childEnv) || readEnvVar(envRoot, 'FAL_API_KEY', childEnv)),
     segmind: Boolean(readEnvVar(envRoot, 'SEGMIND_API_KEY', childEnv)),
   };
   if (runProvider && has[runProvider]) return runProvider;

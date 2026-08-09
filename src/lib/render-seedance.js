@@ -175,6 +175,21 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
     }
   }
 
+  // An authored job.last_frame is a REAL model input where the caps have a native closing-frame
+  // slot (Segmind). Native first/last mode excludes reference images there, so it only engages on
+  // a job whose opening frame stayed native too — with cast refs in play the first frame demoted
+  // to a reference and a closing frame has no slot to ride: fail loudly, because silently ignoring
+  // an authored framing constraint delivers a paid clip that breaks it. Models with no native slot
+  // (fal Seedance) keep the long-documented behaviour: last_frame is Kling-only and is ignored.
+  let lastFrameUrl = null;
+  if (job.last_frame && caps.argMap?.lastFrame) {
+    if (firstFrameUrl && !firstFrameIsRef(caps, imageUrls.length)) {
+      lastFrameUrl = await adapter.assetUrl(resolveImage(job.last_frame), mode, { cache: false });
+    } else {
+      throw new Error(`${job.job_id}: last_frame is authored, but ${nameOf(caps)} pins a closing frame only in native first/last mode, and this job's reference images occupy it — drop the job's last_frame or its reference images.`);
+    }
+  }
+
   // 2. Voice refs (@AudioN), only when audio is on AND voiceMode keeps the clip. In 'native' mode we
   //    attach NO clip and let the model voice the written line natively (see config.seedance.voiceMode).
   //    A text-to-video job (no image refs) also voices natively: the endpoint requires audio refs to
@@ -210,15 +225,15 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
     imageUrls,
     audioUrls,
     firstFrameUrl,
+    lastFrameUrl,
     aspectRatio: sdCfg.aspectRatio,
     resolution: lowRes ? probeResolution : sdCfg.resolution,
     generateAudio: sdCfg.generateAudio,
     totalDuration,
     seed,
-    // Where the model offers it (Segmind), ask for the clip's final frame: it comes back with the
-    // video and is saved beside it, so the run keeps the provider's own seam image rather than only
-    // an ffmpeg grab. Models without the flag drop it in the builder (caps.supportsReturnLastFrame).
-    returnLastFrame: true,
+    // return_last_frame is deliberately NOT requested: nothing downstream consumes the provider's
+    // frame yet (seam chaining reads the ffmpeg-grabbed <job>/last_frame.png), so asking would tag
+    // every paid job with a capability no code uses. The per-joint seam-lineage work wires it up.
   }, caps);
   // No image inputs AT ALL → text-to-video (Casting attached nothing relevant); rides at probe
   // resolution too. A native-slot first frame keeps refCount at 0 but is still an image the model

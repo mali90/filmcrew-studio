@@ -8,6 +8,7 @@ import { PROVIDER_KEY_ENV, PROVIDER_CLI_BIN, PROVIDER_CLI_ONLY } from './llm.js'
 import { buildInventory } from './elements.js';
 import { loadVoices, getVoiceRefClip } from './voices.js';
 import { seamstitchAvailable } from './seamstitch.js';
+import { resolveUpscaleProvider } from './upscale.js';
 import { RENDER_BACKENDS } from './spec-schema.js';
 import { normalizeBackend, RENDER_MODELS } from './render-models.js';
 
@@ -102,11 +103,20 @@ export async function runChecks({ env = process.env } = {}) {
       ? `Get a key at fal.ai/dashboard/keys and put it in .env — needed because ${falNeeds.join('; ')}`
       : 'Optional here — nothing in this setup runs on fal. Get one at fal.ai/dashboard/keys to mint character voices or to switch to a fal backend',
     { soft: falNeeds.length === 0 });
-  // Segmind's key is reported for everyone (switching provider is then a known step) but only
-  // BLOCKS the person whose default backend actually renders there.
+  // Segmind's key is reported for everyone (switching provider is then a known step) but BLOCKS
+  // whoever's money would actually route there: a Segmind default backend, OR an enabled upscale
+  // that resolves to Segmind — doctor passing while the approve-time upscale is guaranteed to fail
+  // would be a lie that costs a render to discover.
+  const effectiveUpscaleProvider = resolveUpscaleProvider({
+    configured: config.upscale.provider,
+    runProvider: renderProvider,
+    hasFalKey: !!config.fal.apiKey,
+    hasSegmindKey: !!config.segmind.apiKey,
+  });
+  const segmindBills = renderProvider === 'segmind' || (config.upscale.enabled && effectiveUpscaleProvider === 'segmind');
   add('segmind-key', !!config.segmind.apiKey, 'SEGMIND_API_KEY set',
     'Get a key at segmind.com (Console → API keys) and put SEGMIND_API_KEY in .env',
-    { soft: renderProvider !== 'segmind' });
+    { soft: !segmindBills });
   // How a local reference reaches the render provider. fal uploads to fal; Segmind can EITHER reuse
   // fal storage (small POST bodies, needs FAL_KEY) or inline data URIs (no fal account at all) —
   // the first combination fails on the very first upload of every render, silently until then.

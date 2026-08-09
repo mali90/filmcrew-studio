@@ -106,7 +106,9 @@ describe('Setup wizard — fal.ai key', () => {
     expect(body).toEqual({ apiKey: 'fal-key-1' });
 
     await userEvent.click(screen.getByRole('button', { name: /continue/i }));
-    expect(screen.getByRole('heading', { name: /render backend/i })).toBeInTheDocument();
+    // The backend step now PRECEDES the key step (the key collected depends on the chosen
+    // provider), so Continue lands on presets.
+    expect(screen.getByRole('heading', { name: /set your usual format/i })).toBeInTheDocument();
   });
 });
 

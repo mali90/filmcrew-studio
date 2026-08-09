@@ -8,7 +8,7 @@
 //   * the queue is addressed by SLUG (`POST /v2/seedance-2.5`), resolved from config.segmind by the
 //     registry's `slugKey` — the same endpointFor() that resolves fal's `endpointKey`
 //   * refs are cited `@Image 1` (SPACED), shots numbered on 2.5 / `Cut to:`-joined on 2.0
-//   * `duration` is an INTEGER here (fal takes a string) and `seed` + `return_last_frame` are sent
+//   * `duration` is an INTEGER here (fal takes a string) and `seed` is sent
 //   * the argument KEY NAMES are Segmind's (`reference_images`, not `image_urls`)
 //   * the seam frame takes the NATIVE `first_frame_url` slot only when the job has no cast refs —
 //     the two inputs are mutually exclusive on Segmind (firstFrameExcludesRefs), so a job WITH refs
@@ -54,7 +54,7 @@ const submitsSince = (from) => sg.requests.slice(from).filter((q) => q.method ==
 test.before(() => fs.writeFileSync(path.join(voices.dir, 'voices.json'), '{}'));
 test.after(async () => { await sg.close(); out.cleanup(); cache.cleanup(); voices.cleanup(); });
 
-test('seedance-2.5@segmind: slug route, spaced refs, numbered shots, INT duration, seed + return_last_frame', async () => {
+test('seedance-2.5@segmind: slug route, spaced refs, numbered shots, INT duration, seed', async () => {
   const { dir, cleanup } = mkTmp('sg-25');
   try {
     const before = sg.requests.length;
@@ -75,7 +75,10 @@ test('seedance-2.5@segmind: slug route, spaced refs, numbered shots, INT duratio
     assert.equal(typeof body.duration, 'number', 'Segmind takes an INTEGER duration');
     assert.equal(body.duration, 13);
     assert.equal(body.seed, 70000);
-    assert.equal(body.return_last_frame, true, 'asked for, so the next job can chain from it');
+    // return_last_frame is deliberately NOT requested: nothing consumes the provider's frame yet
+    // (seam chaining reads the ffmpeg grab), so asking would tag every paid job with an unused
+    // capability. The per-joint seam-lineage work wires it up — this assertion flips then.
+    assert.ok(!('return_last_frame' in body), 'not requested until something consumes it');
     // Probes ride the cheap tier on every provider (SEEDANCE25_PROBE_RESOLUTION); 720p is 2.5's
     // FULL-render default and rides the same knobs block as on fal.
     assert.equal(body.resolution, '480p');

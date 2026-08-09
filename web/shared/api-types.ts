@@ -156,6 +156,10 @@ export interface SetupStatus {
   envSource: '.env' | '.env.example' | 'none';
   llm: { provider: string; transport: string; model: string | null; hasKey: boolean };
   fal: { hasKey: boolean };
+  segmind: { hasKey: boolean };
+  /** The DEFAULT backend's billing provider — the key that gates `complete` (a Segmind-only
+   *  install needs no fal account; requiring FAL_KEY would trap it in /setup). */
+  renderProvider: 'fal' | 'segmind';
   defaults: { backend: Backend; aspect: Aspect; resolution: string };
   complete: boolean;
 }

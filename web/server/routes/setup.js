@@ -35,12 +35,26 @@ export function registerSetupRoutes(app) {
     const { PROVIDER_KEY_ENV } = await import(path.join(root, 'src/lib/llm.js'));
     const llmKeySet = transport === 'cli' || !!(get(PROVIDER_KEY_ENV[provider] ?? '') || get('LLM_API_KEY'));
     const falKeySet = !!(get('FAL_KEY') || get('FAL_API_KEY'));
+    const segmindKeySet = !!get('SEGMIND_API_KEY');
+    // Completion is gated on the key the DEFAULT BACKEND actually bills: a Segmind-only install
+    // (no fal account anywhere) is a valid, documented setup — requiring FAL_KEY here would trap it
+    // in /setup forever while the wizard happily offers Segmind cards. The registry is config-free,
+    // so importing it is the allowed pattern.
+    const backend = get('RENDER_BACKEND') || 'kling';
+    let renderProvider = 'fal';
+    try {
+      const { normalizeBackend } = await import(path.join(root, 'src/lib/render-models.js'));
+      renderProvider = normalizeBackend(backend).provider;
+    } catch { /* unknown backend — doctor's own check names it; the fal gate stays as the fallback */ }
+    const renderKeySet = renderProvider === 'segmind' ? segmindKeySet : falKeySet;
     return {
       envSource: fs.existsSync(path.join(envRoot, '.env')) ? '.env' : source === '.env.example' ? '.env.example' : 'none',
       llm: { provider, transport, model: get('LLM_MODEL') || null, hasKey: llmKeySet },
       fal: { hasKey: falKeySet },
-      defaults: { backend: get('RENDER_BACKEND') || 'kling', aspect: get('KLING_ASPECT') || '9:16', resolution: get('KLING_RESOLUTION') || '1080p' },
-      complete: llmKeySet && falKeySet,
+      segmind: { hasKey: segmindKeySet },
+      renderProvider,
+      defaults: { backend, aspect: get('KLING_ASPECT') || '9:16', resolution: get('KLING_RESOLUTION') || '1080p' },
+      complete: llmKeySet && renderKeySet,
     };
   });
 
@@ -70,6 +84,11 @@ export function registerSetupRoutes(app) {
   app.post('/api/setup/validate-fal', async (req) => {
     const { validateFal } = await import(path.join(root, 'src/lib/fal.js'));
     return validateFal(String(req.body?.apiKey ?? ''));
+  });
+
+  app.post('/api/setup/validate-segmind', async (req) => {
+    const { validateSegmind } = await import(path.join(root, 'src/lib/segmind.js'));
+    return validateSegmind(String(req.body?.apiKey ?? ''));
   });
 
   // Model list for the Keys/wizard dropdown: always the curated catalog (default + alternatives);
