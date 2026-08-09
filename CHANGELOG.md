@@ -50,7 +50,6 @@
   renders on Segmind, informational otherwise) and `render-assets`, which catches the one broken
   combination — `SEGMIND_UPLOAD_MODE=fal-storage` with no `FAL_KEY` — instead of letting it fail on
   the first upload of a render, and recognises the keyless `data-uri` setup as valid.
->>>>>>> c42f597 (docs: provider matrix, Segmind-only setup, CHANGELOG entry)
 
 ### Changed
 - **The estimator is provider-aware, and says so when it doesn't know a price.** Seedance 2.5 on fal
