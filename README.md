@@ -1,8 +1,8 @@
 # Filmcrew Studio
 
-**One line in, a multi-shot short cinematic film out — planned by a crew of 8 AI agents, rendered on fal.ai, stitched on your machine.**
+**One line in, a multi-shot short cinematic film out — planned by a crew of 8 AI agents, rendered on fal.ai or Segmind, stitched on your machine.**
 
-Type a single idea — *"a lighthouse keeper's last night before automation"* — and an 8-agent LLM pipeline (Showrunner → Storyboard → Scene Director → Cinematographer → Casting → Sound → Job Planner → QC) writes a full production spec. fal.ai renders the planned shots on **Kling 3.0** or **Seedance 2.0**, your recurring characters keep a consistent look and speak their lines in a voice minted once, and ffmpeg stitches the finished `.mp4` locally into `out/`. A QC agent re-runs only the sub-agents whose work failed, so the plan is sound before any paid frame renders. Local-first and source-available (FSL-1.1, converts to MIT after two years): rendering is **paid pay-as-you-go on fal.ai**, you bring your own LLM planner (Claude, OpenAI, Gemini, or Copilot), and nothing is ever posted anywhere — it just writes a local file.
+Type a single idea — *"a lighthouse keeper's last night before automation"* — and an 8-agent LLM pipeline (Showrunner → Storyboard → Scene Director → Cinematographer → Casting → Sound → Job Planner → QC) writes a full production spec. **fal.ai or Segmind** renders the planned shots on **Kling 3.0**, **Seedance 2.0** or **Seedance 2.5**, your recurring characters keep a consistent look and speak their lines in a voice minted once, and ffmpeg stitches the finished `.mp4` locally into `out/`. A QC agent re-runs only the sub-agents whose work failed, so the plan is sound before any paid frame renders. Local-first and source-available (FSL-1.1, converts to MIT after two years): rendering is **paid pay-as-you-go** at whichever provider you pick, you bring your own LLM planner (Claude, OpenAI, Gemini, or Copilot), and nothing is ever posted anywhere — it just writes a local file.
 
 [![CI](https://github.com/mali90/filmcrew-studio/actions/workflows/test.yml/badge.svg)](https://github.com/mali90/filmcrew-studio/actions/workflows/test.yml)
 [![License: FSL-1.1-MIT](https://img.shields.io/badge/license-FSL--1.1--MIT-blue.svg)](LICENSE)
@@ -66,7 +66,7 @@ Your browser opens to **http://127.0.0.1:5177**, where a first-run wizard takes 
 From there: type an idea → the agents plan it (uses your LLM, no render spend) → you see the **price on every render button** before anything spends → review the cut clip by clip → request changes (they go back through the agents) → approve, with an optional Topaz upscale to 1080p. Your finished `.mp4` lands in **`out/`**.
 
 > [!IMPORTANT]
-> Rendering is **paid, pay-as-you-go** on fal.ai. The studio shows an estimate on every money button and renders economically by default (Kling ~720p / Seedance 480p — the approve-time upscale delivers 1080p). Long videos split into several render jobs, and those plans offer a **probe** — render just the first job to check the direction before paying for the rest. Details and current prices: [docs/COST.md](docs/COST.md).
+> Rendering is **paid, pay-as-you-go** on fal.ai or Segmind. The studio shows an estimate on every money button and renders economically by default (Kling ~720p / Seedance 2.0 480p — the approve-time upscale delivers 1080p). Where a rate isn't on file — Segmind doesn't publish one — the button says **"Price not set"** and warns instead of blocking; the render still costs money. Long videos split into several render jobs, and those plans offer a **probe** — render just the first job to check the direction before paying for the rest. Details and current prices: [docs/COST.md](docs/COST.md).
 
 ### Starting and stopping, day to day
 
@@ -95,12 +95,12 @@ npm run engine -- --brief "your idea here" --render --probe   # long multi-job v
 | `npm run assemble -- --from runs/<id>/renders/<take>` | Finish or re-stitch a prior render — free, no API calls. |
 | `npm run mint-voice -- <name> <clip.mp3>` | Give a character a persistent voice (once per character). |
 
-Two video models: **Kling 3.0** (default) and **Seedance 2.0** — pick per run with `--backend`, or set the default in Settings. Backends are named `<model>@<provider>` (`kling-o3@fal`, `seedance-2.0@fal`); the old one-word `kling`/`seedance` names still work everywhere, including in specs already on disk. How they differ: [docs/PROVIDERS.md](docs/PROVIDERS.md). Slow, hand-held setup (including editing `.env` yourself): [docs/SETUP.md](docs/SETUP.md).
+Three video models across two providers: **Kling 3.0** (default, fal-only), **Seedance 2.0** and **Seedance 2.5** — the two Seedance models render on **fal.ai or Segmind**, your choice. Pick per run with `--backend`, or set the default in Settings. Backends are named `<model>@<provider>` (`kling-o3@fal`, `seedance-2.0@fal`, `seedance-2.5@fal`, `seedance-2.0@segmind`, `seedance-2.5@segmind`); the old one-word `kling`/`seedance` names still work everywhere, including in specs already on disk. You only need a key for the provider you render on — a **Segmind-only install needs no fal account at all**. How they differ, and what a Segmind-only setup can and can't do: [docs/PROVIDERS.md](docs/PROVIDERS.md). Slow, hand-held setup (including editing `.env` yourself): [docs/SETUP.md](docs/SETUP.md).
 
 ## What you get
 
 - **An 8-agent planning engine** with a QC gate that re-runs only the agents whose work fails — the plan is sound before a single paid frame renders.
-- **Two render backends** behind one spec, each planned to **its own model's caps** — job window, reference-image budget, starred-cast ceiling (Kling 1, Seedance 2) and aspect-ratio list. Over-cap choices are refused before any paid step.
+- **Five render backends across two providers** behind one spec, each planned to **its own model's caps** — job window, reference-image budget, starred-cast ceiling (Kling 1, Seedance 2.0 2, Seedance 2.5 4) and aspect-ratio list. The caps follow the *(model, provider)* pair, so the same model can offer more on one vendor than the other. Over-cap choices are refused before any paid step.
 - **Characters that persist**: reference images, subject bibles and minted voices, managed on the Cast page and starrable per idea. A sample character, **Wren**, ships in the box — open the Cast page or add `--cast wren` to any idea to try it (activate his voice with `npm run mint-voice -- "Wren" voices/wren.mp3`).
 - **Environments that persist**: a purely descriptive world/mood/palette bible (`environments/<slug>.md`, no images or voice), managed on the Cast page and set per idea to steer every shot's look. A sample environment, **Neon City**, ships in the box — open the Cast page or add `--environment neon-city` to any idea to try it.
 - **Seam-invisible stitching**: a video over the model's window renders as several chained jobs, and the local stitch colour-matches each chained joint, drops the frame the two clips share and crossfades — so a long cut reads as one take instead of popping at every seam. Pure local ffmpeg, no API and no spend; optional (`pip3 install numpy pillow`), and without it the plain hard-cut stitch still runs. [docs/STITCHING.md](docs/STITCHING.md)
@@ -143,7 +143,7 @@ A worked example lives in [`examples/ocean-lighthouse/`](examples/ocean-lighthou
 
 ## Cost
 
-Rendering is **paid, pay-as-you-go** on fal.ai — every render spends money. These figures are a **snapshot as of July 2026 and may change** — always check fal's pricing for your endpoint. Full detail (hard limits, the probe workflow, the Seedance token formula): [docs/COST.md](docs/COST.md).
+Rendering is **paid, pay-as-you-go** at your render provider — every render spends money. These figures are a **snapshot as of July/August 2026 and may change** — always check the provider's pricing for your endpoint. Full detail (hard limits, the probe workflow, the Seedance token formula): [docs/COST.md](docs/COST.md).
 
 | Model / step | Output | Price (July 2026) | Typical 15s job |
 |---|---|---|---:|
@@ -152,10 +152,15 @@ Rendering is **paid, pay-as-you-go** on fal.ai — every render spends money. Th
 | **Seedance 2.0** · 480p (default) | 480p | $0.14/s | ≈ $2.00 |
 | **Seedance 2.0** · 720p | 720p | $0.30/s | ≈ $4.50 |
 | **Seedance 2.0** · 1080p | 1080p | $0.68/s | ≈ $10.20 |
+| **Seedance 2.5** · 480p | 480p | $0.2205/s | ≈ $3.31 |
+| **Seedance 2.5** · 720p (default) | 720p | $0.473/s | ≈ $7.10 |
 | **Topaz upscale** · `--upscale` | → 1080p | $0.12/s · one job per sub-1080p clip | ≈ $1.80 |
 | **Voice mint** · `mint-voice` | one voice / character | ≈ $0.007 once | — |
+| **Anything on Segmind** | — | **rate not published — not on file** | — |
 
-> **Snapshot — see [docs/COST.md](docs/COST.md) for current detail.** The default for both backends is *render small + Topaz upscale on approve*, so the finished master is 1080p while you pay the economical tier's per-second rate.
+> **Snapshot — see [docs/COST.md](docs/COST.md) for current detail.** The default for the fal backends is *render small + Topaz upscale on approve*, so the finished master is 1080p while you pay the economical tier's per-second rate.
+
+> **Segmind rates are not in this repo's price table.** Segmind does not publish a public per-second rate for the two Seedance models or its Topaz upscale, and this project will not invent one. For those backends the estimator shows **"Price not set"** and the render button warns rather than blocks — **the render still costs real money**. Check the model's own page before a long run; details in [docs/PROVIDERS.md](docs/PROVIDERS.md).
 
 ## Docs
 

@@ -20,8 +20,49 @@
   **Today the fallback still runs for most renders**: the seamless path only fires when the run can
   say which joints are chained, which is recorded as one all-or-nothing flag. Per-joint seam lineage
   is the next piece of work; when it lands, mixed timelines start stitching seamlessly on their own.
+- **Segmind is a second render provider.** Both Seedance models now render on **fal.ai or Segmind** —
+  `seedance-2.0@segmind` and `seedance-2.5@segmind` join the backend list, and you only need a key
+  for the provider you actually use. A **Segmind-only install needs no fal account at all**: set
+  `SEGMIND_API_KEY`, `SEGMIND_UPLOAD_MODE=data-uri` and `UPSCALE_PROVIDER=segmind` and the whole path
+  from idea to finished 1080p master works. Kling 3.0 Omni stays fal-only, and minting persistent
+  character voices still needs `FAL_KEY` — Segmind's own voice model is not wired up, so a
+  Segmind-only setup has no minted voices. The same model can differ per provider and the planner is
+  told the right numbers: Seedance 2.0 renders three aspect ratios on fal and six on Segmind, takes a
+  `seed` on Segmind but not on fal, and has real first/last-frame slots there (mutually exclusive
+  with reference images, so a job with cast refs carries the seam frame as its last reference, exactly
+  as on fal). Full matrix in [docs/PROVIDERS.md](docs/PROVIDERS.md).
+- **Segmind never pays twice for the same job.** Its transport resubmits only *before* Segmind has
+  accepted a request; once a `request_id` exists nothing re-POSTs (that would buy a second render) and
+  only the polling GETs retry. Insufficient credits, content-policy rejections and expired result
+  records each get their own actionable message instead of a generic failure, and every finished job
+  records its `request_id`, reported cost and remaining credits in the run's `prompts.json` sidecar.
+- **Seedance 2.5 on fal** (`seedance-2.5@fal`): 4–30s jobs, 4 starred cast members, all six aspect
+  ratios, 480p/720p output, `[Image1]`-style reference citations, `Shot N:` prompt syntax, a `seed`
+  the endpoint actually accepts, and a 50-reference combined budget across images, audio and video.
+- **Topaz upscale runs on either provider.** `UPSCALE_PROVIDER=auto|fal|segmind` (default `auto` =
+  wherever the run rendered, falling back to whichever provider has a key). Segmind's Topaz takes a
+  `target_resolution` (`UPSCALE_TARGET_RESOLUTION`, default `1080p`) instead of fal's factor — and its
+  `target_fps` is **pinned to the probed source frame rate**, because Segmind defaults it to 60 and
+  would otherwise hand back a frame-interpolated clip with motion the take never had.
+- **New setup checks.** `npm run doctor` gained `segmind-key` (blocking when your default backend
+  renders on Segmind, informational otherwise) and `render-assets`, which catches the one broken
+  combination — `SEGMIND_UPLOAD_MODE=fal-storage` with no `FAL_KEY` — instead of letting it fail on
+  the first upload of a render, and recognises the keyless `data-uri` setup as valid.
+>>>>>>> c42f597 (docs: provider matrix, Segmind-only setup, CHANGELOG entry)
 
 ### Changed
+- **The estimator is provider-aware, and says so when it doesn't know a price.** Seedance 2.5 on fal
+  carries real rates ($0.2205/s at 480p, $0.473/s at 720p). Segmind does **not** publish a public
+  per-second rate for either Seedance model or its Topaz upscale, so those rows are deliberately
+  empty: the estimate comes back as unknown rather than borrowing a sibling backend's rate or
+  guessing one. The UI shows an amber **"Price not set"** note and **warns without blocking** — the
+  render still costs real money, the rate just isn't on file yet. A genuinely unknown *backend* still
+  fails loudly, as before.
+- **Home's backend picker chooses a model and a provider.** Models with more than one provider
+  (Seedance 2.0 and 2.5) offer the choice; Kling shows honestly that it runs on fal only. Cast
+  ceilings, aspect lists and per-model hints follow the selected pair, and switching pairs re-picks
+  anything the new one can't carry — the fal 2.5 entry shows its real per-second rate, the Segmind
+  entries say the rate isn't on file rather than inventing a figure.
 - **Render backends are now named `<model>@<provider>`** (`kling-o3@fal`, `seedance-2.0@fal`), and a
   planned spec records that canonical id in `render_backend` whichever spelling you typed, as does
   each rendered job's `prompts.json` sidecar — so an old clip can still say which *model* made it.
