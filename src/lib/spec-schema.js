@@ -46,12 +46,17 @@ function validateProject(p, P) {
   if (p.cast !== undefined && !isArr(p.cast)) P.push('project.cast must be an array when present');
 }
 
-function validateShotScript(s, i, P) {
+// A shot can never be longer than one GENERATION of the model that will render it (a job holds at
+// least one shot), so the per-shot ceiling is the model's own job window — 15s on Kling and Seedance
+// 2.0, 30s on Seedance 2.5. With no backend named it is the superset's widest, so a spec planned for
+// a long-window model still round-trips through a validator that was told nothing about the model.
+function validateShotScript(s, i, P, caps) {
   const at = `shots[${i}]`;
+  const maxSeconds = caps?.maxSeconds ?? MAX_JOB_SECONDS;
   if (!s || typeof s !== 'object') return P.push(`${at}: not an object`);
   if (!nonEmpty(s.shot_id)) P.push(`${at}.shot_id missing`);
   if (!nonEmpty(s.beat)) P.push(`${at}.beat missing`);
-  if (!isNum(s.duration_s) || s.duration_s < 1 || s.duration_s > MAX_JOB_SECONDS) P.push(`${at}.duration_s must be 1–${MAX_JOB_SECONDS}`);
+  if (!isNum(s.duration_s) || s.duration_s < 1 || s.duration_s > maxSeconds) P.push(`${at}.duration_s must be 1–${maxSeconds}`);
 }
 
 function validateContent(s, i, P) {
@@ -244,7 +249,7 @@ export function validateSpec(spec, { upTo = 7, backend, chainFrames = true } = {
   }
   if (upTo >= 1) {
     if (!isArr(spec.shots) || spec.shots.length < 1) P.push('shots must be a non-empty array');
-    shots.forEach((s, i) => validateShotScript(s, i, P));
+    shots.forEach((s, i) => validateShotScript(s, i, P, caps));
   }
   if (upTo >= 2) shots.forEach((s, i) => validateContent(s, i, P));
   if (upTo >= 3) shots.forEach((s, i) => validateCamera(s, i, P));

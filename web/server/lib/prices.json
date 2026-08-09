@@ -17,6 +17,15 @@
     "probeResolution": "480p",
     "_source": "fal.ai bytedance/seedance-2.0/reference-to-video standard tier (July 2026): $0.014 per 1000 tokens for 480p/720p/1080p ($0.008/1k for 4k); tokens = height*width*seconds*24/1024 \u2014 so 720p=$0.3024/s, 1080p=$0.6804/s (fal quotes $0.682). Probe = SAME standard endpoint at probeResolution; the mini/fast tiers are deliberately not used (character fidelity drift)."
   },
+  "seedance-2.5@fal": {
+    "perSecondUsd": {
+      "480p": 0.2205,
+      "720p": 0.473
+    },
+    "defaultResolution": "720p",
+    "probeResolution": "480p",
+    "_source": "fal bytedance/seedance-2.5/reference-to-video (August 2026): $0.0214 per 1000 tokens; tokens = height*width*(input+output seconds)*24/1024 — so 16:9 output alone is $0.2205/s at 480p and $0.4730/s at 720p (16:9-derived, the same convention as the Seedance 2.0 row; other ratios differ slightly). Image and audio references are free; VIDEO references bill their input seconds at a 0.6 multiplier, which this estimate does not model. 2.5 is materially dearer than 2.0 — it must never share that row."
+  },
   "topaz": {
     "perSecondUsd": 0.12,
     "_source": "fal.ai topaz/upscale/video ballpark per output second"

@@ -79,14 +79,46 @@ export const RENDER_MODELS = {
       },
     },
   },
-  // Declared model-level ONLY this phase: its cast cap and ratio list are already assertable (and
-  // UI-selectable) while `providers` is empty, so shipping it is a one-line registry add later.
   'seedance-2.5': {
     label: 'Seedance 2.5',
     family: 'seedance',
     castLimit: 4,
     aspects: ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'],
-    providers: {},
+    providers: {
+      fal: {
+        endpointKey: 'seedance25Endpoint',
+        probeEndpointKey: 'seedance25ProbeEndpoint',
+        // No textEndpointKey: fal's 2.5 has no separate text tier on this family, so a job with zero
+        // image refs rides THIS endpoint (the renderer falls through to it, probe variant included).
+        // fal budgets 2.5's references ACROSS modalities — 50 combined, no per-kind limit published.
+        // The per-kind numbers are therefore high-water marks inside that budget, and
+        // `maxCombinedRefs` is the cap that actually bites (enforced in seedance-args.js).
+        maxImages: 50,
+        maxAudioRefs: 10,
+        maxVideoRefs: 50,
+        maxCombinedRefs: 50,
+        audioBudgetS: 30,
+        // duration is a STRING here, as on fal's 2.0 endpoint ('auto' is also accepted by the
+        // endpoint; this build always computes a numeric duration, so it is never emitted).
+        minSeconds: 4,
+        maxSeconds: 30,
+        durationType: 'string',
+        // 480p|720p ONLY (24 fps native) — 1080p comes from approve's Topaz upscale, not from here.
+        resolutions: ['480p', '720p'],
+        defaultResolution: '720p',
+        // The reference-to-video endpoint carries NO frame anchors at all (they live on the separate
+        // image-to-video endpoint), so a seam frame is always demoted to a trailing image ref + a
+        // prompt pin — byte-for-byte the strategy fal Seedance 2.0 already uses.
+        nativeFirstFrame: false,
+        nativeLastFrame: false,
+        supportsSeed: true, // unlike fal's 2.0 endpoint, which 422s on `seed`
+        supportsReturnLastFrame: false,
+        refStyle: 'bracket',
+        shotSyntax: 'numbered',
+        knobsKey: 'seedance25', // its own user-tunable block (config.seedance25), falling back to config.seedance
+        argMap: { images: 'image_urls', audios: 'audio_urls', videos: 'video_urls', firstFrame: null, lastFrame: null },
+      },
+    },
   },
 };
 

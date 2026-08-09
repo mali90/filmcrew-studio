@@ -5,7 +5,7 @@
 /** Render backend ids: the canonical `<model>@<provider>` form the server now returns, plus the two
  *  legacy one-word aliases that stay valid forever (old manifests are never migrated on disk).
  *  Mirrors ALL_BACKENDS in src/lib/render-models.js. */
-export type Backend = 'kling' | 'seedance' | 'kling-o3@fal' | 'seedance-2.0@fal';
+export type Backend = 'kling' | 'seedance' | 'kling-o3@fal' | 'seedance-2.0@fal' | 'seedance-2.5@fal';
 /** Every aspect ratio SOME model can render — which ones a given run may pick is per-model
  *  (aspectsFor(backend)). 'adaptive'/'auto' are deliberately absent: the stitch canvas needs a
  *  deterministic ratio. */

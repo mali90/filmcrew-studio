@@ -81,6 +81,13 @@ const config = {
     // and probe resolution (probe just lowers resolution, like the reference-to-video tiers above).
     // VERIFY against the model's fal API tab; override via FAL_SEEDANCE_TEXT_ENDPOINT if it differs.
     seedanceTextEndpoint: process.env.FAL_SEEDANCE_TEXT_ENDPOINT || 'bytedance/seedance-2.0/text-to-video',
+    // Seedance 2.5 reference-to-video — a DIFFERENT model with its own endpoint, prompt syntax and
+    // limits (4–30s, 480p/720p, bracket [Image1] refs, a seed it actually accepts), so it gets its
+    // own settings rather than sharing 2.0's. This endpoint has NO text-to-video sibling: a job with
+    // no image refs rides the same endpoint. Probe = the SAME endpoint at a lower resolution
+    // (SEEDANCE25_PROBE_RESOLUTION), exactly as 2.0 probes.
+    seedance25Endpoint: process.env.FAL_SEEDANCE25_ENDPOINT || 'bytedance/seedance-2.5/reference-to-video',
+    seedance25ProbeEndpoint: process.env.FAL_SEEDANCE25_PROBE_ENDPOINT || 'bytedance/seedance-2.5/reference-to-video',
     createVoiceEndpoint: process.env.FAL_CREATE_VOICE_ENDPOINT || 'fal-ai/kling-video/create-voice',
     // The CDN upload handshake (initiate + PUT) lives on a different host than the queue — env
     // override exists mostly so tests can point it at the mock server.
@@ -148,6 +155,18 @@ const config = {
     maxJobSeconds: 15,  // model hard cap
     maxImages: 9,       // model hard cap: image_urls ≤ 9
     maxAudioRefs: 3,    // model hard cap: audio_urls ≤ 3, combined ≤ 15s
+  },
+
+  // ── Seedance 2.5 overrides — ONLY what differs from the `seedance` block above. Everything else
+  //    (style, avoid, textRule, voiceMode, uploadMode, promptMaxBytes, generateAudio) still comes
+  //    from `seedance`, so one set of user preferences covers both models. Model hard caps live in
+  //    the registry (src/lib/render-models.js), never here. ──
+  seedance25: {
+    // 480p | 720p only (the model renders no higher; approve's Topaz upscale delivers 1080p).
+    // Default 720p, not 2.0's 480p: 2.5 bills ~$0.22/s at 480p vs ~$0.47/s at 720p, and its
+    // reference fidelity is what you are paying for — see docs/COST.md.
+    resolution: process.env.SEEDANCE25_RESOLUTION || '720p',
+    probeResolution: process.env.SEEDANCE25_PROBE_RESOLUTION || '480p', // probes ride the cheap tier
   },
 
   // ── Element folders (all Kling Omni input types) ──

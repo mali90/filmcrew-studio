@@ -30,7 +30,7 @@ import config from '../../config.js';
 import log from './logger.js';
 import { refLabel } from './render-models.js';
 import { buildSeedanceArgs, firstFrameIsRef, fitAudioRef, audioWindowFor, nameOf } from './seedance-args.js';
-import { buildSeedanceJobPrompt, seedanceConfigFor } from './seedance.js';
+import { buildSeedanceJobPrompt, seedanceConfigFor, modelKnobs } from './seedance.js';
 import { characterGroups, jobSpeakers } from './cast-groups.js';
 import { resolveImage } from './elements.js';
 import { getVoiceRefClip } from './voices.js';
@@ -109,14 +109,18 @@ async function audioRefsFor(job, spec, dir, caps) {
 export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = false, startFrame = null, nonce = 0, feedback = '' }, { caps, adapter }) {
   const dir = path.join(runDir, job.job_id);
   fs.mkdirSync(dir, { recursive: true });
-  const sdCfg = seedanceConfigFor(spec);
+  const sdCfg = seedanceConfigFor(spec, caps);
   const knobs = config.seedance; // user-tunable settings, never model caps
+  // …with the model's own block winning where it declares one (Seedance 2.5 renders 480p/720p only
+  // and defaults to 720p, so it cannot share 2.0's resolution settings). Everything the model does
+  // not redeclare — style, avoid, textRule, voiceMode, uploadMode, promptMaxBytes — stays shared.
+  const probeResolution = modelKnobs(caps)?.probeResolution ?? knobs.probeResolution;
   const mode = knobs.uploadMode;
 
   // Fail fast on deterministic config errors BEFORE any asset leaves the machine: with storage
   // uploads, a bad SEEDANCE_RESOLUTION or aspect would otherwise cost a full round of reference
   // uploads before the arg builder reports it. Same error text as the builder's own validators.
-  const effResolution = lowRes ? knobs.probeResolution : sdCfg.resolution;
+  const effResolution = lowRes ? probeResolution : sdCfg.resolution;
   if (caps.resolutions?.length && !caps.resolutions.includes(effResolution)) {
     throw new Error(`Unknown resolution "${effResolution}" for ${nameOf(caps)} — use one of: ${caps.resolutions.join(', ')}.`);
   }
@@ -198,7 +202,7 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
     audioUrls,
     firstFrameUrl,
     aspectRatio: sdCfg.aspectRatio,
-    resolution: lowRes ? knobs.probeResolution : sdCfg.resolution,
+    resolution: lowRes ? probeResolution : sdCfg.resolution,
     generateAudio: sdCfg.generateAudio,
     totalDuration,
     seed,
@@ -206,9 +210,11 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
   // No image inputs AT ALL → text-to-video (Casting attached nothing relevant); rides at probe
   // resolution too. A native-slot first frame keeps refCount at 0 but is still an image the model
   // conditions on, so it must route through the reference endpoint, not the text one.
+  // A model with NO text tier (Seedance 2.5) simply keeps its ordinary endpoint — including the
+  // probe variant, so a text-to-video probe still renders cheap instead of at full resolution.
   const textToVideo = refCount === 0 && !firstFrameUrl;
-  const endpointKey = textToVideo
-    ? (caps.textEndpointKey ?? caps.endpointKey)
+  const endpointKey = (textToVideo && caps.textEndpointKey)
+    ? caps.textEndpointKey
     : (lowRes ? (caps.probeEndpointKey ?? caps.endpointKey) : caps.endpointKey);
   const endpoint = endpointFor(caps, endpointKey);
 
@@ -225,7 +231,11 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
       resolution: args.resolution,
       duration_s: args.duration,
       generate_audio: args.generate_audio,
-      seed_unused: caps.supportsSeed ? null : (seed ?? null), // recorded where the model 422s on a seed
+      // The seed, recorded honestly either way: `seed` is what was SENT (so a take can be
+      // reproduced), `seed_unused` is the record of a seed an endpoint would 422 on (fal's 2.0).
+      // Exactly one of them is ever non-null.
+      seed: caps.supportsSeed ? (seed ?? null) : null,
+      seed_unused: caps.supportsSeed ? null : (seed ?? null),
       nonce,
       start_frame: startFrameSrc ? startFrameSource : null,
       image_refs: imageRefs,
