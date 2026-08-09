@@ -113,7 +113,11 @@ export async function runChecks({ env = process.env } = {}) {
     hasFalKey: !!config.fal.apiKey,
     hasSegmindKey: !!config.segmind.apiKey,
   });
-  const segmindBills = renderProvider === 'segmind' || (config.upscale.enabled && effectiveUpscaleProvider === 'segmind');
+  // An EXPLICIT UPSCALE_PROVIDER=segmind blocks even with the auto-upscale flag off: the review
+  // UI offers approve-time upscaling regardless, and that manual action honors the explicit pick.
+  const segmindBills = renderProvider === 'segmind'
+    || String(config.upscale.provider || '').trim().toLowerCase() === 'segmind'
+    || (config.upscale.enabled && effectiveUpscaleProvider === 'segmind');
   add('segmind-key', !!config.segmind.apiKey, 'SEGMIND_API_KEY set',
     'Get a key at segmind.com (Console → API keys) and put SEGMIND_API_KEY in .env',
     { soft: !segmindBills });

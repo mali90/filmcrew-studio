@@ -18,8 +18,11 @@ const providerOf = (backend: string): 'fal' | 'segmind' => {
 
 export function StepFal({ state, dispatch }: { state: WizardState; dispatch: Dispatch<WizardAction> }) {
   const provider = providerOf(state.backend);
+  // On the Segmind path the fal key is OPTIONAL — but a non-empty one must validate: saving an
+  // invalid fal key flips SEGMIND_UPLOAD_MODE's default to fal-storage, and the first
+  // reference-bearing render would then die on fal storage auth after setup reported success.
   const canContinue = provider === 'segmind'
-    ? state.segmindCheck.state === 'valid'
+    ? state.segmindCheck.state === 'valid' && (!state.falKey || state.falCheck.state === 'valid')
     : state.falCheck.state === 'valid';
 
   const validateFal = async () => {
@@ -113,7 +116,8 @@ export function StepFal({ state, dispatch }: { state: WizardState; dispatch: Dis
 
         <p className="mt-5 text-caption text-ink-muted">
           Optional: Kling 3.0 Omni and minting persistent character voices run on fal.ai. Add a fal
-          key too, or skip it — a Segmind-only install renders and upscales without one.
+          key too, or skip it — a Segmind-only install renders and upscales without one. If you add
+          one it must validate: renders would route reference uploads through it.
         </p>
         <div className="mt-2">{falField}</div>
 
