@@ -12,10 +12,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildApp } from '../app.js';
+import { SEAM_DEMO_RUN_ID, seedSeamDemoRun } from './seed-demo-run.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '../../..');
 const PORT = Number(process.env.WEB_PORT) || 5178;
+const RUNS_DIR = path.join(ROOT, 'runs-demo');
+const OUT_DIR = path.join(ROOT, 'out-demo');
 
 const { startFalServer } = await import(path.join(ROOT, 'test/helpers/fal-server.js'));
 const { startSegmindServer } = await import(path.join(ROOT, 'test/helpers/segmind-server.js'));
@@ -71,10 +74,23 @@ const childEnv = {
   ...(process.env.FAKE_LLM_SLEEP_MS ? { FAKE_LLM_SLEEP_MS: process.env.FAKE_LLM_SLEEP_MS } : {}), // probes: hold completions open
 };
 
+// A run that already has a mixed cut, seeded before the app boots. Planning and rendering one by
+// hand is the demo's headline path, but it always lands on a cut whose joins are all intact — the
+// continuity chips, the prompt sheet's "as sent" versions and the segment re-render dialog only
+// have something to SAY once one clip has been re-rendered under its neighbours. Re-seeded every
+// boot so the walkthrough starts from the same place twice.
+const seedDemoRun = () => seedSeamDemoRun({
+  root: ROOT, runsDir: RUNS_DIR, outDir: OUT_DIR, envRoot, childEnv, videoBytes,
+  // the same voices dir the prompt route composes against, so the seeded sidecars and the live
+  // preview cite the same references
+  voicesDir: path.join(RUNS_DIR, 'cast', 'voices'),
+});
+await seedDemoRun().catch((e) => console.error(`⚠ could not seed the demo run: ${e.message}`));
+
 const app = await buildApp({
   root: ROOT,
-  runsDir: path.join(ROOT, 'runs-demo'),
-  outDir: path.join(ROOT, 'out-demo'),
+  runsDir: RUNS_DIR,
+  outDir: OUT_DIR,
   envRoot,
   // the demo's cast workspace is isolated too — creating characters, uploading refs and
   // re-keying voices must never write into the real repo's profiles/, elements/ or voices/
@@ -89,12 +105,24 @@ const app = await buildApp({
 // e2e control endpoints: flip either mock's failure modes / reset the isolated .env at runtime
 app.post('/__demo/fal-opts', async (req) => { Object.assign(fal.opts, req.body ?? {}); return { opts: fal.opts }; });
 app.post('/__demo/segmind-opts', async (req) => { Object.assign(segmind.opts, req.body ?? {}); return { opts: segmind.opts }; });
+// Put the seeded run back the way it boots. A walkthrough that approves, reopens or re-renders it
+// has moved it on purpose; the next spec (or the next hand-driven pass against a server that was
+// left running) must still start from the same broken join.
+app.post('/__demo/reseed', async () => ({ seeded: (await seedDemoRun()).runId }));
 app.post('/__demo/env-reset', async (req) => {
   if (req.body?.complete === false) fs.rmSync(path.join(envRoot, '.env'), { force: true });
   else seedDemoEnv();
   return { complete: req.body?.complete !== false };
 });
-app.get('/__demo/health', async () => ({ demo: true, fal: fal.baseUrl, segmind: segmind.baseUrl }));
+app.get('/__demo/health', async () => ({ demo: true, fal: fal.baseUrl, segmind: segmind.baseUrl, seededRun: SEAM_DEMO_RUN_ID }));
+// How many RENDER submits each mock has taken. e2e reads it either side of the surfaces that are
+// supposed to cost nothing — a previewed prompt, an edited one, a re-render dialog that was
+// cancelled, a reopen — because "no spend" is a claim about what left the process, and only the
+// provider's own end can settle it. Voice minting and the storage handshake are not renders and do
+// not count; a probe is (it bills like a short render).
+const renderSubmits = (requests) =>
+  requests.filter((r) => r.method === 'POST' && (/(submit|probe)$/.test(r.path) || r.path.startsWith('/v2/'))).length;
+app.get('/__demo/submits', async () => ({ fal: renderSubmits(fal.requests), segmind: renderSubmits(segmind.requests) }));
 
 // Both mocks must go down with the app: a leaked listener wedges the next `npm run demo`.
 process.on('SIGINT', async () => { await app.close(); await fal.close(); await segmind.close(); process.exit(0); });
@@ -111,6 +139,13 @@ try {
   throw e;
 }
 console.error(`\n▶ DEMO (zero spend) — http://127.0.0.1:${PORT}\n  mock fal: ${fal.baseUrl} · mock segmind: ${segmind.baseUrl} · fake LLM: golden spec · workspace: runs-demo/\n  Nothing here talks to real APIs or costs money.`);
+// The seeded run is where the WS2 surfaces live, and none of them is reachable from a fresh idea
+// without rendering twice — so the banner points straight at it and names the order to walk it in.
+console.error(`\n  Seeded cut (one join deliberately broken) — http://127.0.0.1:${PORT}/runs/${SEAM_DEMO_RUN_ID}
+    1. the clip strip draws the joins: K1→K2 holds, K2→K3 is broken (K2 was re-rendered under K3)
+    2. pick a clip → Prompt — what would be sent, metered in bytes; Edit prompt saves locally
+    3. pick a clip → Re-render — the boundary plan in plain words (Cancel spends nothing)
+    4. Approve → Make changes (reopen) → Replace final — the delivered file is never overwritten`);
 
 // hand-driven demos open the browser too; Playwright pipes stdio (no TTY) so e2e stays headless
 if (process.stderr.isTTY && !process.env.WEB_NO_OPEN) {

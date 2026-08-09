@@ -92,7 +92,9 @@
   they?" from its own directory (`takes[].promptSource`, `prompts.json`'s `prompt_source`). Over
   budget is refused with the byte numbers rather than silently truncated — text cut behind your back
   is text you cannot fix — and an edit whose job the agents later re-cut away is kept and reported
-  as orphaned, never dropped. Saving is genuinely free: one local file write, nothing submitted.
+  as orphaned, never dropped. Saving is genuinely free: one local file write, nothing submitted —
+  nothing changes on screen until you re-render that segment, which does cost money.
+  See [docs/PROMPTS.md](docs/PROMPTS.md).
 - **You can now read the prompt before it is sent, from wherever the segment is on screen.** A
   `Prompt` control on the plan card (every job at once), on each job card, and on a clip you pick in
   the review strip opens one panel under the stage — an inline disclosure, not a modal, because
@@ -186,8 +188,19 @@
   came with. The clip has already been generated and billed by that point, and the same frame is
   reproducible locally, so the download is skipped with a warning and the seam frame is grabbed with
   ffmpeg instead (`seam_out.frameSource: 'ffmpeg'`). A missing **video** is still a hard error.
+- The first-run wizard's end-to-end walkthrough followed the old step order and stalled on a key
+  field that had moved: the backend picker comes **before** the render key now (which key you are
+  asked for depends on which provider your backend bills), and the test walks it that way.
 
 ### Changed
+- **The zero-spend demo boots with a run whose cut has a broken join.**
+  `npm --prefix web/server run demo` seeds a three-segment cut in which the middle clip was
+  re-rendered under its neighbour — so the join chips, the prompt sheet's "as sent" take versions,
+  the segment re-render dialog and the reopen path are one click from the banner instead of two
+  minutes of mock rendering away. It is re-seeded on every boot (and on `POST /__demo/reseed`), so a
+  walkthrough that approves or reopens it still starts from the same place next time. `/__demo/submits`
+  reports each provider mock's render-submit count, which is how the Playwright walkthrough proves
+  that reading a prompt, saving an edit and cancelling a paid dialog move nothing.
 - A boundary frame that has to travel as a reference no longer **reserves** an image slot from the
   cast: it is a droppable soft pin, so a full-cast job is valid again. An authored `last_frame` on
   Segmind alongside cast references now soft-pins instead of failing validation, and `last_frame` no
@@ -210,9 +223,10 @@
 
   It is **optional and self-disabling**: without python3 + numpy + pillow — or if anything at all
   goes wrong — assembly logs one warning and falls back to the hard-cut stitch, unchanged.
-  **Today the fallback still runs for most renders**: the seamless path only fires when the run can
-  say which joints are chained, which is recorded as one all-or-nothing flag. Per-joint seam lineage
-  is the next piece of work; when it lands, mixed timelines start stitching seamlessly on their own.
+  **Per-joint seam lineage has since landed** (below), so the all-or-nothing flag this shipped with
+  is gone: every joint is judged on its own recorded seam, and a timeline that mixes takes stitches
+  the joints that survived instead of falling back wholesale. A run made before lineage existed
+  still reads its old run-level flag, exactly as it did.
 - **Segmind is a second render provider.** Both Seedance models now render on **fal.ai or Segmind** —
   `seedance-2.0@segmind` and `seedance-2.5@segmind` join the backend list, and you only need a key
   for the provider you actually use. A **Segmind-only install needs no fal account at all**: set

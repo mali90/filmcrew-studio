@@ -64,6 +64,7 @@ kept in step with it.
 | Shot syntax | storyboard segments | connectors ("then…") | connectors ("then…") | `Shot N:` numbered | `Shot N:` numbered |
 | `seed` | not accepted | **rejected (422)** — retakes use `--take <n>` | accepted | accepted | accepted |
 | Native first/last frame | yes | no (seam frame demoted to a trailing ref) | yes, but **mutually exclusive with reference images** | no (seam frame demoted to a trailing ref) | yes, but **mutually exclusive with reference images** |
+| Seam mode applied | `native` (start anchored; **end best-effort**, see below) — `none` on a text-to-video job | `soft` always | `native` only on a **cast-less** job, else `soft` | `soft` always | `native` only on a **cast-less** job, else `soft` |
 | Duration field | string | string | integer | string | integer |
 | Addressed by (env override) | `FAL_KLING_ENDPOINT` | `FAL_SEEDANCE_ENDPOINT` / `FAL_SEEDANCE_PROBE_ENDPOINT` | slug `SEGMIND_SEEDANCE20_SLUG` | `FAL_SEEDANCE25_ENDPOINT` / `FAL_SEEDANCE25_PROBE_ENDPOINT` | slug `SEGMIND_SEEDANCE25_SLUG` |
 | Knobs block | `KLING_*` | `SEEDANCE_*` | `SEEDANCE_*` | `SEEDANCE25_*` (falls back to `SEEDANCE_*`) | `SEEDANCE25_*` (falls back to `SEEDANCE_*`) |
@@ -81,6 +82,42 @@ vendors:
   enforces whichever shape the backend declares. Segmind's 2.5 also states a **2-second floor** per
   reference audio clip; a shorter clip is a hard rejection on an already-paid submit, so a clip
   under 2s is dropped with a warning rather than shipped.
+
+### Seam modes: how a boundary frame is actually applied
+
+When a segment is pinned to its neighbour — chained inside a long render, or re-rendered with
+`--first-frame-from` / `--last-frame-from` — the frame reaches the model in one of two ways, and
+which one you get is not a preference. `chooseSeamMode()` in `src/lib/prompt-compose.js` decides it
+once, from the backend's declared caps, and the renderer, the prompt preview and the re-render
+dialog's wording all read that one answer.
+
+| Mode | What happens | What the UI may call it |
+|---|---|---|
+| `native` | The frame goes in the model's own first/last-frame input. The generator is anchored to those exact pixels. | **seamless** |
+| `soft` | The frame rides as an extra **reference image**, cited by a prompt sentence pinning it as the literal first/last frame. Close, not guaranteed frame-perfect. | **near-seamless (reference-guided)** |
+| `none` | Nothing was pinned — a scene cut by design, or a job with nothing to attach a frame to. | a cut |
+| `unsupported` | Sent natively and rejected by the provider; the render went through without it. | a cut (and it says so) |
+
+Per backend:
+
+- **fal Seedance (2.0 and 2.5) — always `soft`.** These endpoints have no frame-anchor input at all,
+  so a seam frame is appended as a trailing reference with a prompt pin. There is no configuration
+  that makes them native, and nothing in the app may describe one of these joins as seamless.
+- **Segmind Seedance — `native` only for a cast-less segment.** The native slots are mutually
+  exclusive with `reference_images`, so a job that stars a character faces a real trade: the exact
+  frame, or the character's identity. It keeps the **cast** and soft-pins the frame, because a
+  perfect seam onto a stranger is not the join you wanted. Cast-less jobs take the native slot.
+- **Kling on fal — `native`, with the closing frame best-effort.** `start_image_url` is anchored
+  through the Elements set, so a text-to-video job (no reference element at all) has nothing to seed
+  a frame from and gets `none`. `end_image_url` is documented on the model's API tab but unverified
+  in practice: if a submit is rejected by a validation error **naming that field**, the identical
+  payload is re-submitted once without it and the seam is recorded as `unsupported`. Any other
+  rejection propagates on the first attempt — fal bills per accepted submit, so nothing retries
+  blindly.
+
+At the reference cap the closing pin is dropped first, then the opening pin, and only then a cast
+reference — a dropped frame takes its prompt sentence with it, so the prompt never cites an image
+that was not sent.
 
 ### Upscale and voice minting
 

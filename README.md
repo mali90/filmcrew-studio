@@ -167,6 +167,7 @@ Rendering is **paid, pay-as-you-go** at your render provider — every render sp
 - [docs/SETUP.md](docs/SETUP.md) — manual setup, custom characters, config reference
 - [docs/PROVIDERS.md](docs/PROVIDERS.md) — video models, planners, `.env` options
 - [docs/COST.md](docs/COST.md) — model limits and current prices
+- [docs/PROMPTS.md](docs/PROMPTS.md) — what gets sent per clip, the byte budgets, and editing it
 - [docs/STITCHING.md](docs/STITCHING.md) — how the clips become one video (seamless vs hard-cut seams)
 - [web/README.md](web/README.md) — web app architecture (for contributors)
 - [CHANGELOG.md](CHANGELOG.md)

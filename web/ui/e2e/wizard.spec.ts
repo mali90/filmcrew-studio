@@ -14,14 +14,18 @@ test('fresh install → wizard takeover → configure → land on Home', async (
   await page.getByRole('radio', { name: 'Local CLI' }).click();
   await page.getByRole('button', { name: /continue|next/i }).click();
 
-  // fal key: validate against the mock, then continue
+  // backend: accept the default (Kling on fal). It comes BEFORE the key step on purpose — which key
+  // the wizard has to collect depends on which provider the chosen backend bills.
+  await expect(page.getByRole('radiogroup', { name: /render backend/i })).toBeVisible();
+  await page.getByRole('button', { name: /continue|next/i }).click();
+
+  // render key: a fal pick collects a fal key — validate it against the mock, then continue
   await page.getByLabel(/fal/i).first().fill('demo-key-123');
   await page.getByRole('button', { name: /validate/i }).click();
   await expect(page.getByText(/key valid/i)).toBeVisible();
   await page.getByRole('button', { name: /continue|next/i }).click();
 
-  // backend + presets: accept defaults
-  await page.getByRole('button', { name: /continue|next/i }).click();
+  // presets: accept defaults
   await page.getByRole('button', { name: /continue|next/i }).click();
 
   // save .env: the masked diff renders, then write
