@@ -3,6 +3,21 @@
 ## Unreleased
 
 ### Added
+- **You can now edit the words we send, and they are kept word for word.** `PUT /api/runs/:id/prompt`
+  saves one job's prompt to `<runDir>/prompt-overrides.json`; `DELETE …/prompt?job=K2` goes back to
+  the agents' text. What is stored is **only what you typed** — the style directive, the identity
+  clause, the text and speech rules and the seam pin sentences are re-composed on top at render
+  time, from that render's own settings. That is not tidiness: a seam pin names a reference label
+  (`@Image3`) that only exists once a particular render has laid its references out, so a stored pin
+  would eventually point a future take at the wrong image. The sidecar lives at the run root, so a
+  revise — which rewrites `spec.json` underneath it — leaves it untouched; if the plan really moved,
+  the prompt view says `stale` and offers the new plan text alongside, while still sending your
+  words verbatim. Each render snapshots the sidecar into the take it reserves and passes
+  `--prompt-overrides` to the CLI, so a past take can answer "what did we send, and whose words were
+  they?" from its own directory (`takes[].promptSource`, `prompts.json`'s `prompt_source`). Over
+  budget is refused with the byte numbers rather than silently truncated — text cut behind your back
+  is text you cannot fix — and an edit whose job the agents later re-cut away is kept and reported
+  as orphaned, never dropped. Saving is genuinely free: one local file write, nothing submitted.
 - **You can now read the prompt before it is sent, from wherever the segment is on screen.** A
   `Prompt` control on the plan card (every job at once), on each job card, and on a clip you pick in
   the review strip opens one panel under the stage — an inline disclosure, not a modal, because

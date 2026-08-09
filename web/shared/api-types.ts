@@ -51,7 +51,8 @@ export interface Manifest {
   environment?: string | null;              // selected world/mood/style bible slug (null = none) — revisions re-inject it
   createdAt: string;
   revisions: { id: string; feedback: string | null; scope: string; owners: number[]; createdAt: string }[];
-  takes: { id: string; mode: 'probe' | 'full' | 'job'; jobId?: string; cascade?: boolean; revision: string | null; createdAt: string; estUsd?: number | null; feedback?: string | null }[];
+  /** `promptSource` records whose words a take rendered: the agents' plan, or a saved edit. */
+  takes: { id: string; mode: 'probe' | 'full' | 'job'; jobId?: string; cascade?: boolean; revision: string | null; createdAt: string; estUsd?: number | null; feedback?: string | null; promptSource?: 'plan' | 'override' }[];
   // `stitcher`/`joints`/`matched` describe how the seams were joined ('seamless' = colour-matched
   // chained joints, 'concat' = a hard cut at every seam). Absent on cuts made before that existed.
   cuts: { id: string; take: string; master: string | null; shortSide?: number | null; stitcher?: 'seamless' | 'concat'; joints?: number; matched?: number; createdAt: string }[];
@@ -152,6 +153,9 @@ export type RunEvent =
   | { type: 'master'; path: string }
   | { type: 'upscale'; state: 'started' }
   | { type: 'log'; cursor: number; line: string }
+  /** A prompt edit was saved or discarded (free — a local file write, nothing submitted). Broadcast
+   *  so a second tab's prompt sheet stops showing text that is no longer what we would send. */
+  | { type: 'prompt-override'; jobId: string; action: 'saved' | 'discarded'; source: 'plan' | 'override'; stale: boolean }
   | { type: 'done'; kind: ActionKind; result: unknown }
   | { type: 'error'; kind: ActionKind; message: string };
 
@@ -204,8 +208,16 @@ export interface PromptView {
   take: string | null;
   /** When a 'take' view's prompts.json was written — i.e. when this text was sent. */
   sentAt: string | null;
-  /** True when the plan moved under a saved override (fingerprint mismatch). */
+  /** True when the plan moved under a saved override (fingerprint mismatch). It changes nothing
+   *  about what is sent — a stale override still renders word for word — only what is SAID. */
   stale: boolean;
+  /** When the override was saved; null on plan/take views. */
+  updatedAt?: string | null;
+  /** The agents' CURRENT text, offered alongside an override so "Refresh from plan" has something
+   *  to load and the two can be compared. Absent unless `source === 'override'`. */
+  planPrompt?: string;
+  /** Same, per shot (Kling segments / Seedance shot blocks). */
+  planSegments?: string[];
   /** Hash of exactly the authored inputs this prompt is composed from; null for a past take. */
   fingerprint: string | null;
   /** Take ids that kept a `prompts.json` for THIS job, newest first — the version picker's options.
@@ -234,8 +246,18 @@ export interface PromptsResponse {
   backend: Backend | string;
   jobs: string[];
   prompts: PromptView[];
-  /** Saved overrides whose job the plan no longer has — kept, never silently discarded (P4). */
-  orphaned: { jobId: string }[];
+  /** Saved overrides whose job the plan no longer has — kept WITH their text, never silently
+   *  discarded: the agents re-cutting the segments must not delete words a user typed. */
+  orphaned: { jobId: string; prompt?: string; segments?: string[]; updatedAt?: string | null }[];
+}
+/** PUT /api/runs/:id/prompt — the user's own words, stored verbatim (no pins, no truncation). */
+export interface SetPromptBody {
+  /** Which job. `jobId` is accepted as an alias. */
+  job: string;
+  /** Seedance: the whole job in one document. */
+  prompt?: string;
+  /** Kling: one entry per shot, in shot order (its byte cap is per segment). */
+  segments?: string[];
 }
 
 export interface SetupStatus {

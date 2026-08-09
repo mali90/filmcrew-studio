@@ -231,8 +231,11 @@ test('an override SURVIVES a revise, and the fingerprint marks it stale so the u
   const jobId = prompts[0].jobId;
   await put(`/api/runs/${runId}/prompt`, { job: jobId, prompt: 'keep the lens in frame throughout' });
 
-  await post(`/api/runs/${runId}/revise`, { feedback: 'make the ending warmer', scope: 'all' });
-  await waitForStatus(runId, ['plan-ready', 'review', 'error'], 120000);
+  // 'whole' is the engine's own word for "every agent" ('all' is not a scope it knows). The feedback
+  // carries the fake LLM's TWO-JOB knob so the revision really RE-CUTS the segments: a revise that
+  // returned an identical plan would (rightly) leave the override un-stale, and prove nothing.
+  await post(`/api/runs/${runId}/revise`, { feedback: 'TWO-JOB — split the ending into its own segment', scope: 'whole' });
+  await waitForStatus(runId, ['plan-ready', 'review', 'error'], 180000);
 
   const after = (await get(`/api/runs/${runId}/prompt?job=${jobId}`)).json();
   assert.equal(after.source, 'override', 'the agents rewriting the plan must NOT silently discard the user\'s words');
@@ -255,7 +258,7 @@ test('an override reaches the wire, and is snapshotted into the take dir at enqu
   const sent = fal.requests.slice(before).filter((q) => q.method === 'POST' && q.path === '/seedance-submit').map((q) => JSON.parse(q.body).prompt);
   assert.ok(sent.some((p) => p.includes(marker)), 'the edited words were actually rendered');
 
-  const take = run.takes?.at(-1);
+  const take = run.manifest?.takes?.at(-1);
   assert.equal(take?.promptSource, 'override', 'the take records that it was rendered from an edit');
   const snap = path.join(runsDir, runId, 'renders', take.id, 'prompt-overrides.json');
   assert.ok(fs.existsSync(snap), 'a past take is immutable — it keeps its own copy of what was sent');
@@ -266,7 +269,7 @@ test('a past take\'s prompt is served "as sent" and can never be edited', PENDIN
   const runId = await plannedRun();
   await post(`/api/runs/${runId}/render`, { mode: 'full' });
   const run = await waitForStatus(runId, ['review', 'error'], 120000);
-  const takeId = run.takes.at(-1).id;
+  const takeId = run.manifest.takes.at(-1).id;
   const jobId = (await get(`/api/runs/${runId}/prompts`)).json().prompts[0].jobId;
 
   const asSent = await get(`/api/runs/${runId}/prompt?job=${jobId}&take=${takeId}`);

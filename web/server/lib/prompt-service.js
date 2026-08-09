@@ -113,6 +113,40 @@ function voiceClipLookup(voicesDir, root, slug) {
 
 const utf8 = (s) => Buffer.byteLength(String(s ?? ''), 'utf8');
 
+// ── The overrides sidecar (P4) ──────────────────────────────────────────────────────────────────
+// It lives at the RUN root, not in a take dir, because a revise overwrites spec.json and a take dir
+// is immutable: an edit has to outlive both. `render()`/`rerenderJob()` snapshot it into the take
+// they reserve, which is what makes a past take answerable ("this is what we sent, and why").
+
+const OVERRIDES_FILE = 'prompt-overrides.json';
+const OVERRIDES_SCHEMA = 1;
+
+/** The run's saved edits, or an empty set. A corrupt sidecar reads as empty HERE (the preview must
+ *  still render) — the renderers throw on it instead, before anything is submitted. */
+function readOverrides(runDir) {
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(runDir, OVERRIDES_FILE), 'utf8'));
+    const jobs = raw?.jobs;
+    return { schema: OVERRIDES_SCHEMA, jobs: jobs && typeof jobs === 'object' && !Array.isArray(jobs) ? jobs : {} };
+  } catch {
+    return { schema: OVERRIDES_SCHEMA, jobs: {} };
+  }
+}
+
+/** Read-modify-write the sidecar. An empty result removes the file, so nothing downstream ever has
+ *  to distinguish "no edits" from "a file full of nothing". */
+function writeOverrides(runDir, mutate) {
+  const file = path.join(runDir, OVERRIDES_FILE);
+  const current = readOverrides(runDir);
+  const next = mutate({ schema: OVERRIDES_SCHEMA, jobs: { ...current.jobs } });
+  if (!Object.keys(next.jobs).length) {
+    try { fs.rmSync(file, { force: true }); } catch { /* already gone */ }
+    return next;
+  }
+  fs.writeFileSync(file, JSON.stringify(next, null, 2) + '\n');
+  return next;
+}
+
 /**
  * Everything a run needs to compose any of its jobs, loaded once (`/prompts` composes N jobs).
  * @returns {Promise<{caps:object, jobs:object[], viewFor:(jobId:string)=>object}>}
@@ -126,7 +160,7 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
     import(path.join(root, 'src/lib/text.js')),
   ]);
   const { capsFor, normalizeBackend, refLabel } = models;
-  const { composeKlingStoryboard, composeSeedanceJobPrompt, pinBytesOf, promptFingerprint, chooseSeamMode, planSeamRefs } = compose;
+  const { composeKlingStoryboard, composeSeedanceJobPrompt, applyOverride, pinBytesOf, promptFingerprint, chooseSeamMode, planSeamRefs } = compose;
   const { klingPromptSettings, seedancePromptSettings } = promptSettings;
   const { characterGroups, jobSpeakers } = castGroups;
   const { slug } = text;
@@ -143,6 +177,7 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
   // isolated the cast roots, else the .env), falling back to the dir this server serves.
   const voiceClipFor = voiceClipLookup(get('VOICES_DIR') || voicesDir || path.join(root, 'voices'), root, slug);
   const jobs = spec?.kling?.jobs ?? [];
+  const overrides = readOverrides(runDir);
   // A Kling render with no elements at all is text-to-video: no reference to seed a frame from, so
   // pipeline.renderSpec never chains one (mirrored here, or every job after the first would preview
   // an opening pin the render will not send).
@@ -160,7 +195,7 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
   }
 
   /** The Kling storyboard: one ≤500-byte segment per shot, `@Element1` leading each. */
-  function klingView(job, index) {
+  function klingView(job, index, override = null) {
     const settings = klingPromptSettings(spec, defaults.kling);
     const groups = characterGroups(job, spec);
     const textToVideo = groups.every((g) => g.els.length === 0);
@@ -170,7 +205,10 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
       return i ? `@Element${i}` : '';
     };
     const opts = { lowercaseSpeech: true, leadRef: textToVideo ? null : '@Element1', voiceTokenFor };
-    const { segments } = composeKlingStoryboard(job, spec, settings, opts);
+    const planned = composeKlingStoryboard(job, spec, settings, opts);
+    // Exactly the call the renderer makes (kling.js → applyOverride), so a previewed override is the
+    // same bytes an override renders — the whole point of one pure composer.
+    const { segments } = override ? applyOverride(planned, override, settings) : planned;
     const pins = pinBytesOf('kling', job, spec, settings, opts);
     const cap = Number(settings.segmentMaxBytes);
     // Kling's budget is PER SEGMENT (fal rejects a 512-byte one), so the editor draws one meter per
@@ -203,11 +241,17 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
       segmentMaxBytes: cap,
       pinBytes: pins.reduce((a, b) => a + b, 0),
       seam: { in: seam.in.mode, out: seam.out.mode },
+      // The agents' current text, offered ALONGSIDE an override (never instead of it) so the stale
+      // banner's "Refresh from plan" has something to load and the reader can compare the two.
+      ...(override ? {
+        planPrompt: planned.segments.map((s) => s.prompt).join('\n\n'),
+        planSegments: planned.segments.map((s) => s.prompt),
+      } : {}),
     };
   }
 
   /** Seedance: ONE rich multi-shot prompt per job, with the boundary pins the render will apply. */
-  function seedanceView(job, index) {
+  function seedanceView(job, index, override = null) {
     const settings = seedancePromptSettings(spec, caps, defaults.seedance);
     const groups = characterGroups(job, spec);
     // Cast references, laid out exactly as the renderer lays them out (group order, model cap).
@@ -246,7 +290,10 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
     // `feedback`/`nonce` are the RE-RENDER knobs (a director note, "Alternate take N"); a full
     // render from the plan sends neither, so a plan preview must not add them.
     const opts = { refGroups, audioRefFor, startFrameRef, endFrameRef, feedback: '', nonce: 0, shotSyntax: caps.shotSyntax };
-    const { prompt, shotPrompts } = composeSeedanceJobPrompt(job, spec, settings, opts);
+    const planned = composeSeedanceJobPrompt(job, spec, settings, opts);
+    // The renderer's own call (seedance.js → applyOverride): the user's words with THIS render's
+    // front matter and seam pins re-composed over them, then clamped. Preview === wire, still.
+    const { prompt, shotPrompts } = override ? applyOverride(planned, override, settings) : planned;
 
     let castSeen = 0;
     const groupOfRef = [];
@@ -268,6 +315,8 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
       segmentMaxBytes: null,
       pinBytes: pinBytesOf('seedance', job, spec, settings, opts),
       seam: { in: seam.in.mode, out: seam.out.mode },
+      // The agents' current text, offered alongside an override — never in place of it.
+      ...(override ? { planPrompt: planned.prompt, planSegments: planned.shotPrompts } : {}),
     };
   }
 
@@ -275,23 +324,28 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
     const index = jobs.findIndex((j) => j?.job_id === jobId);
     const job = jobs[index];
     if (!job) return null;
+    const override = overrides.jobs?.[jobId] ?? null;
+    const fingerprint = promptFingerprint(spec, jobId);
     const head = {
       jobId,
       backend: caps.id,
       endpointLabel: `${caps.providerLabel} ${caps.label}`,
       shots: [...(job.shots ?? [])],
-      source: 'plan',
+      source: override ? 'override' : 'plan',
       take: null,
       sentAt: null,
-      stale: false,
-      fingerprint: promptFingerprint(spec, jobId),
+      // The plan moved under a saved edit. It changes NOTHING about what gets sent — a stale
+      // override is still used verbatim — it only earns the banner that offers Refresh/Discard.
+      stale: Boolean(override?.fingerprint && override.fingerprint !== fingerprint),
+      updatedAt: override?.updatedAt ?? null,
+      fingerprint,
       // The versions the reader can switch to. Derived from what is ON DISK, not from the manifest's
       // take list: a take that failed before this job, or one made before sidecars existed, has no
       // "as sent" text to show, and offering it would open onto a 404.
       availableTakes: takesWithPrompts(runDir, jobId),
     };
     try {
-      return { ...head, ...(caps.family === 'kling' ? klingView(job, index) : seedanceView(job, index)) };
+      return { ...head, ...(caps.family === 'kling' ? klingView(job, index, override) : seedanceView(job, index, override)) };
     } catch (e) {
       // One unbuildable job (a shot id the plan lost, a missing content_prompt) must not take the
       // whole prompt sheet down — the render would fail on exactly this message, so show it.
@@ -299,7 +353,21 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
     }
   }
 
-  return { caps, jobs, viewFor };
+  /** Saved edits whose job the plan no longer has. Kept, and reported with their text — the agents
+   *  re-cutting the segments must never silently delete words a user typed. */
+  function orphanedOverrides() {
+    const planned = new Set(jobs.map((j) => j?.job_id).filter(Boolean));
+    return Object.entries(overrides.jobs ?? {})
+      .filter(([jobId]) => !planned.has(jobId))
+      .map(([jobId, o]) => ({
+        jobId,
+        ...(typeof o?.prompt === 'string' ? { prompt: o.prompt } : {}),
+        ...(Array.isArray(o?.segments) ? { segments: o.segments } : {}),
+        updatedAt: o?.updatedAt ?? null,
+      }));
+  }
+
+  return { caps, jobs, viewFor, orphanedOverrides, fingerprintFor: (jobId) => promptFingerprint(spec, jobId) };
 }
 
 const TAKE_DIR_RE = /^(t\d+|render)$/;
@@ -413,12 +481,102 @@ export async function buildPromptView({ root, envRoot, childEnv, runDir, spec, b
 
 /**
  * Every job of the CURRENT plan, in plan order.
- * @returns {Promise<{backend:string, jobs:string[], prompts:object[]}>}
+ * @returns {Promise<{backend:string, jobs:string[], prompts:object[], orphaned:object[]}>}
  */
 export async function buildPromptViews({ root, envRoot, childEnv, runDir, spec, backend, voicesDir }) {
-  const { caps, jobs, viewFor } = await createComposer({ root, envRoot, childEnv, runDir, spec, backend, voicesDir });
+  const { caps, jobs, viewFor, orphanedOverrides } = await createComposer({ root, envRoot, childEnv, runDir, spec, backend, voicesDir });
   const ids = jobs.map((j) => j?.job_id).filter(Boolean);
-  return { backend: caps.id, jobs: ids, prompts: ids.map((id) => viewFor(id)).filter(Boolean) };
+  return { backend: caps.id, jobs: ids, prompts: ids.map((id) => viewFor(id)).filter(Boolean), orphaned: orphanedOverrides() };
 }
 
-export default { buildPromptView, buildPromptViews };
+// ── Editing (P4) ────────────────────────────────────────────────────────────────────────────────
+
+const badRequest = (message, hint) => Object.assign(new Error(message), { statusCode: 400, hint });
+
+/**
+ * How many bytes of a job's budget the user's own words may spend: the model's cap minus what the
+ * SYSTEM already owns. Measured from the same composer the render uses, so the meter in the editor
+ * and the check here can never disagree.
+ * @returns {{perSegment:number[]}|{whole:number}}
+ */
+function budgetOf(view) {
+  if (Array.isArray(view.segments)) {
+    return { perSegment: view.segments.map((s) => Math.max(0, Number(s.maxBytes ?? 0) - Number(s.pinBytes ?? 0))) };
+  }
+  return { whole: Math.max(0, Number(view.maxBytes ?? 0) - Number(view.pinBytes ?? 0)) };
+}
+
+/**
+ * Save one job's prompt override.
+ *
+ * The text is stored VERBATIM — no trimming, no truncation, no system pins. Over budget is a 400
+ * carrying the numbers the meter shows, never a quiet clip: a user who cannot see what was cut
+ * cannot fix it, and the bytes that would be lost are the ones they cared about most.
+ *
+ * @param {{jobId:string, prompt?:string, segments?:string[]}} edit
+ * @returns {Promise<object|null>} the fresh PromptView, or null when the job is not in this plan
+ */
+export async function savePromptOverride({ root, envRoot, childEnv, runDir, spec, backend, voicesDir, jobId, prompt, segments }) {
+  const composer = await createComposer({ root, envRoot, childEnv, runDir, spec, backend, voicesDir });
+  const job = composer.jobs.find((j) => j?.job_id === jobId);
+  if (!job) return null;
+  const view = composer.viewFor(jobId);
+  if (view?.error) throw Object.assign(new Error(`job "${jobId}" cannot be composed: ${view.error}`), { statusCode: 409, hint: 'fix the plan (or revise it) before editing this prompt' });
+
+  const hasSegments = Array.isArray(segments);
+  if (hasSegments && segments.some((s) => typeof s !== 'string')) throw badRequest('every entry of "segments" must be text', 'one entry per shot, in shot order');
+  if (!hasSegments && typeof prompt !== 'string') throw badRequest('send "prompt" (the whole job) or "segments" (one per shot)', `job ${jobId} has ${job.shots?.length ?? 0} shot(s)`);
+  const bodies = hasSegments ? segments : [prompt];
+  if (!bodies.some((s) => String(s ?? '').trim())) throw badRequest('an empty prompt would send nothing', 'write the shot, or discard the edit to go back to the plan');
+
+  const budget = budgetOf(view);
+  if (budget.perSegment) {
+    // Kling's cap is per segment, so an edit has to arrive per segment — a single blob could only be
+    // guessed apart, and a wrong guess is a paid render of the wrong words.
+    if (!hasSegments && (job.shots?.length ?? 0) > 1) {
+      throw badRequest(`job ${jobId} renders ${job.shots.length} shots and Kling's byte cap is per shot`, 'send "segments": one entry per shot, in shot order');
+    }
+    if (hasSegments && segments.length !== view.segments.length) {
+      throw badRequest(`expected ${view.segments.length} segment(s), got ${segments.length}`, 'one entry per shot, in shot order');
+    }
+    bodies.forEach((s, i) => {
+      const bytes = utf8(s);
+      const cap = budget.perSegment[i] ?? 0;
+      if (bytes > cap) throw badRequest(`shot ${i + 1} is ${bytes} bytes; the room left for your words is ${cap} bytes (over by ${bytes - cap})`, 'trim it — nothing is truncated for you, because you would not see what went');
+    });
+  } else {
+    if (hasSegments) throw badRequest(`job ${jobId} renders as ONE prompt on this model`, 'send "prompt" — the whole job in one document');
+    const bytes = utf8(prompt);
+    if (bytes > budget.whole) throw badRequest(`the edit is ${bytes} bytes; the room left for your words is ${budget.whole} bytes (over by ${bytes - budget.whole})`, 'trim it — nothing is truncated for you, because you would not see what went');
+  }
+
+  writeOverrides(runDir, (next) => {
+    next.jobs[jobId] = {
+      ...(hasSegments ? { segments: [...segments] } : { prompt }),
+      // The plan this edit was written against. A later mismatch is what raises the stale banner —
+      // and only the banner: a stale override is still sent word for word.
+      fingerprint: composer.fingerprintFor(jobId),
+      updatedAt: new Date().toISOString(),
+    };
+    return next;
+  });
+  // Re-read through the ordinary path, so what the editor gets back is exactly what a reload gets.
+  return buildPromptView({ root, envRoot, childEnv, runDir, spec, backend, voicesDir, jobId });
+}
+
+/**
+ * Discard one job's override and go back to the agents' text.
+ * @returns {Promise<object|null>} the restored PromptView, or null when the job is not in this plan
+ */
+export async function discardPromptOverride({ root, envRoot, childEnv, runDir, spec, backend, voicesDir, jobId }) {
+  const planned = (spec?.kling?.jobs ?? []).some((j) => j?.job_id === jobId);
+  const had = Boolean(readOverrides(runDir).jobs?.[jobId]);
+  // An orphaned override (its job is gone from the plan) is still discardable — that is the only way
+  // the "1 edited prompt has no segment any more" row can be cleared.
+  if (!planned && !had) return null;
+  writeOverrides(runDir, (next) => { delete next.jobs[jobId]; return next; });
+  if (!planned) return { jobId, source: 'plan', discarded: true };
+  return buildPromptView({ root, envRoot, childEnv, runDir, spec, backend, voicesDir, jobId });
+}
+
+export default { buildPromptView, buildPromptViews, savePromptOverride, discardPromptOverride };

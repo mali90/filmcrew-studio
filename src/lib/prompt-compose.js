@@ -123,45 +123,60 @@ export function lineForShot(spec, shotId, defaultShotSeconds) {
  *     referenced in each shot (fal references elements in the prompt as @Element1, @Element2, …).
  *   - voiceTokenFor(speaker): returns the `@ElementN` of the speaking character; used as the spoken
  *     line's subject so that element's BOUND voice_id is what speaks (fal binds voice per element).
- * @returns {{ segments: {prompt:string, duration:number, speaker:string|null}[], totalDuration:number }}
+ * @returns {{ segments: {prompt:string, duration:number, speaker:string|null}[], totalDuration:number,
+ *             parts:object[] }}
  *   Each segment also carries its `speaker` (or null) so the renderer can map speakers→elements.
+ *   `parts` is the SYSTEM-owned scaffolding of each segment, in segment order — it is what
+ *   `applyOverride` re-composes a user's own scene body inside (never serialized anywhere).
  */
 export function composeKlingStoryboard(job, spec, settings, opts = {}) {
-  const { lowercaseSpeech = false, voiceTokenFor = null, leadRef = null } = opts;
+  // `opts` (lowercaseSpeech / leadRef / voiceTokenFor) is consumed by klingSegmentParts, below.
   const byId = Object.fromEntries(spec.shots.map((s) => [s.shot_id, s]));
   const cap = settings?.segmentMaxBytes;
+  const parts = [];
   const segments = job.shots.map((id) => {
     const shot = byId[id];
     if (!shot) throw new Error(`kling job ${job.job_id}: shot "${id}" not found in spec.shots`);
     const k = shot.kling;
     if (!k || !k.content_prompt) throw new Error(`kling job ${job.job_id}: shot ${id} is missing kling.content_prompt`);
-    const { leadPrefix, head, say, tail, who, lineText, hit } = klingSegmentParts(shot, spec, settings, opts);
-    let body = k.content_prompt.trim();
-    // fal enforces the 512 cap in UTF-8 BYTES, not JS characters. The SPOKEN clause is protected:
-    // reserve its full length (+ lead/framing/camera) and trim only the SCENE body to fit — the words
-    // are never cut here (the old blanket end-trim lopped the dialogue off the end → mid-word gibberish).
-    const budget = cap - utf8Bytes(leadPrefix) - utf8Bytes(head) - utf8Bytes(say) - utf8Bytes(tail);
-    if (utf8Bytes(body) > budget) body = budget > 3 ? trimToBytes(body, budget - 3).trimEnd() + '...' : '';
-    let prompt = leadPrefix + head + body + say + tail;
-    if (utf8Bytes(prompt) > cap) {
-      // Words + lead/framing alone exceed the cap (a very long line — QC's length guard should stop
-      // this upstream). Drop scene framing/camera to keep the words; only if the words ALONE are still
-      // over cap, clip the quoted text at a byte boundary and RE-CLOSE the quote — never leave it
-      // truncated mid-word without its closing quote.
-      prompt = (leadPrefix + say).trimEnd();
-      if (utf8Bytes(prompt) > cap && hit) {
-        const overhead = utf8Bytes(`${leadPrefix}${who} says: ""`);
-        prompt = `${leadPrefix}${who} says: "${trimToBytes(lineText, Math.max(0, cap - overhead)).trimEnd()}"`;
-      }
-    }
-    return { prompt, duration: shotSeconds(shot, settings?.defaultShotSeconds), speaker: hit?.speaker ?? null };
+    const p = klingSegmentParts(shot, spec, settings, opts);
+    parts.push(p);
+    return { prompt: klingSegmentPrompt(p, k.content_prompt, cap), duration: shotSeconds(shot, settings?.defaultShotSeconds), speaker: p.hit?.speaker ?? null };
   });
   const totalDuration = segments.reduce((a, s) => a + s.duration, 0);
   if (segments.length > settings?.maxStoryboards)
     throw new Error(`kling job ${job.job_id}: ${segments.length} segments exceeds the ${settings?.maxStoryboards}-storyboard cap`);
   if (totalDuration > settings?.maxJobSeconds)
     throw new Error(`kling job ${job.job_id}: total ${totalDuration}s exceeds the ${settings?.maxJobSeconds}s/job cap`);
-  return { segments, totalDuration };
+  return { segments, totalDuration, parts };
+}
+
+/**
+ * One Kling segment: the system scaffolding wrapped around ONE scene body, clamped to the
+ * per-segment byte cap. Shared by the plan path and `applyOverride`, so a hand-edited body is
+ * fitted by exactly the rules the agents' body is fitted by — there is no second trimmer.
+ */
+function klingSegmentPrompt(parts, sceneBody, cap) {
+  const { leadPrefix, head, say, tail, who, lineText, hit } = parts;
+  let body = String(sceneBody ?? '').trim();
+  // fal enforces the 512 cap in UTF-8 BYTES, not JS characters. The SPOKEN clause is protected:
+  // reserve its full length (+ lead/framing/camera) and trim only the SCENE body to fit — the words
+  // are never cut here (the old blanket end-trim lopped the dialogue off the end → mid-word gibberish).
+  const budget = cap - utf8Bytes(leadPrefix) - utf8Bytes(head) - utf8Bytes(say) - utf8Bytes(tail);
+  if (utf8Bytes(body) > budget) body = budget > 3 ? trimToBytes(body, budget - 3).trimEnd() + '...' : '';
+  let prompt = leadPrefix + head + body + say + tail;
+  if (utf8Bytes(prompt) > cap) {
+    // Words + lead/framing alone exceed the cap (a very long line — QC's length guard should stop
+    // this upstream). Drop scene framing/camera to keep the words; only if the words ALONE are still
+    // over cap, clip the quoted text at a byte boundary and RE-CLOSE the quote — never leave it
+    // truncated mid-word without its closing quote.
+    prompt = (leadPrefix + say).trimEnd();
+    if (utf8Bytes(prompt) > cap && hit) {
+      const overhead = utf8Bytes(`${leadPrefix}${who} says: ""`);
+      prompt = `${leadPrefix}${who} says: "${trimToBytes(lineText, Math.max(0, cap - overhead)).trimEnd()}"`;
+    }
+  }
+  return prompt;
 }
 
 /**
@@ -300,7 +315,9 @@ function seedanceFrontMatter(job, spec, settings, opts = {}) {
  *   nonce?: number,                               // >0 → "Alternate take N" variation directive (Seedance accepts no seed)
  *   shotSyntax?: 'connectors'|'numbered',         // how the model wants shots joined (caps.shotSyntax; default 'connectors')
  * }} [opts]
- * @returns {{ prompt:string, shotPrompts:string[], totalDuration:number, speakers:string[] }}
+ * @returns {{ prompt:string, shotPrompts:string[], totalDuration:number, speakers:string[], front:string }}
+ *   `front` is the SYSTEM front matter alone — what `applyOverride` re-composes over a user's own
+ *   words, and what `pinBytesOf` prices. It is never sent on its own and never serialized.
  */
 export function composeSeedanceJobPrompt(job, spec, settings, opts = {}) {
   const shots = jobShots(job, spec, 'seedance');
@@ -327,7 +344,63 @@ export function composeSeedanceJobPrompt(job, spec, settings, opts = {}) {
   const prompt = clampBytes(`${front}\n\n${joined}`, maxBytes);
   // Same duration derivation as composeKlingStoryboard, so both backends agree with the job planner.
   const totalDuration = shots.reduce((a, s) => a + shotSeconds(s, defaultShotSeconds), 0);
-  return { prompt, shotPrompts: blocks, totalDuration, speakers: jobSpeakers(job, spec, audioOn) };
+  return { prompt, shotPrompts: blocks, totalDuration, speakers: jobSpeakers(job, spec, audioOn), front };
+}
+
+// ── Prompt overrides: the user's own words, inside our contract ─────────────────────────────────
+
+/**
+ * Re-compose one job's prompt around a hand-edited body.
+ *
+ * The user owns the WORDS; the system owns the CONTRACT. So an override replaces only the shot
+ * bodies — the front matter (style, identity clause, text/speech rules, director note, take
+ * directive), the seam pins and the byte clamp are all re-composed on top, from this render's own
+ * settings. That is why a stored override never contains a pin sentence: pins name `@Image3` labels
+ * that only exist once THIS render has laid out its references, so storing one would freeze a
+ * stale (or plain wrong) reference into every future take.
+ *
+ * Pure, and shape-preserving: hand it what a composer returned and it returns the same shape.
+ *
+ * @param {object} composed  a `composeKlingStoryboard` or `composeSeedanceJobPrompt` result
+ * @param {{prompt?:string, segments?:string[]}|null} override  the sidecar entry for this job
+ * @param {object} settings  the same settings the composer was given (byte budgets live here)
+ * @returns {object} the composed result with the user's words in it (the input, untouched, when
+ *   there is nothing to apply — an absent, empty or blank override changes nothing)
+ */
+export function applyOverride(composed, override, settings) {
+  if (!composed || !override) return composed;
+  const hasBody = typeof override.prompt === 'string' || Array.isArray(override.segments);
+  if (!hasBody) return composed;
+
+  // Kling: the budget is PER SEGMENT, so the edit is too — one body per shot, and a blank or
+  // missing entry leaves that shot on the agents' text rather than sending an empty shot.
+  if (Array.isArray(composed.segments)) {
+    if (!Array.isArray(composed.parts)) return composed; // composed by an older caller — nothing to re-wrap
+    const cap = Number(settings?.segmentMaxBytes);
+    const bodies = Array.isArray(override.segments) ? override.segments : [override.prompt];
+    let touched = false;
+    const segments = composed.segments.map((s, i) => {
+      const body = bodies[i];
+      if (typeof body !== 'string' || !body.trim()) return s;
+      touched = true;
+      return { ...s, prompt: klingSegmentPrompt(composed.parts[i], body, cap) };
+    });
+    return touched ? { ...composed, segments, promptSource: 'override' } : composed;
+  }
+
+  // Seedance: ONE document per job. `segments` is accepted (a per-shot editor may hand them over)
+  // and joined plainly — the connector words belong to the agents' blocks, not to a user's prose.
+  const body = (typeof override.prompt === 'string' ? override.prompt : override.segments.join('\n')).trim();
+  if (!body) return composed;
+  const maxBytes = Number(settings?.promptMaxBytes) || DEFAULT_PROMPT_MAX_BYTES;
+  return {
+    ...composed,
+    prompt: clampBytes(`${composed.front}\n\n${body}`, maxBytes),
+    // `shotPrompts` is the record of the authored bodies that were SENT. With an override there is
+    // one body (or the user's own per-shot split), and claiming the plan's blocks would be a lie.
+    shotPrompts: Array.isArray(override.segments) ? override.segments.map((s) => String(s).trim()) : [body],
+    promptSource: 'override',
+  };
 }
 
 // ── The byte meter's denominator ────────────────────────────────────────────────────────────────
@@ -501,6 +574,7 @@ export function promptFingerprint(spec, jobId) {
 export default {
   composeKlingStoryboard,
   composeSeedanceJobPrompt,
+  applyOverride,
   chooseSeamMode,
   planSeamRefs,
   seamPinSentence,

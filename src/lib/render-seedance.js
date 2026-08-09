@@ -33,6 +33,7 @@ import log from './logger.js';
 import { refLabel } from './render-models.js';
 import { buildSeedanceArgs, fitAudioRef, audioWindowFor, nameOf } from './seedance-args.js';
 import { chooseSeamMode, planSeamRefs } from './prompt-compose.js';
+import { readJobOverride } from './prompt-overrides.js';
 import { buildSeedanceJobPrompt, seedanceConfigFor, modelKnobs } from './seedance.js';
 import { characterGroups, jobSpeakers } from './cast-groups.js';
 import { resolveImage } from './elements.js';
@@ -243,8 +244,13 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
     return i ? refLabel(caps, 'Audio', i) : null;
   };
 
-  // 3. ONE multi-shot prompt for the whole job (pure, unit-tested).
-  const { prompt, shotPrompts, totalDuration } = buildSeedanceJobPrompt(job, spec, {
+  // 3. ONE multi-shot prompt for the whole job (pure, unit-tested). A prompt override — the user's
+  //    own words, snapshotted into THIS take dir before anything was submitted — replaces the shot
+  //    bodies only: the front matter, the seam pins laid out just above and the byte clamp are all
+  //    re-composed over it (applyOverride), so an edit can never cost the contract.
+  const override = readJobOverride(runDir, job.job_id);
+  const { prompt, shotPrompts, totalDuration, promptSource } = buildSeedanceJobPrompt(job, spec, {
+    override,
     refGroups,
     audioRefFor,
     startFrameRef,
@@ -322,6 +328,9 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
     seam_out: { mode: appliedOut, frame: appliedOut === 'none' ? null : endFrameSrc, frameSource: null, to: seamOutTo ?? null },
     image_refs: imageRefs,
     audio_refs: voiceRefs.map((r, i) => ({ ref: refLabel(caps, 'Audio', i + 1), speaker: r.speaker, clip: r.clip })),
+    // Whose words these are: 'plan' (the agents') or 'override' (a saved prompt edit). A past take
+    // is read back verbatim, so this is the only record of WHY its text differs from the plan's.
+    prompt_source: promptSource ?? 'plan',
     prompt,
     shot_prompts: shotPrompts,
   };

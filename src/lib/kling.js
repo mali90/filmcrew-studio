@@ -11,6 +11,7 @@
 import config from '../../config.js';
 import { klingPromptSettings } from './prompt-settings.js';
 import {
+  applyOverride,
   composeKlingStoryboard,
   lineForShot as composeLineForShot,
   SHOT_SIZE_WORDS,
@@ -35,10 +36,13 @@ export const lineForShot = (spec, shotId) => composeLineForShot(spec, shotId, co
  * Compose one job's storyboard from its shots' `kling` blocks — see composeKlingStoryboard() for the
  * segment shape, the byte budget and the `opts` transport adaptations (lowercaseSpeech, leadRef,
  * voiceTokenFor). Segment count and total duration caps are asserted there.
+ * `opts.override` (optional): this job's saved prompt-override entry — the user's own scene bodies,
+ * re-wrapped in the system scaffolding and re-clamped here, never stored with it.
  * @returns {{ segments: {prompt:string, duration:number, speaker:string|null}[], totalDuration:number }}
  */
 export function buildKlingStoryboard(job, spec, opts = {}) {
-  return composeKlingStoryboard(job, spec, klingSettingsFor(spec), opts);
+  const settings = klingSettingsFor(spec);
+  return applyOverride(composeKlingStoryboard(job, spec, settings, opts), opts.override ?? null, settings);
 }
 
 /** Effective per-spec Kling settings (model/resolution/aspect/audio), spec values over config defaults. */

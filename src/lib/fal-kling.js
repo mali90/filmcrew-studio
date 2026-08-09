@@ -18,6 +18,7 @@ import config from '../../config.js';
 import log from './logger.js';
 import { buildKlingStoryboard, klingConfigFor } from './kling.js';
 import { chooseSeamMode } from './prompt-compose.js';
+import { readJobOverride } from './prompt-overrides.js';
 import { capsFor } from './render-models.js';
 import { generateKling, toFalInput, falRef, isValidationError } from './fal.js';
 import { characterGroups, jobSpeakers } from './cast-groups.js';
@@ -104,8 +105,12 @@ export async function renderKlingJobFal({ job, spec, runDir, seed, lowRes = fals
 
   // 2. Storyboard prompts: @Element1 leads every shot (look), the speaker's @ElementN voices the line.
   //    In text-to-video there is no ref to lead with (leadRef null) and no @ElementN voice token.
-  const { segments, totalDuration } = buildKlingStoryboard(job, spec, {
+  //    A prompt override (snapshotted into this take dir before submit) replaces the SCENE BODY of
+  //    each shot; the framing, the spoken line, the @Element lead and the 500-byte clamp are all
+  //    re-composed around it, per segment — Kling's budget is per segment, so an edit's is too.
+  const { segments, totalDuration, promptSource } = buildKlingStoryboard(job, spec, {
     lowercaseSpeech: true, leadRef: textToVideo ? null : '@Element1', voiceTokenFor,
+    override: readJobOverride(runDir, job.job_id),
   });
 
   // 3. Payload. reference-to-video carries `elements`; text-to-video carries none (and no frames).
@@ -152,6 +157,9 @@ export async function renderKlingJobFal({ job, spec, runDir, seed, lowRes = fals
     seam_out: { mode: seam.out.mode, frame: seam.out.mode === 'none' ? null : endFrameSrc, frameSource: null, to: seamOutTo ?? null },
     image_refs: elementLegend.map((e) => ({ ref: e.ref, id: e.images[0] ?? null, character: e.character })),
     elements: elementLegend,
+    // Whose words these are: 'plan' (the agents') or 'override' (a saved prompt edit) — the same key
+    // the Seedance sidecar carries, so one reader answers "why does this take read differently?".
+    prompt_source: promptSource ?? 'plan',
     segments,
   };
   const writeSidecar = () => {

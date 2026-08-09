@@ -154,6 +154,24 @@ describe('reduceRunEvents', () => {
     expect(s.agents[4].startedAt).not.toBeNull();
   });
 
+  it('a prompt-override event is inert here: another tab\'s edit must not disturb live render texture', () => {
+    // Saving a prompt edit is free and local — a fact about the run's stored TEXT, not about the
+    // work in flight. The prompt sheet subscribes to the event and refetches; this reducer owns
+    // only live texture, so an edit landing mid-render must not touch a timer or a job tick.
+    const live = fold([
+      { type: 'snapshot', run: makeRun('rendering') },
+      { type: 'agent', idx: 3, state: 'started' },
+      { type: 'job', jobId: 'K1', state: 'done', clip: '/x/K1.mp4' },
+    ]);
+    const after = reduceRunEvents(live, { type: 'prompt-override', jobId: 'K2', action: 'saved', source: 'override', stale: false }, 9000);
+    expect(after).toBe(live); // same object: nothing derived from it needs to re-render
+    expect(after.agents[3].state).toBe('thinking');
+    expect(after.run?.latestRender?.jobs.find((j) => j.jobId === 'K1')?.clipExists).toBe(true);
+
+    const discarded = reduceRunEvents(after, { type: 'prompt-override', jobId: 'K2', action: 'discarded', source: 'plan', stale: false }, 9100);
+    expect(discarded).toBe(after);
+  });
+
   it('status events update the run without inventing anything else', () => {
     const s = fold([
       { type: 'snapshot', run: makeRun('plan-ready') },

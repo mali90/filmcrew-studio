@@ -271,10 +271,10 @@ export function registerRunRoutes(app) {
     const run = plannedRunOr409(req.params.id, reply);
     if (!run) return reply;
     const { buildPromptViews } = await import('../lib/prompt-service.js');
-    const { backend, jobs, prompts } = await buildPromptViews(promptArgs(run));
-    // `orphaned` is always present (empty until P4's overrides sidecar can strand one) so the UI
-    // never has to branch on its absence.
-    return { runId: run.id, backend, jobs, prompts, orphaned: [] };
+    const { backend, jobs, prompts, orphaned } = await buildPromptViews(promptArgs(run));
+    // `orphaned` is always present (empty when nothing is stranded) so the UI never has to branch on
+    // its absence: an edit whose job the agents re-cut away is kept, and said out loud.
+    return { runId: run.id, backend, jobs, prompts, orphaned };
   });
 
   app.get('/api/runs/:id/prompt', async (req, reply) => {
@@ -294,6 +294,43 @@ export function registerRunRoutes(app) {
         hint: `this plan has: ${jobIds.join(', ') || '(no jobs)'}`,
       });
     }
+    return view;
+  });
+
+  // ── Prompt editing (WS2-P4) ───────────────────────────────────────────────────────────────────
+  // Saving an edit is genuinely free: one local file write, nothing submitted, nothing billed. The
+  // words are stored VERBATIM in <runDir>/prompt-overrides.json — never the system pins, which are
+  // re-composed at render time because they name reference labels this render has not laid out yet.
+  const jobOf = (req) => String(req.body?.job ?? req.body?.jobId ?? req.query?.job ?? '').trim();
+
+  app.put('/api/runs/:id/prompt', async (req, reply) => {
+    const run = plannedRunOr409(req.params.id, reply);
+    if (!run) return reply;
+    const jobId = jobOf(req);
+    const jobIds = (run.spec.kling?.jobs ?? []).map((j) => j?.job_id).filter(Boolean);
+    if (!jobId) throw Object.assign(new Error('job required'), { statusCode: 400, hint: `which prompt — this plan has: ${jobIds.join(', ')}` });
+    // A past take is what was ACTUALLY sent. Rewriting it would make the only immutable record in
+    // the run a lie, so the UI offers "use this as a draft" instead.
+    if (req.body?.take) {
+      throw Object.assign(new Error(`take "${req.body.take}" is already rendered — its prompt is a record, not a draft`), { statusCode: 409, hint: 'edit the current plan\'s prompt instead, then re-render' });
+    }
+    const { savePromptOverride } = await import('../lib/prompt-service.js');
+    const view = await savePromptOverride({ ...promptArgs(run), jobId, prompt: req.body?.prompt, segments: req.body?.segments });
+    if (!view) return reply.code(404).send({ error: `job "${jobId}" is not in this plan`, hint: `this plan has: ${jobIds.join(', ') || '(no jobs)'}` });
+    svc.promptOverrideChanged(run.id, { jobId, action: 'saved', source: view.source, stale: view.stale });
+    return view;
+  });
+
+  app.delete('/api/runs/:id/prompt', async (req, reply) => {
+    const run = plannedRunOr409(req.params.id, reply);
+    if (!run) return reply;
+    const jobId = jobOf(req);
+    const jobIds = (run.spec.kling?.jobs ?? []).map((j) => j?.job_id).filter(Boolean);
+    if (!jobId) throw Object.assign(new Error('job required'), { statusCode: 400, hint: `?job=<id> — this plan has: ${jobIds.join(', ')}` });
+    const { discardPromptOverride } = await import('../lib/prompt-service.js');
+    const view = await discardPromptOverride({ ...promptArgs(run), jobId });
+    if (!view) return reply.code(404).send({ error: `job "${jobId}" is not in this plan`, hint: `this plan has: ${jobIds.join(', ') || '(no jobs)'}` });
+    svc.promptOverrideChanged(run.id, { jobId, action: 'discarded', source: view.source ?? 'plan', stale: false });
     return view;
   });
 

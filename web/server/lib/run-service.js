@@ -220,7 +220,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
       const cascade = pendingCascade.get(runId);
       if (cascade && cascade.jobs.length) {
         const nextJob = cascade.jobs.shift();
-        enqueueRenderJob(runId, { jobId: nextJob, takeDir: cascade.takeDir, seamFrom: cascade.takeDir, feedback: cascade.feedback, take: cascade.take });
+        enqueueRenderJob(runId, { jobId: nextJob, takeDir: cascade.takeDir, seamFrom: cascade.takeDir, feedback: cascade.feedback, take: cascade.take, promptOverrides: cascade.promptOverrides });
         return;
       }
       pendingCascade.delete(runId);
@@ -367,7 +367,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     });
   }
 
-  function enqueueRenderJob(runId, { jobId, takeDir, seamFrom, feedback, take }) {
+  function enqueueRenderJob(runId, { jobId, takeDir, seamFrom, feedback, take, promptOverrides }) {
     const dir = dirFor(runId);
     return mgr.enqueue({
       runId, lane: 'spend', kind: 'render-job',
@@ -377,9 +377,44 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
         ...(seamFrom ? ['--seam-from', seamFrom] : []),
         ...(feedback ? ['--feedback', feedback] : []),
         ...(take ? ['--take', String(take)] : []),
+        ...(promptOverrides ? ['--prompt-overrides', promptOverrides] : []),
       ],
       env: env(), cwd: root,
     });
+  }
+
+  // ── Prompt overrides (WS2-P4) ──────────────────────────────────────────────
+  // The sidecar lives at the RUN root so it survives a revise (which rewrites spec.json). A take is
+  // immutable, so each one gets its OWN copy at enqueue: months later, "what did we send for t3?"
+  // is answerable from t3 alone.
+
+  const OVERRIDES_FILE = 'prompt-overrides.json';
+
+  /**
+   * Snapshot the run's prompt overrides into a reserved take dir.
+   * @param {string} dir  the run dir
+   * @param {string} takeDir  the take reserved for this render
+   * @param {string[]} jobIds  the jobs this render will actually submit
+   * @returns {{args:string[], promptSource:'plan'|'override'}} the CLI flag, and whose words the
+   *   take is rendering — recorded on the take so a past render explains itself.
+   */
+  function snapshotPromptOverrides(dir, takeDir, jobIds) {
+    const src = path.join(dir, OVERRIDES_FILE);
+    const jobs = readJson(src)?.jobs;
+    if (!jobs || typeof jobs !== 'object') return { args: [], promptSource: 'plan' };
+    const dest = path.join(takeDir, OVERRIDES_FILE);
+    try { fs.copyFileSync(src, dest); } catch { return { args: [], promptSource: 'plan' }; }
+    // 'override' only when an edit really reaches one of the jobs being rendered — a sidecar that
+    // only holds K1's edit must not label a K2-only re-render as edited.
+    return { args: ['--prompt-overrides', dest], promptSource: jobIds.some((id) => jobs[id]) ? 'override' : 'plan' };
+  }
+
+  /**
+   * Tell every open tab that a prompt edit landed. Free and local — no render, no spend — so this
+   * broadcasts a fact, never a cost.
+   */
+  function promptOverrideChanged(runId, { jobId, action, source, stale = false }) {
+    bus.emit(runId, { type: 'prompt-override', jobId, action, source, stale: !!stale });
   }
 
   // ── Public API (what the routes call) ────────────────────────────────────
@@ -449,8 +484,11 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     fs.mkdirSync(takeDir, { recursive: true }); // reserve the tN NOW — a queued sibling must not resolve to the same take
     const backend = readManifest(dir)?.backend ?? 'kling';
     const est = estimateRender(spec, { backend, mode, ...estOpts(backend) });
+    const specJobs = (spec.kling?.jobs ?? []).map((j) => j.job_id);
+    // a probe renders only the FIRST job, so only its edit can be in play
+    const overrides = snapshotPromptOverrides(dir, takeDir, mode === 'probe' ? specJobs.slice(0, 1) : specJobs);
     updateManifest(dir, (m) => {
-      m.takes.push({ id: takeId, mode, revision: m.revisions.at(-1)?.id ?? null, createdAt: now().toISOString(), estUsd: est.totalUsd });
+      m.takes.push({ id: takeId, mode, revision: m.revisions.at(-1)?.id ?? null, createdAt: now().toISOString(), estUsd: est.totalUsd, promptSource: overrides.promptSource });
       m.costLedger.push({ ts: now().toISOString(), action: mode, ...ledgerLine(est) });
       m.lastError = null;
       return m;
@@ -459,7 +497,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
       runId, lane: 'spend', kind: mode === 'probe' ? 'probe' : 'render',
       script: CLI(root, 'render.js'),
       args: ['--spec', path.join(dir, 'spec.json'), '--out', takeDir, '--out-name', outNameFor(runId, spec, takeId),
-        ...(mode === 'probe' ? ['--probe'] : [])],
+        ...(mode === 'probe' ? ['--probe'] : []), ...overrides.args],
       env: env(), cwd: root,
     });
     emitStatus(runId); // the page flips to 'rendering' NOW — queued work must never look like nothing happened
@@ -517,14 +555,17 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     } else if (m?.cuts?.at(-1)?.take) {
       seamFrom = path.join(dir, 'renders', m.cuts.at(-1).take);
     }
+    // Every job this take will render — the cascade jobs land in the SAME take dir, so they read the
+    // same snapshot (that is why it is taken once, here, and not per enqueue).
+    const overrides = snapshotPromptOverrides(dir, takeDir, [jobId, ...cascadeJobs]);
     updateManifest(dir, (mm) => {
-      mm.takes.push({ id: takeId, mode: 'job', jobId, cascade, revision: mm.revisions.at(-1)?.id ?? null, createdAt: now().toISOString(), estUsd: est.totalUsd, feedback: feedback ?? null });
+      mm.takes.push({ id: takeId, mode: 'job', jobId, cascade, revision: mm.revisions.at(-1)?.id ?? null, createdAt: now().toISOString(), estUsd: est.totalUsd, feedback: feedback ?? null, promptSource: overrides.promptSource });
       mm.costLedger.push({ ts: now().toISOString(), action: `rerender ${jobId}${cascade ? ' + downstream' : ''}`, ...ledgerLine(est) });
       mm.lastError = null;
       return mm;
     });
-    if (cascadeJobs.length) pendingCascade.set(runId, { takeDir, takeId, jobs: [...cascadeJobs], feedback, take });
-    const queued = enqueueRenderJob(runId, { jobId, takeDir, seamFrom, feedback, take });
+    if (cascadeJobs.length) pendingCascade.set(runId, { takeDir, takeId, jobs: [...cascadeJobs], feedback, take, promptOverrides: overrides.args[1] ?? null });
+    const queued = enqueueRenderJob(runId, { jobId, takeDir, seamFrom, feedback, take, promptOverrides: overrides.args[1] ?? null });
     emitStatus(runId);
     return { takeId, queued, estUsd: est.totalUsd, cascadeJobs };
   }
@@ -679,6 +720,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
 
   return {
     onEvent, createRun, plan, render, revise, reviseForContentPolicy, rerenderJob, assemble, approve, cancel, dismissError, detail,
+    promptOverrideChanged,
     list: () => listRuns(runsDir, { isAlive }).map(withLiveStatus),
     ringFor, dirFor,
     /** Boot-time reconciliation: interrupted runs become visible without any event. */

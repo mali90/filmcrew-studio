@@ -18,7 +18,7 @@
 // server's static graph. THIS module is the config-bound shim; call sites are unchanged.
 import config from '../../config.js';
 import { seedancePromptSettings, knobsFor } from './prompt-settings.js';
-import { composeSeedanceJobPrompt, clampBytes, HOOK_PREFIX, TRANSITION_WORDS } from './prompt-compose.js';
+import { applyOverride, composeSeedanceJobPrompt, clampBytes, HOOK_PREFIX, TRANSITION_WORDS } from './prompt-compose.js';
 
 export { clampBytes, HOOK_PREFIX, TRANSITION_WORDS };
 
@@ -44,6 +44,8 @@ export const seedanceSettingsFor = (spec, caps) =>
  * opts — the renderer overrides them per model — and are folded into the pure composer's settings.
  * @param {object} job   spec.kling.jobs[i]
  * @param {object} spec  the full Production Spec
+ * `opts.override` (optional): this job's saved prompt-override entry — the user's own words, with
+ * the front matter, the seam pins and the byte clamp re-composed on top (applyOverride).
  * @param {object} [opts]  see composeSeedanceJobPrompt(); plus style/avoidClause/textClause/maxBytes
  * @returns {{ prompt:string, shotPrompts:string[], totalDuration:number, speakers:string[] }}
  */
@@ -55,7 +57,7 @@ export function buildSeedanceJobPrompt(job, spec, opts = {}) {
     ...(opts.textClause !== undefined ? { textRule: opts.textClause } : {}),
     ...(Number(opts.maxBytes) ? { promptMaxBytes: Number(opts.maxBytes) } : {}),
   };
-  return composeSeedanceJobPrompt(job, spec, settings, opts);
+  return applyOverride(composeSeedanceJobPrompt(job, spec, settings, opts), opts.override ?? null, settings);
 }
 
 /**
