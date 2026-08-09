@@ -105,8 +105,11 @@ test('generateSegmind downloads the CDN output with NO api key, immediately (rec
 // ── validateSegmind: money-safe by construction ─────────────────────────────
 test('validateSegmind reads a STATUS only — an empty body cannot queue a billable job', async () => {
   const queuedBefore = sg.queued.length;
+  const before = sg.requests.length;
 
-  assert.deepEqual(await validateSegmind('sk-test'), { ok: true, status: 422 });
+  assert.deepEqual(await validateSegmind('sk-test'), { ok: true, status: 422 }, 'a 422 is the answer we WANT: understood and rejected, nothing queued');
+  const probe = sg.requests.slice(before).find((q) => q.method === 'POST');
+  assert.equal(probe.path, `/v2/${config.segmind.seedance25Slug}`, 'a RENDER key is checked against the render slug, not the upscale model');
 
   sg.opts.authFail = true;
   const bad = await validateSegmind('sk-wrong');
@@ -119,6 +122,31 @@ test('validateSegmind reads a STATUS only — an empty body cannot queue a billa
 
   // THE assertion: two live probes, zero jobs queued. If this ever fails, "test your key" bills.
   assert.equal(sg.queued.length, queuedBefore, 'validateSegmind queued nothing — it can never cost money');
+});
+
+test('a 404 reads as a bad slug or base url, NOT as a healthy key', async () => {
+  sg.opts.unknownSlug = true;
+  const r = await validateSegmind('sk-test');
+  sg.opts.unknownSlug = false;
+
+  assert.equal(r.ok, false, 'the request never found the model — calling that "key valid" hides it until spend time');
+  assert.equal(r.reason, 'not_found');
+  assert.equal(r.status, 404);
+  assert.match(r.detail, /SEGMIND_BASE_URL/, 'and it names the two settings that cause it');
+});
+
+test('a 2xx is surfaced as an anomaly — it is the one answer that means the probe queued something', async () => {
+  // The whole money-safety story rests on "an empty body cannot be a valid request". This is the
+  // model where that is false (all-optional params), so the probe really does buy a job.
+  sg.opts.acceptsEmptyBody = true;
+  const queuedBefore = sg.queued.length;
+  const r = await validateSegmind('sk-test');
+  sg.opts.acceptsEmptyBody = false;
+
+  assert.equal(sg.queued.length - queuedBefore, 1, 'the probe DID queue a job here — that is the case under test');
+  assert.equal(r.ok, true, 'the key itself authenticated');
+  assert.match(r.warning, /may have queued a billable job/i, 'but the charge is reported, never folded into a quiet ok');
+  assert.equal(r.requestId, sg.queued.at(-1).id, 'with the request id, so the job can actually be found');
 });
 
 // ── asset urls ──────────────────────────────────────────────────────────────

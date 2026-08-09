@@ -134,7 +134,10 @@ Three consequences worth knowing about:
 - **A submitted job is never re-submitted.** Once Segmind has accepted a request, a resubmit would be
   a *second billable render*, so nothing re-POSTs after a successful submit — only the polling GETs
   retry. `SEGMIND_MAX_RETRIES` (default 3) therefore governs **submit attempts before the job exists**
-  and nothing after that.
+  and nothing after that. A submit is retried only when something *proves* nothing was queued: an
+  error Segmind itself answered with, or a connection that failed before the request could land (DNS,
+  refused, TLS). If the submit dies mid-flight — a timeout, a reset socket — the job may already exist
+  and be billed, so the run stops and tells you to check your Segmind console rather than guessing.
 - **Results expire.** Segmind keeps a finished record for roughly an hour, so the clip is downloaded
   as soon as it is ready. A poll that 404s on an old request means the record aged out, and the
   message says so rather than reporting a generic failure.

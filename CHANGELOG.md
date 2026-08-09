@@ -31,9 +31,11 @@
   `seed` on Segmind but not on fal, and has real first/last-frame slots there (mutually exclusive
   with reference images, so a job with cast refs carries the seam frame as its last reference, exactly
   as on fal). Full matrix in [docs/PROVIDERS.md](docs/PROVIDERS.md).
-- **Segmind never pays twice for the same job.** Its transport resubmits only *before* Segmind has
-  accepted a request; once a `request_id` exists nothing re-POSTs (that would buy a second render) and
-  only the polling GETs retry. Insufficient credits, content-policy rejections and expired result
+- **Segmind never pays twice for the same job.** Its transport resubmits only when something proves
+  nothing was queued — an error Segmind answered with, or a connection that failed before the request
+  could land. Once a `request_id` exists nothing re-POSTs (that would buy a second render), and a
+  submit that dies mid-flight (timeout, reset socket) stops with a message pointing at the Segmind
+  console, because it may already have been accepted and billed; only the polling GETs retry. Insufficient credits, content-policy rejections and expired result
   records each get their own actionable message instead of a generic failure, and every finished job
   records its `request_id`, reported cost and remaining credits in the run's `prompts.json` sidecar.
 - **Seedance 2.5 on fal** (`seedance-2.5@fal`): 4–30s jobs, 4 starred cast members, all six aspect

@@ -26,6 +26,10 @@ const readBody = (req) => new Promise((r) => { let b = ''; req.on('data', (c) =>
  *     validationFail    — POST /v2/:slug answers 422 (deterministic bad args; never retried)
  *     insufficientCredits — POST answers 406 (never retried; actionable message)
  *     submitFailTimes   — the next N POSTs answer 500 (transient; resubmit IS allowed pre-request_id)
+ *     submitHang        — POSTs are accepted and queued but NEVER answered (the client aborts; it
+ *                         cannot know the job exists, so it must not re-POST)
+ *     unknownSlug       — POST /v2/:slug answers 404 (bad slug or wrong base url)
+ *     acceptsEmptyBody  — an empty `{}` POST is ACCEPTED and queued instead of 422'd
  *     statusFailOnce    — the FIRST status poll answers 500 (transient; only GETs may retry)
  *     processingHits    — the first N status polls answer PROCESSING before COMPLETED
  *     failed            — the status poll answers HTTP 422 { status:'FAILED', detail }
@@ -64,9 +68,24 @@ export async function startSegmindServer({ videoBytes = Buffer.from('FAKE-MP4'),
     // ── submit ────────────────────────────────────────────────────────────
     if (req.method === 'POST' && u.pathname.startsWith('/v2/')) {
       const slug = u.pathname.slice('/v2/'.length);
+      // A wrong slug, or a SEGMIND_BASE_URL pointing at the wrong host: everything 404s.
+      if (opts.unknownSlug) return json(404, { detail: 'Not Found' });
       // A deliberately empty probe (validateSegmind) is rejected on shape alone — and QUEUES NOTHING.
-      if (!body.trim() || body.trim() === '{}') return json(422, { detail: [{ loc: ['body', 'prompt'], msg: 'field required', type: 'missing' }] });
+      // `acceptsEmptyBody` models the model that does NOT reject it (all-optional params, or a change
+      // in validation order): `{}` is a valid request, so the probe queues a real, billable job. That
+      // is the case validateSegmind must surface rather than report as a clean bill of health.
+      if ((!body.trim() || body.trim() === '{}') && !opts.acceptsEmptyBody) {
+        return json(422, { detail: [{ loc: ['body', 'prompt'], msg: 'field required', type: 'missing' }] });
+      }
       if (opts.submitFailTimes > 0) { opts.submitFailTimes -= 1; res.writeHead(500); return res.end('transient'); }
+      // The POST is received and RECORDED (and Segmind-side, queued and billed) but never answered,
+      // so the client's own timeout aborts a request the vendor already accepted — the ambiguous
+      // failure that must never be re-POSTed.
+      if (opts.submitHang) {
+        let args; try { args = JSON.parse(body); } catch { args = null; }
+        queued.push({ id: `sg_${nextId++}`, slug, args });
+        return; // no response, ever
+      }
       if (opts.insufficientCredits) return json(406, { detail: 'Insufficient credits to run this model.' });
       if (opts.validationFail) return json(422, { detail: [{ loc: ['body', 'duration'], msg: 'duration must be between 4 and 30', type: 'value_error' }] });
       const id = `sg_${nextId++}`;
@@ -114,6 +133,8 @@ export async function startSegmindServer({ videoBytes = Buffer.from('FAKE-MP4'),
     requests,
     queued,
     opts,
-    close: () => new Promise((r) => server.close(r)),
+    // closeAllConnections first: a `submitHang` socket is still open by design, and close() alone
+    // only stops NEW connections — it would wait on that one forever.
+    close: () => new Promise((r) => { server.closeAllConnections?.(); server.close(r); }),
   };
 }

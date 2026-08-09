@@ -34,7 +34,7 @@ const { runSegmind, submitSegmind } = await import('../../src/lib/segmind.js');
 const posts = (from) => sg.requests.slice(from).filter((q) => q.method === 'POST');
 const ARGS = { prompt: 'a harbour at dawn', duration: 5 };
 
-test.afterEach(() => { Object.assign(sg.opts, { submitFailTimes: 0, statusFailOnce: false, validationFail: false, insufficientCredits: false, failed: false, contentPolicy: false, expired: false, processingHits: 0 }); });
+test.afterEach(() => { Object.assign(sg.opts, { submitFailTimes: 0, statusFailOnce: false, validationFail: false, insufficientCredits: false, failed: false, contentPolicy: false, expired: false, processingHits: 0, submitHang: false }); });
 test.after(async () => { await sg.close(); });
 
 // ── THE billing guard ───────────────────────────────────────────────────────
@@ -49,6 +49,53 @@ test('after a SUCCESSFUL submit a transient poll failure NEVER re-POSTs — exac
   assert.equal(posts(before).length, 1, 'EXACTLY ONE POST: a resubmit here would be a second paid render');
   assert.equal(sg.queued.length - queuedBefore, 1, 'exactly one job was queued provider-side');
   assert.ok(sg.requests.slice(before).filter((q) => q.method === 'GET').length >= 2, 'the poll was retried, not the submit');
+});
+
+// ── the ambiguous middle: a POST that may or may not have landed ─────────────
+// The 5xx cases below are safe to retry because SEGMIND ANSWERED — the response itself proves what
+// happened. When `fetch` throws instead, nothing proves anything: the connection can die just as
+// easily after Segmind accepted the job as before it arrived. Those failures are the ones that could
+// turn one render into two charges, so they stop.
+test('a submit that times out with the job already accepted is NOT re-POSTed — one charge, reported', async () => {
+  const before = sg.requests.length;
+  const queuedBefore = sg.queued.length;
+  sg.opts.submitHang = true; // Segmind accepts (and bills) the job, then never answers
+
+  await assert.rejects(submitSegmind('seedance-2.5', ARGS, { requestTimeoutMs: 250 }), (e) => {
+    assert.match(e.message, /cannot tell whether the job was queued/i, 'it says exactly what it does not know');
+    assert.match(e.message, /segmind\.com/i, 'and where to go look before running it again');
+    return true;
+  });
+
+  assert.equal(posts(before).length, 1, 'EXACTLY ONE POST: this one may already be queued, so a retry buys a second render');
+  assert.equal(sg.queued.length - queuedBefore, 1, 'provider-side exactly one job exists — which is the whole point');
+});
+
+// Both transport branches against a stubbed fetch, so the failure is the exact one being classified.
+const withFetch = async (impl, fn) => {
+  const real = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, opts) => { calls.push({ url: String(url), method: opts?.method }); return impl(url, opts); };
+  try { await fn(calls); } finally { globalThis.fetch = real; }
+};
+/** How undici reports a socket-level failure: a bare `TypeError: fetch failed` with the real code buried in `cause`. */
+const causedBy = (code, message) => Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error(message), { code }) });
+
+test('a connection REFUSED before the body left the machine is still retried — nothing could have been queued', async () => {
+  await withFetch(() => { throw causedBy('ECONNREFUSED', 'connect ECONNREFUSED 127.0.0.1:1'); }, async (calls) => {
+    await assert.rejects(submitSegmind('seedance-2.5', ARGS), /never reached Segmind/i);
+    assert.equal(calls.length, 3, 'all SEGMIND_MAX_RETRIES attempts — caution about ambiguity is not a blanket ban on retrying');
+  });
+});
+
+test('a socket RESET, which may have died AFTER Segmind accepted the POST, stops at one attempt', async () => {
+  await withFetch(() => { throw causedBy('ECONNRESET', 'other side closed'); }, async (calls) => {
+    await assert.rejects(submitSegmind('seedance-2.5', ARGS), (e) => {
+      assert.match(e.message, /cannot tell whether the job was queued/i);
+      return true;
+    });
+    assert.equal(calls.length, 1, 'ONE POST: an ambiguous failure is reported, never re-bought');
+  });
 });
 
 test('a transient 5xx BEFORE any request_id IS retried, and never more than SEGMIND_MAX_RETRIES times', async () => {

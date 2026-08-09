@@ -10,9 +10,14 @@
 // transient goes wrong — harmless there, catastrophic here: a second POST to /v2/<slug> starts a
 // SECOND BILLABLE JOB. So this module is asymmetric on purpose:
 //
-//   * BEFORE a request_id exists — the POST may be retried (nothing was queued, nothing was billed).
+//   * A POST may be retried only when the answer PROVES nothing was queued — an HTTP status Segmind
+//     itself sent back (5xx), or a transport failure that happened before the request could land
+//     (DNS, refused connection, TLS). A resubmit there costs nothing.
 //   * AFTER a successful submit  — nothing ever re-POSTs. Polls and the result GET retry freely;
 //     a failure past that point is REPORTED, never re-bought.
+//   * AMBIGUOUS in between — an abort from our own timeout, a reset socket, a body we could not read.
+//     `fetch` fails identically whether the connection died before the request left or after Segmind
+//     accepted it, so these are treated as POSSIBLY QUEUED AND BILLED: reported, never retried.
 //
 // Everything else is turning provider blobs into sentences a user can act on: HTTP 422 is a
 // deterministic FAILED that carries `detail`, 406 is "out of credits", and a 404 on a poll means the
@@ -95,9 +100,57 @@ function submitError(slug, { status, body }) {
 }
 
 /**
- * Queue ONE job. This is the only place a POST is ever retried, and it can be: until Segmind hands
- * back a request_id nothing exists provider-side, so an extra attempt costs nothing. Deterministic
- * rejections (bad args, bad key, no credits) stop on the first answer.
+ * Transport-level failures that PROVE the POST never reached Segmind: the host never resolved, the
+ * connection was refused or unroutable, TLS never came up, or the CONNECT (not the response) timed
+ * out. In every one of these the request body never left the machine, so nothing was queued and a
+ * resubmit is free. Deliberately a small allow-list: anything not on it is ambiguous.
+ */
+const PRE_SEND_CODES = new Set([
+  'ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'ENETDOWN', 'EHOSTDOWN',
+  'UND_ERR_CONNECT_TIMEOUT', 'ERR_INVALID_URL',
+  'CERT_HAS_EXPIRED', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'SELF_SIGNED_CERT_IN_CHAIN',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'ERR_TLS_CERT_ALTNAME_INVALID',
+]);
+
+/** Every `code`/`name` in an error's `cause` chain and any AggregateError members — undici buries the
+ *  real reason two levels down under a bare `TypeError: fetch failed`. */
+function errorCodes(err, seen = new Set()) {
+  const out = [];
+  let e = err;
+  while (e && typeof e === 'object' && !seen.has(e)) {
+    seen.add(e);
+    if (e.code) out.push(String(e.code));
+    if (e.name) out.push(String(e.name));
+    if (Array.isArray(e.errors)) for (const sub of e.errors) out.push(...errorCodes(sub, seen));
+    e = e.cause;
+  }
+  return out;
+}
+
+/**
+ * A submit that threw before any HTTP status came back. The only question worth asking is whether
+ * Segmind could ALREADY have queued (and billed) the job, and `fetch` does not answer it: an
+ * AbortError from our own timeout, or an ECONNRESET, can just as easily mean "the request landed and
+ * the reply was lost" as "nothing happened". So only a provably pre-send failure stays retryable;
+ * everything else stops here and says what it does not know, because a blind resubmit is how one
+ * render becomes two charges.
+ */
+function transportSubmitError(slug, e) {
+  if (errorCodes(e).some((c) => PRE_SEND_CODES.has(c))) {
+    return new Error(`Segmind ${slug}: the request never reached Segmind — ${e.message}`);
+  }
+  return noRetry(new Error(
+    `Segmind ${slug}: the submit did not complete (${e.message}) and we cannot tell whether the job was queued. `
+    + `NOT retrying — a second POST would be a second paid render. Check ${CONSOLE_URL} (Console → Requests) for a job `
+    + `created just now: if one is there, let it finish; if not, run this again.`,
+  ));
+}
+
+/**
+ * Queue ONE job. This is the only place a POST is ever retried, and it retries only what it can
+ * prove is free to retry: an HTTP status from Segmind that means "nothing was queued", or a
+ * transport failure from before the request could land. Deterministic rejections (bad args, bad key,
+ * no credits) stop on the first answer; ambiguous ones (see transportSubmitError) stop too.
  * @returns {Promise<{slug:string, requestId:string, statusUrl:string, responseUrl:string}>}
  */
 export async function submitSegmind(slug, args, { requestTimeoutMs = 120000 } = {}) {
@@ -123,7 +176,7 @@ export async function submitSegmind(slug, args, { requestTimeoutMs = 120000 } = 
       }
       err = submitError(slug, r);
     } catch (e) {
-      err = e.noRetry ? e : new Error(`Segmind ${slug}: submit failed — ${e.message}`);
+      err = e.noRetry ? e : transportSubmitError(slug, e);
     }
     lastErr = err;
     if (err.noRetry || attempt >= maxTries) throw err;
@@ -261,28 +314,61 @@ export async function segmindAssetUrl(absPath, mode = SG.uploadMode, { cache = t
 }
 
 /**
- * Money-safe live check of a Segmind key. Sends a DELIBERATELY EMPTY body to a model slug — Segmind
- * validates the request shape before it queues anything, so a `{}` POST can only ever answer 422 —
- * and reads ONLY the HTTP status. No job is queued, nothing is billed.
- * 401/403 → the key is bad; anything else (422 validation, or a 2xx) → the key authenticated.
+ * Money-safe live check of a Segmind key. POSTs a DELIBERATELY EMPTY body to the RENDER slug (what a
+ * render key is actually for — not the upscale model, which a Segmind-render user may never touch)
+ * and reads the HTTP status. The answer we WANT is a 422: "the server understood us and rejected the
+ * shape" is the one reply that proves the key, the slug AND the base url are all good with nothing
+ * queued.
+ *
+ * The statuses are not flattened into a bare ok/not-ok, because two of them are traps:
+ *   404 — a typo'd slug or a wrong SEGMIND_BASE_URL. Calling that a healthy key is how a setup looks
+ *         fine right until the first paid render fails.
+ *   2xx — the ONE outcome that means the probe queued something. Nothing in the API promises a model
+ *         with all-optional params must reject `{}`, so it is surfaced as an anomaly carrying the
+ *         request id, never as a quiet success.
  * Takes the key EXPLICITLY, exactly like validateFal: the setup wizard's freshly-typed key is not in
  * the config snapshot yet.
- * @returns {Promise<{ok:boolean, reason?:string, status?:number, detail?:string}>}
+ * @returns {Promise<{ok:boolean, reason?:string, status?:number, detail?:string,
+ *                    warning?:string, requestId?:string}>}
  */
-export async function validateSegmind(apiKey, { slug = SG.topazSlug } = {}) {
+export async function validateSegmind(apiKey, { slug = SG.seedance25Slug } = {}) {
   if (!apiKey) return { ok: false, reason: 'missing' };
   let res;
+  let body = null;
   try {
     res = await fetchRetry(
       queueUrl(slug),
       { method: 'POST', headers: { 'x-api-key': apiKey, 'Content-Type': 'application/json' }, body: '{}' },
       { retries: 0, timeoutMs: 20000 },
     );
+    const text = await res.text().catch(() => '');
+    try { body = text ? JSON.parse(text) : null; } catch { body = text; }
   } catch (e) {
     return { ok: false, reason: 'network', detail: e.message };
   }
-  if (res.status === 401 || res.status === 403) return { ok: false, reason: 'auth', status: res.status };
-  return { ok: true, status: res.status };
+  const status = res.status;
+  if (status === 401 || status === 403) return { ok: false, reason: 'auth', status };
+  if (status === 404) {
+    return {
+      ok: false,
+      reason: 'not_found',
+      status,
+      detail: `no model '${slug}' at ${SG.baseUrl} — check SEGMIND_BASE_URL and copy the slug verbatim from ${CONSOLE_URL}. [${detailOf(body)}]`,
+    };
+  }
+  // The key authenticated and the account is simply empty — worth saying out loud, not a bad key.
+  if (status === 406) {
+    return { ok: true, status, warning: `the key works, but the account is out of credits — add some at ${CONSOLE_URL} (Console → Billing) before rendering.` };
+  }
+  if (status === 400 || status === 422) return { ok: true, status };
+  if (res.ok) {
+    const requestId = body?.request_id ? String(body.request_id) : undefined;
+    const warning = `the key check was ACCEPTED (HTTP ${status})${requestId ? ` as job ${requestId}` : ''} instead of being rejected as an empty request`
+      + ` — '${slug}' may have queued a billable job. Check ${CONSOLE_URL} (Console → Requests).`;
+    log.warn(`Segmind key check: ${warning}`);
+    return { ok: true, status, warning, ...(requestId ? { requestId } : {}) };
+  }
+  return { ok: false, reason: 'unexpected', status, detail: detailOf(body) };
 }
 
 export default {
