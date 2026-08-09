@@ -101,26 +101,30 @@ export function estimateRender(spec, { backend, mode = 'full', jobId, cascade = 
   if (!jobs.length) throw new Error('spec has no kling.jobs to estimate');
 
   let picked;
-  // mirror the renderer's own precedence (seedanceConfigFor): an EXPLICIT spec.seedance.resolution
-  // pin overrides the .env default — but never the kling block, which the agents fill with KLING
-  // defaults and which would misprice (and mis-render) Seedance at 1080p
-  let perSecond = rateFor(rates, spec?.seedance?.resolution ?? resolution);
-  // fal prices Kling FLAT across resolutions; the only price knob is native audio on/off
-  if (priceKey === 'kling' && spec?.kling?.generate_audio === false && rates.audioOffPerSecondUsd) {
-    perSecond = rates.audioOffPerSecondUsd;
-  }
+  let perSecond;
   if (mode === 'probe') {
     picked = jobs.slice(0, 1);
-    // Probes ride the same tier at the probe resolution (first job only is where the saving is) —
-    // the CONFIGURED knob first: a probe set to ride 720p priced off the static 480p row would
-    // quote less than half the real bill.
+    // Probes ride the same tier at the probe resolution (first job only is where the saving is),
+    // chosen BEFORE any full-render rate lookup — the CONFIGURED knob first. A spec still pinning
+    // a resolution this model does not offer (a 1080p pin surviving a 2.0 → 2.5 switch) must not
+    // throw when the probe itself rides a perfectly legal rate.
     perSecond = rates.probePerSecondUsd ?? rateFor(rates, probeResolution ?? rates.probeResolution ?? resolution);
-  } else if (mode === 'job') {
-    const idx = jobs.findIndex((j) => j?.job_id === jobId);
-    if (idx === -1) throw new Error(`job "${jobId}" not found in spec.kling.jobs`);
-    picked = cascade ? jobs.slice(idx) : [jobs[idx]];
   } else {
-    picked = jobs;
+    // mirror the renderer's own precedence (seedanceConfigFor): an EXPLICIT spec.seedance.resolution
+    // pin overrides the .env default — but never the kling block, which the agents fill with KLING
+    // defaults and which would misprice (and mis-render) Seedance at 1080p
+    perSecond = rateFor(rates, spec?.seedance?.resolution ?? resolution);
+    // fal prices Kling FLAT across resolutions; the only price knob is native audio on/off
+    if (priceKey === 'kling' && spec?.kling?.generate_audio === false && rates.audioOffPerSecondUsd) {
+      perSecond = rates.audioOffPerSecondUsd;
+    }
+    if (mode === 'job') {
+      const idx = jobs.findIndex((j) => j?.job_id === jobId);
+      if (idx === -1) throw new Error(`job "${jobId}" not found in spec.kling.jobs`);
+      picked = cascade ? jobs.slice(idx) : [jobs[idx]];
+    } else {
+      picked = jobs;
+    }
   }
 
   return priced(perSecond, picked.map((j) => ({ jobId: j.job_id, seconds: jobSeconds(spec, j.job_id) })), priceKey, rates);
@@ -140,7 +144,9 @@ function readEnvVar(envRoot, key, fallbackEnv) {
   if (fallbackEnv && Object.hasOwn(fallbackEnv, key)) return String(fallbackEnv[key] ?? '').trim();
   try {
     const text = fs.readFileSync(path.join(envRoot, '.env'), 'utf8');
-    const m = text.match(new RegExp(`^\\s*${key}\\s*=\\s*("([^"]*)"|'([^']*)'|[^\\s#]+)`, 'm'));
+    // LINE-bounded whitespace ([^\S\n], never \s): `\s` crosses the newline, so a blank `FAL_KEY=`
+    // line would swallow the NEXT assignment as its value and report a key that is not there.
+    const m = text.match(new RegExp(`^[^\\S\\n]*${key}[^\\S\\n]*=[^\\S\\n]*("([^"]*)"|'([^']*)'|[^\\s#]+)`, 'm'));
     return (m?.[2] ?? m?.[3] ?? m?.[1] ?? '').trim();
   } catch { /* no .env yet */ }
   return '';

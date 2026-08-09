@@ -42,10 +42,15 @@ describe('StepBackend — the cards are the registry', () => {
     expect(within(kling).getByText('Default')).toBeInTheDocument();
   });
 
-  it('picking a card patches the wizard with the canonical compound id', async () => {
+  it('picking a card patches the canonical compound id and resets the model-scoped Segmind check', async () => {
     const { dispatch, group } = renderStep();
     await userEvent.click(within(group).getByRole('radio', { name: /Seedance 2\.5 Segmind/ }));
-    expect(dispatch).toHaveBeenCalledWith({ type: 'patch', patch: { backend: 'seedance-2.5@segmind' } });
+    // The segmindCheck reset rides along: validate-segmind probes the PICKED model's configured
+    // slug, so a check that passed for one model says nothing about another's.
+    expect(dispatch).toHaveBeenCalledWith({
+      type: 'patch',
+      patch: { backend: 'seedance-2.5@segmind', segmindCheck: { state: 'idle' } },
+    });
   });
 });
 

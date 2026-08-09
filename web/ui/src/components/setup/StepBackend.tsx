@@ -72,7 +72,13 @@ export function StepBackend({ state, dispatch }: { state: WizardState; dispatch:
               type="button"
               role="radio"
               aria-checked={selected}
-              onClick={() => dispatch({ type: 'patch', patch: { backend: b.id } })}
+              onClick={() => dispatch({
+                type: 'patch',
+                // A Segmind validation is MODEL-scoped (validate-segmind probes the picked model's
+                // configured slug), so switching cards resets it — a check that passed for the 2.5
+                // slug says nothing about a bad SEGMIND_SEEDANCE20_SLUG.
+                patch: { backend: b.id, ...(b.id !== state.backend ? { segmindCheck: { state: 'idle' as const } } : {}) },
+              })}
               className={clsx(
                 'flex flex-col items-start rounded-r2 border p-4 text-left transition-colors duration-[120ms]',
                 selected ? 'border-accent bg-[var(--accent-soft)]' : 'border-line bg-surface-2 hover:border-line-strong',

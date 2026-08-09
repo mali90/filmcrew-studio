@@ -180,6 +180,14 @@ function validateJobs(spec, P, elementIds, caps, enforceModelAspects = false, ch
     if (job.first_frame !== undefined && !nonEmpty(job.first_frame)) P.push(`${at}.first_frame must be a non-empty path when present`);
     if (job.last_frame !== undefined && !nonEmpty(job.last_frame)) P.push(`${at}.last_frame must be a non-empty path when present`);
     if (job.last_frame && !job.first_frame) P.push(`${at}: last_frame requires first_frame (the Kling first/last node needs a first frame)`);
+    // Where the native first/last mode EXCLUDES reference images (Segmind), an authored last_frame
+    // can only be honored on a ref-less job — the renderer refuses the mix only after every upload
+    // completed, so reject it here where the planner can still repair the spec for free. (An
+    // omitted/empty job.elements inherits the whole roster, so count what will actually be sent.)
+    const mixRefs = (job.elements ?? []).length || elementIds.size;
+    if (nonEmpty(job.last_frame) && caps.firstFrameExcludesRefs && mixRefs > 0) {
+      P.push(`${at}: last_frame needs ${caps.label}'s native first/last mode, and this job's ${mixRefs} reference image(s) occupy it — drop last_frame or the job's references`);
+    }
   });
 }
 

@@ -95,9 +95,11 @@ export function buildUpdates(s: WizardState): Record<string, string> {
     LLM_PROVIDER: s.provider,
     LLM_TRANSPORT: s.transport,
     LLM_MODEL: s.model,
-    FAL_KEY: s.falKey,
-    // Only when entered: an empty write here would BLANK a configured key if the wizard is ever
-    // re-run over an existing install (fal's unconditional write predates Segmind and stays).
+    // Only when entered — for BOTH provider keys: on the Segmind path the fal field is optional,
+    // and `/setup?rerun=1` saving `FAL_KEY: ''` would silently erase a configured key (breaking
+    // Kling renders, voice minting and fal-storage uploads). On the fal path the key is required
+    // by the step gate, so it is always non-empty there.
+    ...(s.falKey ? { FAL_KEY: s.falKey } : {}),
     ...(s.segmindKey ? { SEGMIND_API_KEY: s.segmindKey } : {}),
     RENDER_BACKEND: s.backend === 'kling' ? '' : s.backend,
     KLING_ASPECT: s.aspect,

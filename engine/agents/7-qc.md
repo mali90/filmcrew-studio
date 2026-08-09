@@ -15,7 +15,7 @@ Check at least:
 - `[camera]` valid `shot_size` enum; framing varies across the cut.
 - `[elements]` `kling.elements` **may be empty** (`[]`) — that is a valid text-to-video render (no reference image), correct when no available reference depicts a subject in this idea. **If non-empty**, every `image` matches an available reference file AND each element is plausibly relevant to the idea (flag an attached reference that has nothing to do with the brief — it would force the wrong subject on screen).
 - `[audio]` `audio` is coherent: every VO line has non-empty `text` and resolves to a shot (a `shot_id`, or an `at_s` that falls within a shot's window); **no shot that depicts a character speaking is left without a line** (that makes the renderer invent garbled pseudo-speech to match the visible mouthing — either add/rewrite the line, or tag `[content]` so the Scene Director makes the shot non-speaking); each line is short enough for its shot (≈ ≤2.5 words per second of `duration_s`) and is plain speakable text (no emoji, stage directions, ALL-CAPS, curly quotes/em-dashes, or the speaker's name inside `text`). A wordless SFX/ambience shot with `generate_audio: true` and no line is fine — do not flag it.
-- `[jobs]` every job ≤6 shots AND ≤15s; job shots/elements reference real ids; `last_frame` only with `first_frame`.
+- `[jobs]` every job within the project context's "Hard caps" line (shots/job and seconds/job — those numbers are the rendering model's own; do NOT assume 15s); job shots/elements reference real ids; `last_frame` only with `first_frame`.
 
 Be strict but fair — only fail on real problems, and always tag them.
 
