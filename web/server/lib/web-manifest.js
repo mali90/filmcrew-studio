@@ -21,6 +21,8 @@ export function newManifest({ idea, backend, aspect, durationS = null, cast = []
     revisions: [],  // [{id:'r1', feedback, scope, owners, createdAt}]
     takes: [],      // [{id:'t1', mode:'probe'|'full'|'job', jobId?, revision?, composition?, createdAt, estUsd?}]
     cuts: [],       // [{id:'c1', take, composition, master, createdAt}]
+    // estUsd is `number | null`: null means "this spent money but the provider publishes no rate"
+    // (Segmind, and Topaz before it) — readers must treat it as UNKNOWN, never as zero.
     costLedger: [], // [{ts, action, estUsd, note}]
     approved: null, // {cut, final, upscaled, at}
     lastError: null,   // {ts, action, message, logTail:[]}

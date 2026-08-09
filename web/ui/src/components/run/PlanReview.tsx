@@ -9,6 +9,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { RunDetail } from '../../../../shared/api-types';
 import { api } from '../../api/client';
 import { Button, useFirstPaidConfirm } from '../ui/Button';
+import { UnknownPriceNote } from '../ui/UnknownPriceNote';
 import { Dialog } from '../ui/Dialog';
 import { useToast } from '../ui/Toast';
 import { requestNotifyPermission } from '../../hooks/useNotifications';
@@ -86,6 +87,9 @@ export function PlanReview({ run }: { run: RunDetail }) {
   };
 
   const pendingUsd = pendingMode === 'probe' ? probeQ.data?.totalUsd : fullQ.data?.totalUsd;
+  // Both buttons hit the same backend, so one unpriced estimate means neither can quote a figure.
+  const unknownPrice = fullQ.data?.unknownPrice ?? probeQ.data?.unknownPrice ?? null;
+  const pendingUnknown = Boolean(pendingMode === 'probe' ? probeQ.data?.unknownPrice : fullQ.data?.unknownPrice);
 
   return (
     <section aria-label="The plan is ready" className="rounded-r3 border border-line bg-surface-1 p-5">
@@ -99,6 +103,7 @@ export function PlanReview({ run }: { run: RunDetail }) {
           <Button
             variant={hasTakes ? 'secondary' : 'primary'}
             costUsd={probeQ.data?.totalUsd ?? null}
+            costUnknown={Boolean(probeQ.data?.unknownPrice)}
             loading={busy === 'probe'}
             onClick={() => clickRender('probe')}
           >
@@ -108,6 +113,7 @@ export function PlanReview({ run }: { run: RunDetail }) {
         <Button
           variant={!canProbe || hasTakes ? 'primary' : 'secondary'}
           costUsd={fullQ.data?.totalUsd ?? null}
+          costUnknown={Boolean(fullQ.data?.unknownPrice)}
           loading={busy === 'full'}
           onClick={() => clickRender('full')}
         >
@@ -116,7 +122,9 @@ export function PlanReview({ run }: { run: RunDetail }) {
         <Button variant="quiet" onClick={() => setShowRevise((v) => !v)}>Revise the plan</Button>
         <Button variant="destructive" onClick={() => setConfirmDiscard(true)}>Discard</Button>
       </div>
-      <p className="mt-2 text-caption text-ink-muted" aria-live="polite">estimates — fal bills per second</p>
+      {unknownPrice
+        ? <UnknownPriceNote hint={unknownPrice.hint} />
+        : <p className="mt-2 text-caption text-ink-muted" aria-live="polite">estimates — fal bills per second</p>}
 
       {showRevise && (
         <div className="mt-4 space-y-2">
@@ -147,6 +155,7 @@ export function PlanReview({ run }: { run: RunDetail }) {
             <Button
               variant="primary"
               costUsd={pendingUsd ?? null}
+              costUnknown={pendingUnknown}
               onClick={() => {
                 const mode = pendingMode;
                 paid.confirm();
@@ -159,7 +168,9 @@ export function PlanReview({ run }: { run: RunDetail }) {
           </>
         }
       >
-        This calls fal.ai · ≈ {usd(pendingUsd)} · estimates only — fal bills per rendered second.
+        {pendingUnknown
+          ? 'This spends real money with your render provider. It publishes no per-second rate, so there is no estimate to show — the bill lands on your provider account.'
+          : <>This calls fal.ai · ≈ {usd(pendingUsd)} · estimates only — fal bills per rendered second.</>}
       </Dialog>
 
       <Dialog

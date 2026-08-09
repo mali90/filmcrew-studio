@@ -8,6 +8,7 @@ import { Button } from '../../ui/Button';
 import { useToast } from '../../ui/Toast';
 import { usd } from '../../../lib/format';
 import { PaidButton } from './PaidButton';
+import { UnknownPriceNote } from '../../ui/UnknownPriceNote';
 
 export function ApproveBar({ run, cutId = null }: { run: RunDetail; cutId?: string | null }) {
   const { toast } = useToast();
@@ -48,6 +49,10 @@ export function ApproveBar({ run, cutId = null }: { run: RunDetail; cutId?: stri
     onError: (e) => toast({ kind: 'error', text: e instanceof ApiClientError ? `${e.message} — ${e.hint}` : e.message }),
   });
 
+  // Topaz runs on whichever provider this run rendered on, and Segmind publishes no rate for it —
+  // so the toggle may be priceable, unknown, or (already HD) irrelevant.
+  const unknownPrice = upscaleEstimate.data?.unknownPrice ?? null;
+
   const label = `Approve${effectiveUpscale ? ' & upscale' : ''}`;
 
   return (
@@ -64,7 +69,7 @@ export function ApproveBar({ run, cutId = null }: { run: RunDetail; cutId?: stri
         <label htmlFor={checkboxId} className={alreadyHD ? 'flex-1 opacity-60' : 'flex-1 cursor-pointer'}>
           <span className="flex items-center gap-2 text-label text-ink">
             Upscale to ~1080p with Topaz
-            {!alreadyHD && <span className="tnum text-caption text-ink-muted">≈ {usd(upscaleEstimate.data?.totalUsd)}</span>}
+            {!alreadyHD && !unknownPrice && <span className="tnum text-caption text-ink-muted">≈ {usd(upscaleEstimate.data?.totalUsd)}</span>}
           </span>
           <span className="mt-0.5 block text-caption text-ink-muted">
             {alreadyHD
@@ -81,6 +86,7 @@ export function ApproveBar({ run, cutId = null }: { run: RunDetail; cutId?: stri
             size="lg"
             className="w-full justify-center"
             costUsd={upscaleEstimate.data?.totalUsd ?? null}
+            costUnknown={Boolean(unknownPrice)}
             loading={approve.isPending}
             onPaidClick={() => approve.mutate()}
           >
@@ -98,6 +104,8 @@ export function ApproveBar({ run, cutId = null }: { run: RunDetail; cutId?: stri
           </Button>
         )}
       </div>
+
+      {effectiveUpscale && unknownPrice && <UnknownPriceNote hint={unknownPrice.hint} />}
 
       <p className="mt-2 text-caption text-ink-muted">
         {effectiveUpscale ? '' : 'Approving is free. '}Assembly already happened — approve only finalizes

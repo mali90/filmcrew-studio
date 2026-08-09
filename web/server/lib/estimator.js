@@ -1,9 +1,18 @@
 // Pure cost estimator behind GET /api/runs/:id/estimate and every CostTag in the UI. Rates live
 // in prices.json (editable ballparks — clearly labeled estimates, never billing). Job durations
 // are derived from the spec exactly like the validator derives them.
+//
+// Some providers publish no rate at all (Segmind, for every model we drive). That is a KNOWN state,
+// not an error: those runs render and bill exactly like any other, so the estimator answers
+// `totalUsd: null` + an `unknownPrice` hint rather than throwing (a 500 would take a working run
+// page down) or borrowing a sibling's rate (an invented number on a paid button is worse than
+// none). An unregistered backend id is still a bug and still throws loudly.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+// The registry is the ONE static import this server takes from the host src/ tree — zero imports,
+// no env, so it can never drag config.js in. See the canary in test/integration/runs-caps.test.js.
+import { normalizeBackend } from '../../../src/lib/render-models.js';
 
 const PRICES = JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'prices.json'), 'utf8'));
 const DEFAULT_SHOT_SECONDS = 5; // mirrors config.kling.defaultShotSeconds
@@ -24,7 +33,7 @@ export function jobSeconds(spec, jobId) {
 /**
  * Estimate a render's cost. mode: 'full' (all jobs), 'probe' (first job only, at the probe
  * resolution — same standard tier), 'job' (one job; `cascade` adds its stale-seam downstream jobs).
- * @returns {{perJob:{jobId:string,seconds:number,usd:number}[], totalUsd:number, currency:'USD', label:'estimate'}}
+ * @returns {{perJob:{jobId:string,seconds:number,usd:number|null}[], totalUsd:number|null, currency:'USD', label:'estimate', unknownPrice?:{provider:string|null,hint:string}}}
  */
 /** The rate row for a price key, following a single `{"$alias": "<key>"}` hop — the CLI records the
  *  CANONICAL compound backend id ('seedance-2.0@fal') in render.json, and prices.json redirects
@@ -37,9 +46,11 @@ function tableFor(key) {
 
 /** Per-second rate for a backend. Flat rates are numbers; resolution-scaled backends (Seedance —
  *  fal bills by tokens = h×w×seconds×24/1024, so price tracks pixel count) use a map keyed by
- *  resolution with a defaultResolution fallback. */
+ *  resolution with a defaultResolution fallback. An explicit `null` rate is "this vendor publishes
+ *  no price" and comes back as null; an unknown RESOLUTION on a priced row still throws. */
 function rateFor(rates, resolution) {
   const r = rates.perSecondUsd;
+  if (r === null) return null; // known unknown — the caller answers unknownPrice, never a guess
   if (typeof r === 'number') return r;
   const key = resolution ?? rates.defaultResolution;
   const usd = r[key]; // an unknown resolution must fail loudly, never silently quote the default
@@ -47,9 +58,45 @@ function rateFor(rates, resolution) {
   return usd;
 }
 
+const PROVIDER_LABELS = { segmind: 'Segmind', fal: 'fal.ai' };
+const SUBJECT_LABELS = { topaz: 'the Topaz upscale' };
+
+/** The machine-readable "we don't know what this costs" payload. The hint is written for a human
+ *  staring at a paid button: it says WHO doesn't publish a rate, that the job still costs money,
+ *  and (from the row's own `_todo`) where to look the number up. */
+function unknownPriceFor(priceKey, rates) {
+  const [subject, provider] = String(priceKey).split('@');
+  const who = PROVIDER_LABELS[provider] ?? provider ?? 'this provider';
+  const what = SUBJECT_LABELS[subject] ?? subject;
+  const where = String(rates?._todo ?? '').replace(/^PRICE CHECK REQUIRED\s*[—-]\s*/, '').trim();
+  return {
+    provider: provider ?? null,
+    hint: `${who} does not publish a per-second rate for ${what} — rendering still costs money; the rate is not on file yet.`
+      + (where ? ` Check ${where} and add it to web/server/lib/prices.json.` : ''),
+  };
+}
+
+const sumUsd = (perJob) => round2(perJob.reduce((a, j) => a + j.usd, 0));
+
+/** Shape a result from the per-second rate: `null` means unpriced, and then NOTHING is invented —
+ *  the seconds are still real (the run page can say how much video it will make). */
+function priced(perSecond, perJob, priceKey, rates) {
+  if (perSecond === null) {
+    return {
+      perJob: perJob.map((j) => ({ ...j, usd: null })),
+      totalUsd: null,
+      currency: 'USD',
+      label: 'estimate',
+      unknownPrice: unknownPriceFor(priceKey, rates),
+    };
+  }
+  const rows = perJob.map((j) => ({ ...j, usd: round2(j.seconds * perSecond) }));
+  return { perJob: rows, totalUsd: sumUsd(rows), currency: 'USD', label: 'estimate' };
+}
+
 export function estimateRender(spec, { backend, mode = 'full', jobId, cascade = false, resolution } = {}) {
   const { key: priceKey, rates } = tableFor(backend);
-  if (!rates) throw new Error(`no price table for backend "${backend}" (have: ${Object.keys(PRICES).filter((k) => PRICES[k]?.perSecondUsd || PRICES[k]?.$alias).join(', ')})`);
+  if (!rates) throw new Error(`no price table for backend "${backend}" (have: ${priceKeys().join(', ')})`);
   const jobs = spec?.kling?.jobs ?? [];
   if (!jobs.length) throw new Error('spec has no kling.jobs to estimate');
 
@@ -74,31 +121,67 @@ export function estimateRender(spec, { backend, mode = 'full', jobId, cascade = 
     picked = jobs;
   }
 
-  const perJob = picked.map((j) => {
-    const seconds = jobSeconds(spec, j.job_id);
-    return { jobId: j.job_id, seconds, usd: round2(seconds * perSecond) };
-  });
-  return { perJob, totalUsd: round2(perJob.reduce((a, j) => a + j.usd, 0)), currency: 'USD', label: 'estimate' };
+  return priced(perSecond, picked.map((j) => ({ jobId: j.job_id, seconds: jobSeconds(spec, j.job_id) })), priceKey, rates);
 }
 
-/** The Seedance render resolution the CHILD will use: <envRoot>/.env SEEDANCE_RESOLUTION, else the
- *  config default (480p — the cheap path; approve's Topaz upscale lifts the master to 1080p). */
-export function readSeedanceResolution(envRoot) {
+/** The price keys a human could reasonably have meant — rate rows and alias hops, unpriced included
+ *  (a registered-but-unpriced backend is a known state, so it belongs in the "have:" list). */
+const priceKeys = () => Object.keys(PRICES).filter((k) => PRICES[k] && typeof PRICES[k] === 'object' && ('perSecondUsd' in PRICES[k] || PRICES[k].$alias));
+
+/** One value out of <envRoot>/.env, read as DATA (never sourced) — the settings page writes that
+ *  file and the render child reads it, so it is what the estimate has to price. */
+function readEnvVar(envRoot, key, fallbackEnv) {
   try {
     const text = fs.readFileSync(path.join(envRoot, '.env'), 'utf8');
-    const m = text.match(/^\s*SEEDANCE_RESOLUTION\s*=\s*("([^"]*)"|'([^']*)'|[^\s#]+)/m);
+    const m = text.match(new RegExp(`^\\s*${key}\\s*=\\s*("([^"]*)"|'([^']*)'|[^\\s#]+)`, 'm'));
     const v = (m?.[2] ?? m?.[3] ?? m?.[1] ?? '').trim();
-    return v || '480p';
-  } catch { return '480p'; }
+    if (v) return v;
+  } catch { /* no .env yet — fall through to the child env */ }
+  return String(fallbackEnv?.[key] ?? '').trim();
 }
 
-/** Estimate a Topaz upscale over clip durations (one Topaz job per sub-1080p clip). */
-export function estimateUpscale(clips) {
-  const topaz = tableFor('topaz').rates;
-  const perJob = (clips ?? []).map((c) => ({ jobId: c.jobId, seconds: c.seconds, usd: round2(c.seconds * topaz.perSecondUsd) }));
-  return { perJob, totalUsd: round2(perJob.reduce((a, j) => a + j.usd, 0)), currency: 'USD', label: 'estimate' };
+/** The render resolution the CHILD will use, per MODEL: Seedance 2.5 has its own knob and its own
+ *  default (720p — 480p is only its probe tier), everything else rides SEEDANCE_RESOLUTION (480p,
+ *  the cheap path; approve's Topaz upscale lifts the master to 1080p). Seedance is billed by
+ *  pixel-seconds, so reading the wrong knob quietly misprices the button. */
+export function readRenderResolution(envRoot, backend) {
+  const is25 = typeof backend === 'string' && backend.includes('seedance-2.5');
+  return readEnvVar(envRoot, is25 ? 'SEEDANCE25_RESOLUTION' : 'SEEDANCE_RESOLUTION') || (is25 ? '720p' : '480p');
+}
+
+/** Back-compat wrapper: the pre-2.5 callers that only ever meant SEEDANCE_RESOLUTION. */
+export const readSeedanceResolution = (envRoot) => readRenderResolution(envRoot, null);
+
+/** Which vendor the approve-time upscale will actually bill — the same rule as the engine's
+ *  resolveUpscaleProvider (src/lib/upscale.js), re-derived here from the .env/child env because
+ *  this server may not import config.js. 'auto' upscales wherever the run RENDERED, else wherever
+ *  a key exists, else fal (so a keyless install fails with the long-familiar FAL_KEY message).
+ *  An unrecognised value falls back to 'auto' here rather than throwing: naming the bad setting is
+ *  the engine's job, at spend time — an estimate must not take the run page down over it. */
+export function readUpscaleProvider(envRoot, backend, childEnv) {
+  const configured = readEnvVar(envRoot, 'UPSCALE_PROVIDER', childEnv).toLowerCase() || 'auto';
+  if (configured === 'fal' || configured === 'segmind') return configured;
+  let runProvider = null;
+  try { runProvider = normalizeBackend(backend).provider; } catch { /* unknown/absent backend */ }
+  const has = {
+    fal: Boolean(readEnvVar(envRoot, 'FAL_KEY', childEnv)),
+    segmind: Boolean(readEnvVar(envRoot, 'SEGMIND_API_KEY', childEnv)),
+  };
+  if (runProvider && has[runProvider]) return runProvider;
+  if (has.fal) return 'fal';
+  if (has.segmind) return 'segmind';
+  return 'fal';
+}
+
+/** Estimate a Topaz upscale over clip durations (one Topaz job per sub-1080p clip). Topaz runs on
+ *  either provider now, and Segmind publishes no rate for it — so this answers per provider. */
+export function estimateUpscale(clips, { provider = 'fal' } = {}) {
+  const priceKey = provider === 'fal' ? 'topaz' : `topaz@${provider}`;
+  const { key, rates } = tableFor(priceKey);
+  if (!rates) throw new Error(`no price table for upscale provider "${provider}" (have: ${priceKeys().join(', ')})`);
+  return priced(rateFor(rates), (clips ?? []).map((c) => ({ jobId: c.jobId, seconds: c.seconds })), key, rates);
 }
 
 export const VOICE_MINT_USD = PRICES.voiceMintUsd;
 
-export default { estimateRender, estimateUpscale, jobSeconds, readSeedanceResolution, VOICE_MINT_USD };
+export default { estimateRender, estimateUpscale, jobSeconds, readRenderResolution, readSeedanceResolution, readUpscaleProvider, VOICE_MINT_USD };

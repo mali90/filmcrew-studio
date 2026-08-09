@@ -5,6 +5,16 @@ export const usd = (n: number | null | undefined) =>
 
 export const seconds = (s: number | null | undefined) => (s == null ? 'auto' : `${s}s`);
 
+/** What a run has spent so far. A ledger only sums to a figure when every money line HAS one: a line
+ *  flagged `unpriced` billed at a rate nobody published, so the sum is a floor and says so rather
+ *  than letting an unknown round down to a confident "$0.00". (estUsd null with no flag is a step
+ *  that genuinely cost nothing, like a local assemble.) */
+export const spendLabel = (ledger: { estUsd?: number | null; unpriced?: boolean }[]) => {
+  const total = ledger.reduce((sum, e) => sum + (e.estUsd ?? 0), 0);
+  if (!ledger.some((e) => e.unpriced)) return usd(total);
+  return total > 0 ? `${usd(total)} + unpriced work` : 'not on file';
+};
+
 export const elapsed = (ms: number | null | undefined) => {
   if (ms == null) return '';
   const total = Math.floor(ms / 1000);

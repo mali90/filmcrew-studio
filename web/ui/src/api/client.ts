@@ -92,10 +92,10 @@ export const api = {
   estimate: (id: string, q: { mode: string; jobId?: string; cascade?: boolean; cut?: string }) =>
     get<Estimate>(`/runs/${id}/estimate?mode=${q.mode}${q.jobId ? `&jobId=${q.jobId}` : ''}${q.cascade ? '&cascade=1' : ''}${q.cut ? `&cut=${q.cut}` : ''}`),
 
-  render: (id: string, mode: 'probe' | 'full') => post<{ takeId: string; estUsd: number }>(`/runs/${id}/render`, { mode }),
+  render: (id: string, mode: 'probe' | 'full') => post<{ takeId: string; estUsd: number | null }>(`/runs/${id}/render`, { mode }),
   revise: (id: string, body: { feedback: string; scope?: string }) => post<{ revisionId: string }>(`/runs/${id}/revise`, body),
   rerenderJob: (id: string, body: { jobId: string; cascade?: boolean; feedback?: string }) =>
-    post<{ takeId: string; estUsd: number; cascadeJobs: string[] }>(`/runs/${id}/rerender-job`, body),
+    post<{ takeId: string; estUsd: number | null; cascadeJobs: string[] }>(`/runs/${id}/rerender-job`, body),
   assemble: (id: string, composition?: Record<string, string>) => post<unknown>(`/runs/${id}/assemble`, { composition }),
   approve: (id: string, upscale: boolean, cut?: string) =>
     post<{ final: string | null }>(`/runs/${id}/approve`, { upscale, ...(cut ? { cut } : {}) }),

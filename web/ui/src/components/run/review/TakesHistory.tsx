@@ -32,7 +32,9 @@ export function TakesHistory({ run }: { run: RunDetail }) {
       })),
       ...m.takes.map((t) => ({
         key: `take-${t.id}`,
-        text: `${t.id} · ${t.mode}${t.jobId ? ` ${t.jobId}` : ''} · ≈${usd(t.estUsd)}`,
+        // estUsd is null when the provider publishes no rate — say so rather than print "≈—",
+        // which reads like the take was free.
+        text: `${t.id} · ${t.mode}${t.jobId ? ` ${t.jobId}` : ''} · ${t.estUsd == null ? 'price not on file' : `≈${usd(t.estUsd)}`}`,
         at: t.createdAt,
       })),
       ...m.cuts.map((c) => ({

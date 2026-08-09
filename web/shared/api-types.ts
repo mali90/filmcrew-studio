@@ -47,11 +47,13 @@ export interface Manifest {
   environment?: string | null;              // selected world/mood/style bible slug (null = none) — revisions re-inject it
   createdAt: string;
   revisions: { id: string; feedback: string | null; scope: string; owners: number[]; createdAt: string }[];
-  takes: { id: string; mode: 'probe' | 'full' | 'job'; jobId?: string; cascade?: boolean; revision: string | null; createdAt: string; estUsd?: number; feedback?: string | null }[];
+  takes: { id: string; mode: 'probe' | 'full' | 'job'; jobId?: string; cascade?: boolean; revision: string | null; createdAt: string; estUsd?: number | null; feedback?: string | null }[];
   // `stitcher`/`joints`/`matched` describe how the seams were joined ('seamless' = colour-matched
   // chained joints, 'concat' = a hard cut at every seam). Absent on cuts made before that existed.
   cuts: { id: string; take: string; master: string | null; shortSide?: number | null; stitcher?: 'seamless' | 'concat'; joints?: number; matched?: number; createdAt: string }[];
-  costLedger: { ts: string; action: string; estUsd: number | null; note: string }[];
+  // `unpriced` marks a line that SPENT money at a rate nobody publishes (Segmind, Topaz per-clip):
+  // estUsd is null there because the figure is unknown, not because the step was free.
+  costLedger: { ts: string; action: string; estUsd: number | null; unpriced?: boolean; note: string }[];
   approved: { cut: string | null; final: string; upscaled: boolean; stitcher?: 'seamless' | 'concat'; joints?: number; matched?: number; at: string } | null;
   lastError: RunError | null;
   activeJob: { kind: ActionKind; pid: number; startedAt: string; queueId?: string } | null;
@@ -136,7 +138,16 @@ export type GlobalEvent =
 
 // ── Endpoint payloads ──
 export interface CreateRunBody { idea: string; backend: Backend; aspect: Aspect; durationS: number | null; cast?: string[]; environment?: string }
-export interface Estimate { perJob: { jobId: string; seconds: number; usd: number }[]; totalUsd: number; currency: 'USD'; label: 'estimate' }
+// `usd`/`totalUsd` are NULLABLE on purpose: some providers publish no per-second rate (every Segmind
+// model we drive), and the estimator answers "I don't know" rather than guessing a sibling's price or
+// 500ing the run page. null + `unknownPrice` = the rate is not on file; the render still costs money.
+export interface Estimate {
+  perJob: { jobId: string; seconds: number; usd: number | null }[];
+  totalUsd: number | null;
+  currency: 'USD';
+  label: 'estimate';
+  unknownPrice?: { provider?: string | null; hint: string };
+}
 export interface SetupStatus {
   envSource: '.env' | '.env.example' | 'none';
   llm: { provider: string; transport: string; model: string | null; hasKey: boolean };

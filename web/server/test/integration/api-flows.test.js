@@ -530,3 +530,66 @@ test('DELETE while the plan is still queued/active is refused with a hint', asyn
   assert.match(res.json().hint ?? '', /cancel/i);
   await post(`/api/runs/${runId}/cancel`, {});
 });
+
+// ── Estimates for backends whose vendor publishes no rate ────────────────────
+// The estimate endpoint is on the run page's critical path: it is fetched the moment a plan lands.
+// A Segmind-backed run must therefore answer "the rate is not on file" — 200 with totalUsd:null —
+// rather than 500ing the page for a backend that renders perfectly well.
+test('estimate: a Segmind-backed run answers 200 with an unknown price, never a 500', async () => {
+  const { runId } = (await post('/api/runs', { idea: 'a lantern in the fog', backend: 'seedance-2.5@segmind', aspect: '16:9', durationS: null })).json();
+  await waitForStatus(runId, 'plan-ready');
+
+  const est = await get(`/api/runs/${runId}/estimate?mode=full`);
+  assert.equal(est.statusCode, 200, est.body);
+  const body = est.json();
+  assert.equal(body.totalUsd, null);
+  assert.equal(body.currency, 'USD');
+  assert.ok(body.perJob.length > 0);
+  for (const j of body.perJob) {
+    assert.ok(j.seconds > 0, 'the seconds half of the estimate never depended on a rate');
+    assert.equal(j.usd, null, 'and no per-job figure is invented either');
+  }
+  assert.match(body.unknownPrice.hint, /segmind/i);
+  assert.match(body.unknownPrice.hint, /costs money/i, 'unknown is not free, and the hint says so');
+
+  // The approve-time upscale rides the same run, and `auto` bills wherever a key actually exists:
+  // with no Segmind key this install can only reach fal's Topaz, and that fal price is the honest
+  // one. Give it a Segmind key and the upscale moves home — where the rate is not on file.
+  const envFile = path.join(envRoot, '.env');
+  const original = fs.readFileSync(envFile, 'utf8');
+  try {
+    assert.ok((await get(`/api/runs/${runId}/estimate?mode=upscale`)).json().totalUsd > 0, 'keyless-Segmind upscales on fal, at fal money');
+    fs.writeFileSync(envFile, `${original}SEGMIND_API_KEY=seg-test-key\n`);
+    const up = await get(`/api/runs/${runId}/estimate?mode=upscale`);
+    assert.equal(up.statusCode, 200, up.body);
+    assert.equal(up.json().totalUsd, null);
+    assert.match(up.json().unknownPrice.hint, /segmind/i);
+  } finally { fs.writeFileSync(envFile, original); }
+});
+
+// Seedance 2.5 is billed by pixel-seconds and has its OWN resolution knob. Reading the 2.0 knob
+// (or the 2.0 default) would quote 480p money for a 720p render — the estimate must follow the
+// env root the render child will actually read.
+test('estimate: a 2.5@fal run prices the resolution SEEDANCE25_RESOLUTION selects', async () => {
+  const { runId } = (await post('/api/runs', { idea: 'a kite over the harbour', backend: 'seedance-2.5@fal', aspect: '16:9', durationS: null })).json();
+  await waitForStatus(runId, 'plan-ready');
+  const envFile = path.join(envRoot, '.env');
+  const original = fs.readFileSync(envFile, 'utf8');
+  const totalFor = async () => (await get(`/api/runs/${runId}/estimate?mode=full`)).json();
+  try {
+    const seconds = (await totalFor()).perJob.reduce((a, j) => a + j.seconds, 0);
+
+    fs.writeFileSync(envFile, `${original}SEEDANCE25_RESOLUTION=720p\n`);
+    const at720 = await totalFor();
+    assert.equal(at720.totalUsd, Math.round(seconds * 0.473 * 100) / 100);
+
+    fs.writeFileSync(envFile, `${original}SEEDANCE25_RESOLUTION=480p\n`);
+    const at480 = await totalFor();
+    assert.equal(at480.totalUsd, Math.round(seconds * 0.2205 * 100) / 100);
+    assert.ok(at480.totalUsd < at720.totalUsd);
+
+    // the 2.0 knob must not reach 2.5 — that crossing is exactly the mispricing this guards
+    fs.writeFileSync(envFile, `${original}SEEDANCE_RESOLUTION=480p\n`);
+    assert.equal((await totalFor()).totalUsd, at720.totalUsd, '2.5 falls back to its own 720p default');
+  } finally { fs.writeFileSync(envFile, original); }
+});
