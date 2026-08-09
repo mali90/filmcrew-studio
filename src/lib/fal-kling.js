@@ -17,7 +17,9 @@ import fs from 'node:fs';
 import config from '../../config.js';
 import log from './logger.js';
 import { buildKlingStoryboard, klingConfigFor } from './kling.js';
-import { generateKling, toFalInput, falRef } from './fal.js';
+import { chooseSeamMode } from './prompt-compose.js';
+import { capsFor } from './render-models.js';
+import { generateKling, toFalInput, falRef, isValidationError } from './fal.js';
 import { characterGroups, jobSpeakers } from './cast-groups.js';
 import { resolveImage } from './elements.js';
 import { getVoiceId } from './voices.js';
@@ -45,7 +47,7 @@ const falRefFor = (absPath) => falRef(absPath, config.fal.uploadMode);
 // endpoint takes no seed input (every render is naturally a fresh take), and director feedback
 // reaches Kling through an engine revision (which rewrites the content prompts) instead of a
 // prompt suffix — the 512-char segment budget leaves no room for a reliable note.
-export async function renderKlingJobFal({ job, spec, runDir, seed, lowRes = false, startFrame = null, nonce = 0, feedback = '', backend = 'kling-o3@fal' }) {
+export async function renderKlingJobFal({ job, spec, runDir, seed, lowRes = false, startFrame = null, endFrame = null, feedsNext = false, seamInFrom = null, seamOutTo = null, nonce = 0, feedback = '', backend = 'kling-o3@fal' }) {
   if (feedback) {
     log.warn(`[${job.job_id}] Kling ignores per-render director notes (its 512-char segment budget leaves no room) — route feedback through a revision (revise) so the engine rewrites the prompts instead.`);
   }
@@ -59,6 +61,16 @@ export async function renderKlingJobFal({ job, spec, runDir, seed, lowRes = fals
   const groups = characterGroups(job, spec);
   const textToVideo = groups.every((g) => g.els.length === 0);
   const startFrameSrc = job.first_frame || startFrame || null;
+  const endFrameSrc = job.last_frame || endFrame || null;
+  // How this job's boundaries can actually be pinned on THIS backend — the same decision the
+  // Seedance renderer, the server preview and the re-render dialog all read. Kling seeds a frame
+  // through its Elements set, so a text-to-video job (no element at all) pins nothing.
+  const seam = chooseSeamMode({
+    caps: capsFor(backend),
+    castRefCount: textToVideo ? 0 : groups.reduce((n, g) => n + g.els.length, 0),
+    hasSeamIn: !!startFrameSrc,
+    hasSeamOut: !!endFrameSrc,
+  });
 
   const idxByName = new Map(groups.map((g, i) => [slug(g.name), i + 1]));
   if (!textToVideo) {
@@ -110,29 +122,60 @@ export async function renderKlingJobFal({ job, spec, runDir, seed, lowRes = fals
   // the chained SEAM frame (previous job clip's last frame, from pipeline.renderSpec) pins this job's
   // start so the cross-job cut is continuous. text-to-video has no element to seed a frame from.
   if (!textToVideo) {
-    if (startFrameSrc) payload.start_image_url = await falRefFor(resolveImage(startFrameSrc));
-    if (job.last_frame) payload.end_image_url = await falRefFor(resolveImage(job.last_frame));
+    if (seam.in.mode === 'native') payload.start_image_url = await falRefFor(resolveImage(startFrameSrc));
+    if (seam.out.mode === 'native') payload.end_image_url = await falRefFor(resolveImage(endFrameSrc));
   } else if (startFrameSrc) {
     log.warn(`[${job.job_id}] Kling text-to-video ignores the first_frame seed (no reference element) — add a reference to elements/references/ to pin the opening frame.`);
   }
 
   log.step(`[${job.job_id}] fal Kling ${textToVideo ? 'text-to-video' : 'reference-to-video'} — ${segments.length} shot(s), ${totalDuration}s, ${elements.length} element(s)${voiced ? `, ${voiced} voice(s)` : ''}${lowRes ? ' (probe)' : ''}`);
 
-  // Effective prompts/elements → sidecar for review (mirrors the cloud renderer).
-  try {
-    fs.writeFileSync(path.join(dir, 'prompts.json'), JSON.stringify({
-      job_id: job.job_id, backend, transport: 'fal', endpoint,
-      aspect_ratio: klingCfg.aspectRatio, generate_audio: !!klingCfg.generateAudio, total_duration_s: totalDuration,
-      start_frame: textToVideo ? null : (job.first_frame ?? (startFrame ? `seam:${path.basename(startFrame)}` : null)),
-      elements: textToVideo ? [] : groups.map((g, i) => ({ ref: `@Element${i + 1}`, character: g.name, images: g.els.map((e) => e.id), voice_id: getVoiceId(g.name) ?? null })),
-      segments,
-    }, null, 2));
-  } catch { /* sidecar best-effort */ }
+  // Effective prompts/elements → sidecar for review. Normalized to the SEEDANCE SUPERSET (schema:2)
+  // so one reader serves both renderers, while every key Kling wrote before is still here.
+  const elementLegend = textToVideo ? [] : groups.map((g, i) => ({ ref: `@Element${i + 1}`, character: g.name, images: g.els.map((e) => e.id), voice_id: getVoiceId(g.name) ?? null }));
+  const sidecar = {
+    job_id: job.job_id,
+    schema: 2,
+    backend, transport: 'fal', endpoint,
+    aspect_ratio: klingCfg.aspectRatio, resolution: klingCfg.resolution,
+    duration_s: totalDuration, total_duration_s: totalDuration,
+    generate_audio: !!klingCfg.generateAudio,
+    // fal's Kling endpoint takes no seed input, so the number is only ever a record of what a take
+    // WOULD have used — recorded under `seed_unused`, exactly as the Seedance sidecar does it.
+    seed: null, seed_unused: seed ?? null,
+    nonce,
+    start_frame: textToVideo ? null : (job.first_frame ?? (startFrame ? `seam:${path.basename(startFrame)}` : null)),
+    seam_in: { mode: seam.in.mode, frame: seam.in.mode === 'none' ? null : startFrameSrc, from: seamInFrom ?? null },
+    seam_out: { mode: seam.out.mode, frame: seam.out.mode === 'none' ? null : endFrameSrc, frameSource: null, to: seamOutTo ?? null },
+    image_refs: elementLegend.map((e) => ({ ref: e.ref, id: e.images[0] ?? null, character: e.character })),
+    elements: elementLegend,
+    segments,
+  };
+  const writeSidecar = () => {
+    try { fs.writeFileSync(path.join(dir, 'prompts.json'), JSON.stringify(sidecar, null, 2)); } catch { /* sidecar best-effort */ }
+  };
+  writeSidecar();
 
-  const outs = await generateKling(payload, { endpoint, destDir: dir, timeoutMs: 1200000 });
+  // `end_image_url` is documented on the model's API tab but unverified in practice, so it ships
+  // with ONE fallback: a validation rejection that NAMES it re-submits the identical payload minus
+  // that field and records the downgrade. Anything else propagates on the first attempt — fal bills
+  // per accepted submit, and a blanket retry would double the bill on every unrelated 422.
+  const submit = (body) => generateKling(body, { endpoint, destDir: dir, timeoutMs: 1200000 });
+  let outs;
+  try {
+    outs = await submit(payload);
+  } catch (e) {
+    const rejectedEndFrame = payload.end_image_url && isValidationError(e) && /end_image_url/.test(String(e?.message ?? ''));
+    if (!rejectedEndFrame) throw e;
+    log.warn(`[${job.job_id}] fal Kling rejected end_image_url (${String(e.message).slice(0, 120)}) — retrying once without the closing-frame pin; this clip's ending may jump.`);
+    const { end_image_url: _dropped, ...withoutEndFrame } = payload;
+    sidecar.seam_out.mode = 'unsupported';
+    writeSidecar();
+    outs = await submit(withoutEndFrame);
+  }
   const clip = oneMp4(outs);
   log.info(`[${job.job_id}] fal Kling clip -> ${clip}`);
-  return { jobId: job.job_id, clip, totalDuration, segments: segments.length };
+  return { jobId: job.job_id, clip, totalDuration, segments: segments.length, seamIn: sidecar.seam_in, seamOut: sidecar.seam_out, providerLastFrame: null };
 }
 
 export default { renderKlingJobFal };

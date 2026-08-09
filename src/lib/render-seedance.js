@@ -31,7 +31,8 @@ import fs from 'node:fs';
 import config from '../../config.js';
 import log from './logger.js';
 import { refLabel } from './render-models.js';
-import { buildSeedanceArgs, firstFrameIsRef, fitAudioRef, audioWindowFor, nameOf } from './seedance-args.js';
+import { buildSeedanceArgs, fitAudioRef, audioWindowFor, nameOf } from './seedance-args.js';
+import { chooseSeamMode, planSeamRefs } from './prompt-compose.js';
 import { buildSeedanceJobPrompt, seedanceConfigFor, modelKnobs } from './seedance.js';
 import { characterGroups, jobSpeakers } from './cast-groups.js';
 import { resolveImage } from './elements.js';
@@ -109,13 +110,19 @@ async function audioRefsFor(job, spec, dir, caps) {
 
 /**
  * Render ONE Seedance job → a single mp4 under <runDir>/<job_id>/.
- * `startFrame` (optional): the previous job clip's last frame, passed by pipeline.renderSpec for
- * cross-job seam continuity, used unless the job authors its own first_frame.
- * @param {object} params  { job, spec, runDir, seed, lowRes, startFrame, nonce, feedback }
+ * `startFrame` / `endFrame` (optional): the boundary frames pipeline.renderSpec hands over for seam
+ * continuity — the previous clip's last frame and (for a frame-conditioned re-render) the next
+ * clip's first frame. An authored job.first_frame / job.last_frame wins over either. How they are
+ * APPLIED is chooseSeamMode's call, never this file's.
+ * `feedsNext`: a job whose clip another segment opens on — the only case where it is worth asking a
+ * provider for its own closing still (`return_last_frame`).
+ * `seamInFrom` / `seamOutTo`: the lineage pointers ({take, job, clip}) the caller already knows.
+ * @param {object} params  { job, spec, runDir, seed, lowRes, startFrame, endFrame, feedsNext, nonce, feedback }
  * @param {{caps:object, adapter:{assetUrl:Function, generate:Function}}} deps
- * @returns {Promise<{jobId:string, clip:string, totalDuration:number, segments:number}>}
+ * @returns {Promise<{jobId:string, clip:string, totalDuration:number, segments:number,
+ *                    seamIn:object, seamOut:object, providerLastFrame:string|null}>}
  */
-export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = false, startFrame = null, nonce = 0, feedback = '' }, { caps, adapter }) {
+export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = false, startFrame = null, endFrame = null, feedsNext = false, seamInFrom = null, seamOutTo = null, nonce = 0, feedback = '' }, { caps, adapter }) {
   const dir = path.join(runDir, job.job_id);
   fs.mkdirSync(dir, { recursive: true });
   const sdCfg = seedanceConfigFor(spec, caps);
@@ -138,10 +145,13 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
   }
 
   // 1. Image refs: each character group's images become flat @ImageN refs, in prompt order.
-  //    An opening frame (authored first_frame wins over the chained seam frame) takes the LAST
-  //    slot on models that demote it to a ref, so one slot is held back from the model's cap.
+  //    Boundary frames (an authored first_frame/last_frame wins over the chained seam frame) are
+  //    applied the way chooseSeamMode says this model can apply them: a native anchor where one
+  //    really exists, otherwise a trailing image ref plus a prompt pin. planSeamRefs owns the
+  //    budget — at the image cap the END pin goes first, then the START pin, and only then a cast
+  //    reference, because a boundary hint is a nicety and a cast reference is the character.
   const startFrameSrc = job.first_frame || startFrame || null;
-  const maxImages = caps.maxImages - (startFrameSrc && firstFrameIsRef(caps, 1) ? 1 : 0);
+  const endFrameSrc = job.last_frame || endFrame || null;
   const groups = characterGroups(job, spec);
 
   // The combined budget (fal 2.5 takes 50 across images+audio+video, no per-kind caps) must ALSO
@@ -151,63 +161,71 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
   // the fitted voice clips (video refs are never authored today). audioRefsFor is hoisted here for
   // that count: it is local ffmpeg work (fit/transcode into the take dir), no upload — and the gate
   // mirrors section 2's (planned refs or an opening frame, audio on, non-native voiceMode).
-  const plannedImages = Math.min(groups.reduce((n, g) => n + g.els.length, 0), maxImages);
+  const plannedImages = Math.min(groups.reduce((n, g) => n + g.els.length, 0), caps.maxImages);
+  const seam = chooseSeamMode({
+    caps, castRefCount: plannedImages, hasSeamIn: !!startFrameSrc, hasSeamOut: !!endFrameSrc,
+  });
   const voiceRefs = ((plannedImages > 0 || startFrameSrc) && sdCfg.generateAudio && knobs.voiceMode !== 'native')
     ? await audioRefsFor(job, spec, dir, caps) : [];
   if (caps.maxCombinedRefs != null) {
-    const demoted = startFrameSrc && firstFrameIsRef(caps, plannedImages) ? 1 : 0;
-    const combined = plannedImages + demoted + voiceRefs.length;
+    // Only the CAST is checked here: a soft-pinned boundary frame is droppable (planSeamRefs drops
+    // it below), so counting it would fail a render that would have succeeded without its seam.
+    const combined = plannedImages + voiceRefs.length;
     if (combined > caps.maxCombinedRefs) {
       throw new Error(`${nameOf(caps)} accepts at most ${caps.maxCombinedRefs} references in total (images + audio + video) — ${combined} supplied.`);
     }
   }
 
-  const imageUrls = [];
-  const imageRefs = []; // sidecar legend
+  const castUrls = [];
+  const castMeta = [];
   const refGroups = [];
   for (const g of groups) {
     const refs = [];
     for (const e of g.els) {
-      if (imageUrls.length >= maxImages) {
+      if (castUrls.length >= caps.maxImages) {
         log.warn(`[${job.job_id}] image refs exceed ${nameOf(caps)}'s ${caps.maxImages}-image cap — dropping "${e.id}" (and any further refs).`);
         break;
       }
-      imageUrls.push(await adapter.assetUrl(resolveImage(e.image), mode));
-      refs.push(refLabel(caps, 'Image', imageUrls.length));
-      imageRefs.push({ ref: refLabel(caps, 'Image', imageUrls.length), id: e.id, character: g.name });
+      castUrls.push(await adapter.assetUrl(resolveImage(e.image), mode));
+      castMeta.push({ id: e.id, character: g.name });
+      refs.push(refLabel(caps, 'Image', castUrls.length));
     }
     refGroups.push({ name: g.name, refs });
   }
-  // The frame itself is handed to the arg builder, which places it in the native slot or appends
-  // it to the refs — `refCount` is what the prompt and the endpoint choice below must agree with.
-  let startFrameRef = null;
-  let firstFrameUrl = null;
-  let startFrameSource = null;
-  let refCount = imageUrls.length;
-  if (startFrameSrc) {
-    firstFrameUrl = await adapter.assetUrl(resolveImage(startFrameSrc), mode, { cache: false });
-    startFrameSource = job.first_frame ?? path.basename(startFrame);
-    if (firstFrameIsRef(caps, imageUrls.length)) {
-      refCount += 1;
-      startFrameRef = refLabel(caps, 'Image', refCount);
-      imageRefs.push({ ref: startFrameRef, id: job.first_frame ? 'first_frame' : 'seam', source: startFrameSource });
-    }
-  }
 
-  // An authored job.last_frame is a REAL model input where the caps have a native closing-frame
-  // slot (Segmind). Native first/last mode excludes reference images there, so it only engages on
-  // a job whose opening frame stayed native too — with cast refs in play the first frame demoted
-  // to a reference and a closing frame has no slot to ride: fail loudly, because silently ignoring
-  // an authored framing constraint delivers a paid clip that breaks it. Models with no native slot
-  // (fal Seedance) keep the long-documented behaviour: last_frame is Kling-only and is ignored.
-  let lastFrameUrl = null;
-  if (job.last_frame && caps.argMap?.lastFrame) {
-    if (firstFrameUrl && !firstFrameIsRef(caps, imageUrls.length)) {
-      lastFrameUrl = await adapter.assetUrl(resolveImage(job.last_frame), mode, { cache: false });
-    } else {
-      throw new Error(`${job.job_id}: last_frame is authored, but ${nameOf(caps)} pins a closing frame only in native first/last mode, and this job's reference images occupy it — drop the job's last_frame or its reference images.`);
-    }
-  }
+  // Upload the boundary frames only where they will actually be used, then lay out the reference
+  // list. `cache: false`: every seam file is named last_frame.png, so caching by basename would
+  // hand this job the previous one's frame.
+  const startFrameSource = startFrameSrc ? (job.first_frame ?? path.basename(startFrame ?? startFrameSrc)) : null;
+  const endFrameSource = endFrameSrc ? (job.last_frame ?? path.basename(endFrame ?? endFrameSrc)) : null;
+  const seamInUrl = seam.in.mode === 'none' ? null : await adapter.assetUrl(resolveImage(startFrameSrc), mode, { cache: false });
+  const seamOutUrl = seam.out.mode === 'none' ? null : await adapter.assetUrl(resolveImage(endFrameSrc), mode, { cache: false });
+
+  const plan = planSeamRefs({
+    caps,
+    castRefs: castUrls,
+    seamIn: seam.in.mode === 'soft' ? seamInUrl : null,
+    seamOut: seam.out.mode === 'soft' ? seamOutUrl : null,
+    otherRefCount: caps.maxCombinedRefs != null ? voiceRefs.length : 0,
+  });
+  for (const d of plan.dropped) log.warn(`[${job.job_id}] dropped the ${d.kind} reference — ${d.reason}.`);
+
+  const imageUrls = plan.imageRefs.map((r) => r.url);
+  const startFrameRef = plan.imageRefs.find((r) => r.kind === 'seamIn')?.label ?? null;
+  const endFrameRef = plan.imageRefs.find((r) => r.kind === 'seamOut')?.label ?? null;
+  // What was APPLIED, not what was wished for: a soft pin whose reference lost its slot pinned
+  // nothing, and must be recorded as no seam rather than as a promise the clip cannot keep.
+  const appliedIn = seam.in.mode === 'soft' && !startFrameRef ? 'none' : seam.in.mode;
+  const appliedOut = seam.out.mode === 'soft' && !endFrameRef ? 'none' : seam.out.mode;
+  const firstFrameUrl = appliedIn === 'native' ? seamInUrl : null;
+  const lastFrameUrl = appliedOut === 'native' ? seamOutUrl : null;
+
+  let castSeen = 0;
+  const imageRefs = plan.imageRefs.map((r) => { // sidecar legend
+    if (r.kind === 'cast') { const m = castMeta[castSeen++]; return { ref: r.label, id: m.id, character: m.character }; }
+    if (r.kind === 'seamIn') return { ref: r.label, id: job.first_frame ? 'first_frame' : 'seam', source: startFrameSource };
+    return { ref: r.label, id: job.last_frame ? 'last_frame' : 'seam_out', source: endFrameSource };
+  });
 
   // 2. Voice refs (@AudioN), only when audio is on AND voiceMode keeps the clip. In 'native' mode we
   //    attach NO clip and let the model voice the written line natively (see config.seedance.voiceMode).
@@ -230,6 +248,7 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
     refGroups,
     audioRefFor,
     startFrameRef,
+    endFrameRef,
     style: knobs.style,
     avoidClause: knobs.avoid,
     textClause: knobs.textRule,
@@ -250,15 +269,17 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
     generateAudio: sdCfg.generateAudio,
     totalDuration,
     seed,
-    // return_last_frame is deliberately NOT requested: nothing downstream consumes the provider's
-    // frame yet (seam chaining reads the ffmpeg-grabbed <job>/last_frame.png), so asking would tag
-    // every paid job with a capability no code uses. The per-joint seam-lineage work wires it up.
+    // Ask for the generator's OWN closing still only where the caps declare it AND another segment
+    // opens on this clip — the provider's pixels beat an ffmpeg re-encode of them, but tagging a
+    // paid job with a flag nobody reads is not free of consequence either.
+    returnLastFrame: (caps.supportsReturnLastFrame && feedsNext) ? true : undefined,
   }, caps);
   // No image inputs AT ALL → text-to-video (Casting attached nothing relevant); rides at probe
   // resolution too. A native-slot first frame keeps refCount at 0 but is still an image the model
   // conditions on, so it must route through the reference endpoint, not the text one.
   // A model with NO text tier (Seedance 2.5) simply keeps its ordinary endpoint — including the
   // probe variant, so a text-to-video probe still renders cheap instead of at full resolution.
+  const refCount = imageUrls.length;
   const textToVideo = refCount === 0 && !firstFrameUrl;
   const endpointKey = (textToVideo && caps.textEndpointKey)
     ? caps.textEndpointKey
@@ -270,6 +291,10 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
   const sidecarPath = path.join(dir, 'prompts.json');
   const sidecar = {
     job_id: job.job_id,
+    // schema:2 adds the seam lineage below. Continuity has to be a RECORDED FACT: knowing that a
+    // seam frame was used says nothing about WHICH CLIP it came from, and a cut that mixes take 2's
+    // K1 with take 1's K2 looks exactly like an intact chain without it.
+    schema: 2,
     backend: caps.id, // the canonical `<model>@<provider>` — same vocabulary as spec.render_backend
     // and render.json, so the sidecar answers "which MODEL produced this clip?" once two Seedance
     // models ship (the family token could not).
@@ -285,6 +310,11 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
     seed_unused: caps.supportsSeed ? null : (seed ?? null),
     nonce,
     start_frame: startFrameSrc ? startFrameSource : null,
+    // `from`/`to` name the SOURCE and DESTINATION clips, which is what the continuity rule compares
+    // against the cut. `to` (and the closing frame this job hands forward) is only knowable once the
+    // next job has rendered, so the caller re-stamps it then.
+    seam_in: { mode: appliedIn, frame: appliedIn === 'none' ? null : startFrameSrc, from: seamInFrom ?? null },
+    seam_out: { mode: appliedOut, frame: appliedOut === 'none' ? null : endFrameSrc, frameSource: null, to: seamOutTo ?? null },
     image_refs: imageRefs,
     audio_refs: voiceRefs.map((r, i) => ({ ref: refLabel(caps, 'Audio', i + 1), speaker: r.speaker, clip: r.clip })),
     prompt,
@@ -314,8 +344,14 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
     },
   });
   const clip = oneMp4(outs);
+  // The provider's own closing still, if we asked for one and it came back: it downloads straight to
+  // <job>/last_frame.png, which is the file every downstream seam reads.
+  const providerLastFrame = outs.find((p) => path.basename(p) === 'last_frame.png') ?? null;
   log.info(`[${job.job_id}] clip -> ${clip}`);
-  return { jobId: job.job_id, clip, totalDuration, segments: shotPrompts.length };
+  return {
+    jobId: job.job_id, clip, totalDuration, segments: shotPrompts.length,
+    seamIn: sidecar.seam_in, seamOut: sidecar.seam_out, providerLastFrame,
+  };
 }
 
 export default { renderSeedanceJob };

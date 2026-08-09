@@ -63,6 +63,10 @@ export function resultFileUrls(result) {
   const push = (v) => { if (v?.url) urls.push(v.url); };
   push(result?.video);
   for (const v of result?.videos ?? []) push(v);
+  // A provider that was asked for its own closing still (`return_last_frame`) returns it alongside
+  // the video. It downloads to <job>/last_frame.png — the exact file every downstream seam reads —
+  // so the generator's own pixels replace an ffmpeg re-encode of them.
+  push(result?.last_frame);
   if (typeof result?.url === 'string') urls.push(result.url);
   return urls;
 }

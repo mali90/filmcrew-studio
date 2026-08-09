@@ -250,7 +250,7 @@ function jobSpeakers(job, spec, audioOn) {
  * the byte clamp — and it is exactly what a user's prompt edit may NOT spend (see pinBytesOf).
  */
 function seedanceFrontMatter(job, spec, settings, opts = {}) {
-  const { refGroups = [], audioRefFor = null, startFrameRef = null, feedback = '', nonce = 0 } = opts;
+  const { refGroups = [], audioRefFor = null, startFrameRef = null, endFrameRef = null, feedback = '', nonce = 0 } = opts;
   const audioOn = !!settings?.audioOn;
   const style = String(settings?.style ?? '').trim();
   const identity = identityClause(refGroups);
@@ -278,7 +278,10 @@ function seedanceFrontMatter(job, spec, settings, opts = {}) {
     speakRule,
     note ? `Director note: ${note}` : '',
     n > 0 ? `Alternate take ${n}: vary the staging, camera framing, and timing from the previous take while keeping the same story, characters, and shots.` : '',
-    startFrameRef ? `Use ${startFrameRef} as the literal first frame of this clip and continue its motion seamlessly forward.` : '',
+    startFrameRef ? seamPinSentence(startFrameRef, 'in') : '',
+    // The closing pin comes AFTER the opening one, always — planSeamRefs emits its sentences in the
+    // same order, so a prompt built from either path reads identically.
+    endFrameRef ? seamPinSentence(endFrameRef, 'out') : '',
   ].filter(Boolean).join(' ') + lipSync;
 }
 
@@ -292,6 +295,7 @@ function seedanceFrontMatter(job, spec, settings, opts = {}) {
  *   refGroups?: {name:string, refs:string[]}[],   // character → its @ImageN labels, prompt order (from the renderer)
  *   audioRefFor?: (speaker:string) => string|null,// speaker → its @AudioN label (uploaded voice ref), or null
  *   startFrameRef?: string|null,                  // the seam/authored first frame's @ImageN → prompt-pins the opening frame
+ *   endFrameRef?: string|null,                    // the seam/authored last frame's @ImageN → prompt-pins the closing frame
  *   feedback?: string,                            // free-form director note (regen feedback)
  *   nonce?: number,                               // >0 → "Alternate take N" variation directive (Seedance accepts no seed)
  *   shotSyntax?: 'connectors'|'numbered',         // how the model wants shots joined (caps.shotSyntax; default 'connectors')

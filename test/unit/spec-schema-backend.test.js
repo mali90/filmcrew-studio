@@ -183,16 +183,15 @@ test('ASPECTS is the numeric superset — no adaptive/auto, and the schema accep
   assert.match(v.errors.join('\n'), /aspect_ratio "5:4"/);
 });
 
-// The opening-frame slot (codex P1): on a chained multi-job Seedance render, every job after the
-// first receives the previous clip's last frame INSIDE the same image budget — as does any job
-// with an authored first_frame. Without a reserved slot here, a max-ref job validates and the
-// renderer then silently drops one PAID identity reference. Kling is untouched: its start frame is
-// a native param, not an element slot.
-test('Seedance reserves one image slot for the opening/seam frame; Kling does not', () => {
+// The opening-frame slot (WS2-P1): a boundary frame that has to travel as a reference is a SOFT
+// pin, and SEAM_PRIORITY drops the closing pin, then the opening one, before it drops a single
+// identity reference. So the CAST gets the whole image budget — reserving a slot up front would
+// reject a legal max-cast job to protect a hint the renderer is willing to lose.
+test('the cast gets the whole image budget — a droppable seam pin never reserves a slot', () => {
   const max = SEEDANCE_CAPS.MAX_IMAGE_REFS;
   const spec = loadGoldenSpec();
   const [s1, s2] = spec.shots;
-  assert.ok(s2, 'fixture needs at least two shots');
+  assert.ok(s2, 'the fixture needs at least two shots');
   spec.shots = [s1, s2];
   s1.duration_s = 5;
   s2.duration_s = 5;
@@ -205,45 +204,29 @@ test('Seedance reserves one image slot for the opening/seam frame; Kling does no
     { job_id: 'K2', shots: [s2.shot_id], elements: ids.slice() },
   ];
 
-  const v = validateSpec(spec, { backend: 'seedance' });
-  assert.equal(v.ok, false);
-  const errs = v.errors.join('\n');
-  // jobs after the first: the seam frame owns one of the slots…
-  assert.match(errs, new RegExp(`kling\\.jobs\\[1\\]: ${max} elements exceeds the ${max - 1}-reference budget`));
-  assert.match(errs, /reserved for this job's opening\/seam frame/);
-  // …but the FIRST job (no authored first_frame) may use the full cap.
-  assert.ok(!errs.includes('kling.jobs[0]:'), 'job 0 without first_frame keeps the full cap');
-
-  // An authored first_frame reserves the slot on job 0 too.
+  // A full cast on EVERY job is legal, seam chaining and all: at render time the seam pin is what
+  // gives way, not a paid identity reference.
+  assert.equal(validateSpec(spec, { backend: 'seedance' }).ok, true, 'max cast + a chained seam is legal');
   spec.kling.jobs[0].first_frame = 'first-frame/open.png';
-  const v2 = validateSpec(spec, { backend: 'seedance-2.0@fal' });
-  assert.match(v2.errors.join('\n'), new RegExp(`kling\\.jobs\\[0\\]: ${max} elements exceeds the ${max - 1}-reference budget`));
+  spec.kling.jobs[0].last_frame = 'last-frame/close.png';
+  assert.equal(validateSpec(spec, { backend: 'seedance-2.0@fal' }).ok, true, 'authored boundary frames reserve nothing either');
 
-  // Dropping to the budget passes.
-  spec.kling.jobs = spec.kling.jobs.map((j) => ({ ...j, elements: ids.slice(0, max - 1) }));
-  assert.equal(validateSpec(spec, { backend: 'seedance' }).ok, true);
+  // One reference OVER the model's cap is still a spec error — that one is not droppable.
+  spec.kling.elements = Array.from({ length: max + 1 }, (_, i) => ({ ...tpl, id: `ref-${i}` }));
+  spec.kling.jobs = spec.kling.jobs.map((j) => ({ ...j, elements: spec.kling.elements.map((e) => e.id) }));
+  const over = validateSpec(spec, { backend: 'seedance' });
+  assert.equal(over.ok, false);
+  assert.match(over.errors.join('\n'), new RegExp(`kling\\.jobs\\[0\\]: ${max + 1} elements exceeds the ${max}-reference cap`));
 
   // An OMITTED job.elements inherits the whole roster at render time (characterGroups), so a
-  // 9-entry roster with empty per-job lists is nine uploads per job — the budget must see them.
-  spec.kling.elements = Array.from({ length: max }, (_, i) => ({ ...tpl, id: `ref-${i}` }));
+  // 10-entry roster with empty per-job lists is ten uploads per job — the budget must see them.
   spec.kling.jobs = [
     { job_id: 'K1', shots: [s1.shot_id] },
     { job_id: 'K2', shots: [s2.shot_id] },
   ];
   const vr = validateSpec(spec, { backend: 'seedance' });
   assert.equal(vr.ok, false);
-  assert.match(vr.errors.join('\n'), /kling\.jobs\[1\]: 9 roster refs .*exceeds the 8-reference budget/);
-
-  // With seam chaining DISABLED (KLING_CHAIN_FRAMES=false, threaded by every render/engine caller),
-  // later jobs receive no seam frame, so the full cap is legal again — but an authored first_frame
-  // still consumes its slot.
-  spec.kling.jobs = spec.kling.jobs.map((j) => ({ ...j, elements: ids.slice() }));
-  delete spec.kling.jobs[0].first_frame;
-  assert.equal(validateSpec(spec, { backend: 'seedance', chainFrames: false }).ok, true,
-    'chaining off — no seam, no reservation');
-  spec.kling.jobs[1].first_frame = 'first-frame/open.png';
-  const v3 = validateSpec(spec, { backend: 'seedance', chainFrames: false });
-  assert.match(v3.errors.join('\n'), new RegExp(`kling\\.jobs\\[1\\]: ${max} elements exceeds the ${max - 1}-reference budget`));
+  assert.match(vr.errors.join('\n'), new RegExp(`kling\\.jobs\\[1\\]: ${max + 1} roster refs .*exceeds the ${max}-reference cap`));
 });
 
 // Backend-less caps precedence (codex round 4): a persisted spec is judged by ITS OWN backend, and

@@ -8,7 +8,7 @@ import config, { resolvePath } from '../../config.js';
 import log from './logger.js';
 import { ensureDir, writeJson, readJson, slug } from './util.js';
 import { validateSpec } from './spec-schema.js';
-import { BACKEND_IDS, LEGACY_BACKENDS, capsFor, demotesOpeningFrame, normalizeBackend } from './render-models.js';
+import { BACKEND_IDS, LEGACY_BACKENDS, capsFor, normalizeBackend } from './render-models.js';
 import { renderKlingJobFal } from './fal-kling.js';
 import { falAdapter } from './fal-seedance.js';
 import { segmindAdapter } from './segmind-seedance.js';
@@ -80,6 +80,43 @@ export function downstreamJobs(spec, jobId) {
   return jobs.slice(idx + 1).map((j) => j.job_id);
 }
 
+/**
+ * Merge a patch into ONE job's `seam_out` block in its prompts.json. The renderer writes the sidecar
+ * before its own clip exists, so the closing frame it hands forward — and the clip that opens on it —
+ * can only be stamped once the NEXT job has rendered. Best-effort: the sidecar is a review artifact,
+ * never a render input, and a run must not fail because it could not be updated.
+ */
+function stampSeamOut(runDir, jobId, patch) {
+  const file = path.join(runDir, jobId, 'prompts.json');
+  try {
+    const sidecar = JSON.parse(fs.readFileSync(file, 'utf8'));
+    sidecar.seam_out = { ...(sidecar.seam_out ?? {}), ...patch };
+    fs.writeFileSync(file, JSON.stringify(sidecar, null, 2));
+  } catch { /* the sidecar is best-effort */ }
+}
+
+/**
+ * The closing frame a job hands to the next one. The PROVIDER's own still (asked for with
+ * `return_last_frame`) is the exact image the next segment should open on; an ffmpeg grab is a
+ * re-encode of it, so it is the fallback, not the default. Recorded either way — a seam whose
+ * provenance is unknown cannot be reasoned about later.
+ * @returns {Promise<{frame:string|null, frameSource:'provider'|'ffmpeg'|null}>}
+ */
+async function closingFrameFor(result, runDir, jobId) {
+  if (result.providerLastFrame && fs.existsSync(result.providerLastFrame)) {
+    return { frame: result.providerLastFrame, frameSource: 'provider' };
+  }
+  const frame = await lastFrameOf(result.clip, path.join(runDir, jobId, 'last_frame.png'));
+  return { frame, frameSource: frame ? 'ffmpeg' : null };
+}
+
+/** Where a seam frame really came from: the source take's own record of that job's clip. */
+async function seamSourceFor(takeDir, jobId) {
+  const prior = await readJson(path.join(takeDir, 'render.json')).catch(() => null);
+  const rec = (prior?.jobs ?? []).find((j) => (j.jobId ?? j.job) === jobId);
+  return { take: path.basename(takeDir), job: jobId, clip: rec?.clip ?? null };
+}
+
 /** First free `<dir>/<base>.mp4`, then `<base>-2.mp4`, `<base>-3.mp4`, … — masters are never overwritten. */
 export function uniqueOutPath(dir, base) {
   for (let n = 1; ; n++) {
@@ -96,9 +133,7 @@ export function uniqueOutPath(dir, base) {
  */
 export async function renderSpec(spec, { runDir, probe = false, upscale = false, backend, take, outName } = {}) {
   const be = resolveBackend(spec, backend);
-  // A probe renders only the first job and never chains (see `chain` below), so no downstream job
-  // holds a seam slot in that mode — reserving one would reject a legal max-ref later job.
-  const v = validateSpec(spec, { upTo: 7, backend: be, chainFrames: Boolean(config.kling.chainFrames) && !probe });
+  const v = validateSpec(spec, { upTo: 7, backend: be });
   if (!v.ok) throw new Error(`Spec failed validation:\n - ${v.errors.join('\n - ')}`);
   ensureDir(runDir);
   await writeJson(path.join(runDir, 'spec.json'), spec);
@@ -118,19 +153,34 @@ export async function renderSpec(spec, { runDir, probe = false, upscale = false,
   const chain = config.kling.chainFrames && !probe && toRender.length > 1 && !textToVideoKling;
   if (textToVideoKling && !probe && toRender.length > 1) log.info('Kling text-to-video render — seam-chaining disabled (no reference frame); jobs render independently.');
   const results = [];
+  const takeId = path.basename(runDir); // the lineage's "which take did this frame come from?"
   let startFrame; // previous job clip's last frame; undefined for the first job (unchanged behavior)
-  for (const job of toRender) {
+  let prev = null; // the previous job's { jobId, clip } — the SOURCE the next seam records
+  for (const [i, job] of toRender.entries()) {
     const seed = seedForJob(jobs.findIndex((j) => j.job_id === job.job_id), take ?? 0);
-    const r = await RENDERERS[be].render({ job, spec, runDir, seed, lowRes: probe, startFrame, nonce: take ?? 0 })
+    const feedsNext = chain && i < toRender.length - 1;
+    const seamInFrom = startFrame && prev ? { take: takeId, job: prev.jobId, clip: prev.clip } : null;
+    const r = await RENDERERS[be].render({ job, spec, runDir, seed, lowRes: probe, startFrame, feedsNext, seamInFrom, nonce: take ?? 0 })
       .catch((e) => { log.error(`[${job.job_id}] failed: ${e.message}`); return { jobId: job.job_id, error: e.message }; });
     results.push(r);
+    // The previous job's sidecar was written before THIS clip existed: stamp where its closing frame
+    // actually went, so the recorded chain names both ends of every joint.
+    if (prev && r.clip) {
+      const to = { take: takeId, job: job.job_id, clip: r.clip };
+      const p = results.find((x) => x.jobId === prev.jobId);
+      if (p?.seamOut) p.seamOut.to = to;
+      stampSeamOut(runDir, prev.jobId, { to });
+    }
     startFrame = undefined;
     if (chain && r.clip) {
-      const png = path.join(runDir, job.job_id, 'last_frame.png');
-      startFrame = await lastFrameOf(r.clip, png);
-      if (startFrame) log.info(`[${job.job_id}] seam frame -> ${startFrame} (start of next job)`);
+      const { frame, frameSource } = await closingFrameFor(r, runDir, job.job_id);
+      startFrame = frame;
+      if (r.seamOut) { r.seamOut.frame = frame ?? r.seamOut.frame; r.seamOut.frameSource = frameSource; }
+      stampSeamOut(runDir, job.job_id, { frame, frameSource });
+      if (startFrame) log.info(`[${job.job_id}] seam frame -> ${startFrame} (${frameSource}; start of next job)`);
       else log.warn(`[${job.job_id}] could not extract last frame for seam continuity; the next job starts fresh.`);
     }
+    prev = r.clip ? { jobId: job.job_id, clip: r.clip } : null;
   }
   // `chained` is the seam lineage the assembler needs: with it, adjacent clips share a boundary frame
   // and can be stitched seamlessly instead of hard-cut (src/lib/seamstitch.js readContinuity).
@@ -159,11 +209,9 @@ export async function renderSpec(spec, { runDir, probe = false, upscale = false,
  */
 export async function renderJob(spec, jobId, { runDir, backend, take = 0, feedback, seamFrom, lowRes = false } = {}) {
   const be = resolveBackend(spec, backend);
-  // Structural pass first, with NO seam assumed (chainFrames:false is the permissive reading): a
-  // single-job re-render supplies an opening frame only when --seam-from resolves, so a 9-ref job
-  // must not be rejected for a seam slot this invocation may never fill — and an invalid spec must
-  // fail with the full validation report, not a job-lookup error.
-  const v = validateSpec(spec, { upTo: 7, backend: be, chainFrames: false });
+  // Structural pass first, so an invalid spec fails with the full validation report rather than a
+  // job-lookup error.
+  const v = validateSpec(spec, { upTo: 7, backend: be });
   if (!v.ok) throw new Error(`Spec failed validation:\n - ${v.errors.join('\n - ')}`);
   const jobs = spec.kling.jobs;
   const idx = jobs.findIndex((j) => j?.job_id === jobId);
@@ -173,37 +221,40 @@ export async function renderJob(spec, jobId, { runDir, backend, take = 0, feedba
   // Seam in: an authored job.first_frame wins inside the renderer; else chain from the previous
   // job's last frame in a prior render dir, exactly like renderSpec's in-sequence chaining.
   let startFrame = null;
+  let seamInFrom = null;
   if (config.kling.chainFrames && idx > 0 && seamFrom) {
-    const cand = path.join(resolvePath(seamFrom), jobs[idx - 1].job_id, 'last_frame.png');
-    if (fs.existsSync(cand)) startFrame = cand;
-    else log.warn(`no seam frame at ${cand} — rendering ${jobId} without cross-job continuity`);
+    const srcDir = resolvePath(seamFrom);
+    const cand = path.join(srcDir, jobs[idx - 1].job_id, 'last_frame.png');
+    if (fs.existsSync(cand)) {
+      startFrame = cand;
+      // WHICH take's clip this frame came off is the whole point: a cut that mixes take 2's K1 with
+      // take 1's K2 is indistinguishable from an intact chain without it.
+      seamInFrom = await seamSourceFor(srcDir, jobs[idx - 1].job_id);
+    } else log.warn(`no seam frame at ${cand} — rendering ${jobId} without cross-job continuity`);
   }
 
-  // A seam frame WAS resolved: it takes one of the TARGET job's image slots on models that demote
-  // it to a reference, so re-check just that job's budget (other jobs are not rendered by this
-  // invocation — a whole-spec re-validation would reject them for seams nobody is supplying).
-  const caps = capsFor(be);
-  if (startFrame && !job.first_frame && caps.family === 'seedance' && demotesOpeningFrame(caps)) {
-    // An omitted/empty job.elements inherits the WHOLE roster (characterGroups), so count that.
-    const refs = job.elements?.length ? job.elements.length : (spec.kling.elements?.length ?? 0);
-    if (refs > caps.maxImages - 1) {
-      throw new Error(`${jobId} carries ${refs} element refs, but the seam frame from --seam-from takes 1 of ${caps.label}'s ${caps.maxImages} image slots — drop a reference or render without --seam-from (a visible cut).`);
-    }
-  }
+  // No budget re-check here any more: a seam frame that has to ride as a reference is a soft pin,
+  // and planSeamRefs gives it up before it gives up a paid identity reference.
   ensureDir(runDir);
   await writeJson(path.join(runDir, 'spec.json'), spec);
 
+  const staleDownstream = downstreamJobs(spec, jobId);
+
   log.step(`Render job — ${jobId} — ${RENDERERS[be].label}${take ? ` [take ${take}]` : ''}`);
-  const r = await RENDERERS[be].render({ job, spec, runDir, seed: seedForJob(idx, take), lowRes, startFrame, nonce: take, feedback });
+  const r = await RENDERERS[be].render({
+    job, spec, runDir, seed: seedForJob(idx, take), lowRes, startFrame, seamInFrom,
+    feedsNext: config.kling.chainFrames && staleDownstream.length > 0, nonce: take, feedback,
+  });
 
   // Seam out: refresh THIS job's last frame so downstream jobs can chain from the new take.
-  // lastFrameOf never throws — it returns null on failure, so check the value, not a catch.
+  // closingFrameFor never throws — a failed grab returns null, so check the value, not a catch.
   if (config.kling.chainFrames) {
-    const seamPng = await lastFrameOf(r.clip, path.join(runDir, job.job_id, 'last_frame.png'));
-    if (!seamPng) log.warn(`could not extract ${jobId}'s last frame — downstream jobs will chain from the PREVIOUS take's seam.`);
+    const { frame, frameSource } = await closingFrameFor(r, runDir, job.job_id);
+    if (r.seamOut) { r.seamOut.frame = frame ?? r.seamOut.frame; r.seamOut.frameSource = frameSource; }
+    stampSeamOut(runDir, job.job_id, { frame, frameSource });
+    if (!frame) log.warn(`could not extract ${jobId}'s last frame — downstream jobs will chain from the PREVIOUS take's seam.`);
   }
 
-  const staleDownstream = downstreamJobs(spec, jobId);
   if (staleDownstream.length) {
     log.warn(`Seam note: ${staleDownstream.join(', ')} chained from the previous ${jobId} take — re-render them too for a continuous seam.`);
   }
@@ -286,7 +337,9 @@ export async function finishRender(spec, results, { runDir, upscale = false, bac
   try { const d = await probeDims(master); masterShortSide = Math.min(d.width, d.height); } catch { /* estimate-only field */ }
   // `chained` must survive this rewrite of render.json, or re-finishing the run later (assembleRun)
   // would forget the seam lineage and silently downgrade to a hard-cut stitch.
-  const summary = { runDir, project: spec.project.title, backend: backend ?? null, master, cover, masterShortSide, chained, stitch, jobs: results.map((r) => ({ job: r.jobId, clip: r.clip, error: r.error })) };
+  // The seam LINEAGE must survive this rewrite too — it is the only record of which clip each
+  // segment really continues from, and re-deriving it later is exactly the guess P2 exists to end.
+  const summary = { runDir, project: spec.project.title, backend: backend ?? null, master, cover, masterShortSide, chained, stitch, jobs: results.map((r) => ({ jobId: r.jobId, job: r.jobId, clip: r.clip, error: r.error, seamIn: r.seamIn ?? null, seamOut: r.seamOut ?? null })) };
   await writeJson(path.join(runDir, 'render.json'), summary);
   log.info(`\n✅ Master: ${master}  (${clipPaths.length} job clip(s), ${stitch.stitcher === 'seamless' ? `seamless stitch, ${stitch.matched}/${stitch.joints} joint(s) colour-matched` : 'hard-cut stitch'})`);
   return { runDir, master, cover, masterShortSide, stitch, jobs: results };
@@ -304,7 +357,9 @@ export async function assembleRun(runDir, { upscale = false, outName, continuity
     throw new Error(`No render found under ${base} — expected spec.json + render.json (here or in ./render). Run a render or --probe first.`);
   }
   const { dir, spec, render } = found;
-  const results = (render.jobs ?? []).map((j) => ({ jobId: j.jobId ?? j.job, clip: j.clip, error: j.error }));
+  // Re-derived by hand from render.json — every field finishRender writes back has to be carried
+  // here, or a re-finish silently forgets it (the seam lineage most of all).
+  const results = (render.jobs ?? []).map((j) => ({ jobId: j.jobId ?? j.job, clip: j.clip, error: j.error, seamIn: j.seamIn ?? null, seamOut: j.seamOut ?? null }));
   if (!results.some((r) => r.clip)) throw new Error(`No clip paths recorded in ${path.join(dir, 'render.json')} — nothing to assemble.`);
   log.step(`Assemble — "${spec.project?.title ?? 'video'}" from ${dir} (no re-render)`);
   return finishRender(spec, results, { runDir: dir, upscale, backend: render.backend ?? spec.render_backend ?? null, outName, chained: render.chained === true, continuity });
