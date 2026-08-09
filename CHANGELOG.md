@@ -3,6 +3,20 @@
 ## Unreleased
 
 ### Added
+- **A delivered run can be reopened for changes — and until it is, the server itself refuses to
+  spend on it.** Approving used to lock a run in the interface only: a stale tab, a second browser
+  window, or a double-click that landed just after the approval still reached `POST /render` and
+  billed you against a film you already had. `render`, `revise`, `rerender-job` and `assemble` now
+  refuse a finalized run outright — 409, no child spawned, nothing submitted — with a message that
+  names the way forward instead of just saying no. `POST /api/runs/:id/reopen` is that way forward:
+  it moves one timestamp and deletes nothing. **Your delivered file stays exactly where it is**, and
+  stays the run's linked final until a newer approval supersedes it; every delivery is kept in the
+  manifest's `finals` history with the id of whatever replaced it, so a second approval writes a new
+  file *beside* the first and never over it. A reopened run reads as `review` again — "complete"
+  now means the approval is newer than the last reopen — so the ordinary render/revise/re-render
+  path simply works again. Reopening is refused while a paid upscale is still running (that job is
+  writing the very file being delivered) and on a run that was never approved. The reopen itself
+  costs nothing at all: one line written to the run's manifest, no render, no model call.
 - **Re-rendering one segment now shows you what it will do to its two joins, in plain words, before
   it spends anything.** Picking a clip in the review strip (or the rail's *Re-render one segment*
   row — both open the same dialog and post to the same endpoint) shows the neighbour it would start

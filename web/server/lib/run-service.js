@@ -7,7 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { newManifest, writeManifest, readManifest, updateManifest } from './web-manifest.js';
-import { scanRun, listRuns, defaultIsAlive } from './run-scan.js';
+import { scanRun, listRuns, defaultIsAlive, finalizedFinal } from './run-scan.js';
 import { createRingLog } from './ring-log.js';
 import { watchRun } from './artifact-watch.js';
 import { estimateRender, readProbeResolution, readRenderResolution, readUpscaleProvider } from './estimator.js';
@@ -253,10 +253,9 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     if (kind === 'upscale') { // approve's paid tail: the upscaled re-assembly is the final
       const chosenCut = pendingApprove.get(runId) ?? null; // the cut approve() upscaled (null ⇒ latest, the default)
       pendingApprove.delete(runId);
-      updateManifest(dir, (m) => {
-        m.approved = { cut: chosenCut ?? m.cuts.at(-1)?.id ?? null, final: result.master ?? null, upscaled: true, ...stitchFields(result), at: now().toISOString() };
-        return m;
-      });
+      updateManifest(dir, (m) => recordFinal(m, {
+        cut: chosenCut ?? m.cuts.at(-1)?.id ?? null, final: result.master ?? null, upscaled: true, ...stitchFields(result), at: now().toISOString(),
+      }));
       return;
     }
   }
@@ -520,7 +519,84 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     }
   }
 
+  /**
+   * A DELIVERED run does no more work until it is deliberately reopened (WS2-P6). The UI hides the
+   * spend buttons after an approval, but that is presentation: a stale tab, a second browser or a
+   * curl still reach these endpoints, and every one of them either spends money or rewrites the
+   * plan behind a file the user already has. Ordered BEFORE assertNoSpendInFlight everywhere,
+   * because a finalized run has no in-flight spend to report — "reopen it" is the honest answer.
+   */
+  function assertNotFinalized(runId) {
+    const final = finalizedFinal(readManifest(dirFor(runId)));
+    if (final && fs.existsSync(final)) {
+      throw Object.assign(new Error('this run is finalized — its final file is delivered'), {
+        statusCode: 409, hint: 'reopen this run to make changes (the delivered file stays on disk)',
+      });
+    }
+  }
+
+  /**
+   * Reopen a delivered run so it can be changed again. Nothing is deleted and nothing is unlinked:
+   * `approved` (and the file it points at) stays exactly where it is until a new approval supersedes
+   * it — only `reopenedAt` moves, and that is what returns the run to review and lifts the guard.
+   */
+  function reopen(runId) {
+    const dir = dirFor(runId);
+    const m = readManifest(dir);
+    if (!m) throw Object.assign(new Error('not a web run'), { statusCode: 409, hint: 'CLI-created runs are driven from the terminal' });
+    // An upscale is the paid tail of an approval, still writing the file being delivered — reopening
+    // mid-flight would strand it. Any other paid lane job gets the same refusal for the same reason.
+    const spend = liveJobsFor(runId).find((j) => j.lane === 'spend');
+    if (spend) {
+      throw Object.assign(new Error(`a paid ${spend.kind} is still ${spend.startedAt ? 'running' : 'queued'} for this run — reopening now would strand it`), {
+        statusCode: 409, hint: 'wait for it to finish (or cancel it), then reopen',
+      });
+    }
+    const final = finalizedFinal(m);
+    if (!final) {
+      throw Object.assign(
+        new Error(m.approved ? 'this run is already open for changes' : 'this run was never finalized'),
+        { statusCode: 409, hint: m.approved ? 'nothing is locked — render, revise or re-render as usual' : 'reopening is for delivered runs; approve a cut first' },
+      );
+    }
+    const at = now().toISOString();
+    updateManifest(dir, (mm) => {
+      mm.reopenedAt = at;
+      // takes-adjacent lifecycle marker, for the History panel to list beside takes/cuts/revisions
+      mm.history = Array.isArray(mm.history) ? mm.history : [];
+      mm.history.push({ id: `reopen-${mm.history.filter((h) => h?.kind === 'reopen').length + 1}`, kind: 'reopen', final, at });
+      mm.lastError = null;
+      return mm;
+    });
+    emitStatus(runId);
+    return { reopenedAt: at, final };
+  }
+
+  /**
+   * Record a delivery in `finals` and make it the current `approved`. The history is append-only:
+   * the entry it supersedes keeps its own file path and gains `replacedBy`, so "where did the first
+   * final go?" is always answerable — nothing on disk is touched. An approval recorded before
+   * `finals` existed is backfilled here, the one moment we know it is about to be superseded.
+   */
+  function recordFinal(m, approved) {
+    m.finals = Array.isArray(m.finals) ? m.finals : [];
+    const entry = (rec) => ({ id: `final-${m.finals.length + 1}`, cut: rec.cut ?? null, final: rec.final, upscaled: !!rec.upscaled, at: rec.at ?? null });
+    const prev = m.approved;
+    if (prev?.final && !m.finals.some((f) => f.final === prev.final && f.at === prev.at)) m.finals.push(entry(prev));
+    // A delivery with no file is a broken approval, not a delivery — it replaces nothing and is not
+    // history (`approved` still records it, exactly as it did before this existed).
+    if (approved.final) {
+      const superseded = m.finals.at(-1);
+      const row = entry(approved);
+      if (superseded) superseded.replacedBy = row.id;
+      m.finals.push(row);
+    }
+    m.approved = approved;
+    return m;
+  }
+
   function render(runId, { mode }) {
+    assertNotFinalized(runId);
     const dir = dirFor(runId);
     const spec = readJson(path.join(dir, 'spec.json'));
     if (!spec) throw Object.assign(new Error('this run has no plan yet'), { statusCode: 409, hint: 'wait for planning to finish (or revise it) before rendering' });
@@ -556,6 +632,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
   }
 
   function revise(runId, { feedback, scope }) {
+    assertNotFinalized(runId);
     const dir = dirFor(runId);
     if (!fs.existsSync(path.join(dir, 'spec.json'))) {
       throw Object.assign(new Error('this run has no plan to revise'), { statusCode: 409, hint: 'planning must finish once before a revision' });
@@ -581,6 +658,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
   }
 
   function rerenderJob(runId, { jobId, cascade = false, feedback, take, boundaries = 'auto' }) {
+    assertNotFinalized(runId);
     const dir = dirFor(runId);
     const spec = readJson(path.join(dir, 'spec.json'));
     if (!spec) throw Object.assign(new Error('this run has no plan yet'), { statusCode: 409, hint: 'plan before rendering' });
@@ -660,6 +738,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
   }
 
   function assemble(runId, { composition } = {}) {
+    assertNotFinalized(runId);
     const dir = dirFor(runId);
     if (composition) {
       const spec = readJson(path.join(dir, 'spec.json'));
@@ -722,10 +801,9 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
       throw Object.assign(new Error('nothing to approve — no assembled master exists'), { statusCode: 409, hint: 'render and let the stitch finish first (assemble is free)' });
     }
     if (!upscale) {
-      const m = updateManifest(dir, (mm) => {
-        mm.approved = { cut: chosen?.id ?? mm.cuts.at(-1)?.id ?? null, final: master, upscaled: false, at: now().toISOString() };
-        return mm;
-      });
+      const m = updateManifest(dir, (mm) => recordFinal(mm, {
+        cut: chosen?.id ?? mm.cuts.at(-1)?.id ?? null, final: master, upscaled: false, at: now().toISOString(),
+      }));
       emitStatus(runId);
       return { final: m.approved.final, queued: null };
     }
@@ -808,7 +886,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
   }
 
   return {
-    onEvent, createRun, plan, render, revise, reviseForContentPolicy, rerenderJob, assemble, approve, cancel, dismissError, detail,
+    onEvent, createRun, plan, render, revise, reviseForContentPolicy, rerenderJob, assemble, approve, reopen, cancel, dismissError, detail,
     promptOverrideChanged,
     list: () => listRuns(runsDir, { isAlive }).map(withLiveStatus),
     ringFor, dirFor,

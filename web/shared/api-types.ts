@@ -60,6 +60,16 @@ export interface Manifest {
   // estUsd is null there because the figure is unknown, not because the step was free.
   costLedger: { ts: string; action: string; estUsd: number | null; unpriced?: boolean; note: string }[];
   approved: { cut: string | null; final: string; upscaled: boolean; stitcher?: 'seamless' | 'concat'; joints?: number; matched?: number; at: string } | null;
+  // Delivery lifecycle (WS2-P6), all three ADDITIVE — absent on every run delivered before it
+  // existed, and absence means "never reopened, no history", never an error.
+  /** When the user reopened a delivered run to make changes. The run is delivered again only once
+   *  `approved.at` is newer than this; until then it is back in review and spending is unlocked. */
+  reopenedAt?: string | null;
+  /** Every delivery this run has made, oldest first. `replacedBy` names the entry that superseded
+   *  it — the file itself is never deleted, so an older final stays downloadable. */
+  finals?: { id: string; cut: string | null; final: string; upscaled: boolean; at: string; replacedBy?: string }[];
+  /** Lifecycle markers for the History panel to list beside takes/cuts/revisions (so far: reopens). */
+  history?: { id: string; kind: 'reopen'; final?: string; at: string }[];
   lastError: RunError | null;
   activeJob: { kind: ActionKind; pid: number; startedAt: string; queueId?: string } | null;
   jobClips?: Record<string, string>;

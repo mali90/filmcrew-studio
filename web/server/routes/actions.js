@@ -51,6 +51,14 @@ export function registerActionRoutes(app) {
     return r.queued ? reply.code(202).send(r) : r; // 202 = paid upscale queued; 200 = recorded instantly
   });
 
+  // Reopen a delivered run so it can be changed again — the front door for the finalize guard every
+  // spending action above now enforces. Free: it moves one timestamp in the manifest and deletes
+  // nothing (the delivered file stays on disk, and stays linked until a new approval supersedes it).
+  app.post('/api/runs/:id/reopen', async (req) => {
+    guard(req);
+    return svc.reopen(req.params.id);
+  });
+
   app.post('/api/runs/:id/cancel', async (req) => {
     guard(req);
     return { cancelled: svc.cancel(req.params.id) };

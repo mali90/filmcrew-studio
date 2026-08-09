@@ -56,7 +56,7 @@ test.after(async () => { await app.close(); await fal.close(); fs.rmSync(tmpRoot
 
 const get = (url) => app.inject({ method: 'GET', url });
 const post = (url, payload) => app.inject({ method: 'POST', url, payload });
-const manifestOf = (runId) => JSON.parse(fs.readFileSync(path.join(runsDir, runId, 'manifest.json'), 'utf8'));
+const manifestOf = (runId) => JSON.parse(fs.readFileSync(path.join(runsDir, runId, 'web.json'), 'utf8'));
 
 async function waitForStatus(runId, statuses, timeoutMs = 120000) {
   const want = new Set([].concat(statuses));
@@ -135,7 +135,8 @@ test('approve → render 409 → reopen → render 202 (the plan\'s verification
   assert.ok(m.reopenedAt, 'the manifest records WHEN it was reopened — that timestamp is what "complete" compares against');
   assert.ok(m.approved, 'the previous approval is KEPT until a new one supersedes it');
   assert.ok(Array.isArray(m.finals) && m.finals.length >= 1, 'the delivered file is in the history');
-  assert.ok(fs.existsSync(m.finals[0].file ?? m.approved.final), 'the final mp4 is still on disk — nothing was deleted');
+  // `final` is the delivered file, named exactly as `approved.final` names it
+  assert.ok(fs.existsSync(m.finals[0].final ?? m.approved.final), 'the final mp4 is still on disk — nothing was deleted');
 
   const again = await post(`/api/runs/${runId}/render`, { mode: 'full' });
   assert.ok([200, 202].includes(again.statusCode), `a reopened run renders again (got ${again.statusCode})`);
@@ -158,8 +159,9 @@ test('a reopened run is NOT complete until it is approved again', PENDING, async
   const m = manifestOf(runId);
   assert.ok(new Date(m.approved.at) > new Date(m.reopenedAt), 'complete iff approved.at > reopenedAt');
   assert.equal(m.finals.length, 2, 'both deliveries are on record');
-  assert.notEqual(m.finals[0].file, m.finals[1].file, 'the second approval writes a NEW file, never over the first');
-  for (const f of m.finals) assert.ok(fs.existsSync(f.file), `${f.file} still on disk`);
+  assert.notEqual(m.finals[0].final, m.finals[1].final, 'the second approval writes a NEW file, never over the first');
+  for (const f of m.finals) assert.ok(fs.existsSync(f.final), `${f.final} still on disk`);
+  assert.equal(m.finals[0].replacedBy, m.finals[1].id, 'the superseded delivery says what replaced it');
 });
 
 test('reopening twice is idempotent-ish: it never loses a final and never double-counts', PENDING, async () => {
@@ -179,7 +181,7 @@ test('reopen is REFUSED while an upscale is in flight (the final is still being 
   await waitForStatus(runId, 'review');
 
   const approve = await post(`/api/runs/${runId}/approve`, { upscale: true });
-  assert.equal(approve.statusCode, 200, approve.body);
+  assert.equal(approve.statusCode, 202, approve.body); // the paid Topaz tail is QUEUED (202); a plain approve is 200
   // The upscale runs as a queued child; while it does, reopening would race the file it is writing.
   const during = await post(`/api/runs/${runId}/reopen`, {});
   if (during.statusCode !== 200) {
@@ -201,6 +203,7 @@ test('the take history records the reopen so the user can see what happened when
   const runId = await approvedRun('a fifth keeper');
   await post(`/api/runs/${runId}/reopen`, {});
   const run = (await get(`/api/runs/${runId}`)).json().run;
-  const entries = [...(run.takes ?? []), ...(run.history ?? []), ...(run.cuts ?? [])];
+  const m = run.manifest;
+  const entries = [...(m.takes ?? []), ...(m.history ?? []), ...(m.cuts ?? [])];
   assert.ok(JSON.stringify(entries).includes('reopen'), 'TakesHistory needs a row for "reopened for changes"');
 });

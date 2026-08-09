@@ -250,6 +250,62 @@ test('complete: approved final exists → complete; approved but file deleted �
   } finally { t.cleanup(); }
 });
 
+// ── Reopen (WS2-P6): `complete` iff the approval is NEWER than the last reopen ──────────────────
+// A reopened run goes back to review — the delivered file stays on disk and stays recorded, but the
+// run is open for changes again, which is exactly what the server-side finalize guard reads.
+const deliveredRun = (base, id, over) => {
+  const dir = mk(base, id, { 'spec.json': SPEC, 'final.mp4': 'F' });
+  const clip = path.join(dir, 'renders/t1/K1/clip.mp4');
+  const master = path.join(dir, 'renders/t1/master.mp4');
+  fs.mkdirSync(path.dirname(clip), { recursive: true });
+  fs.writeFileSync(clip, 'C');
+  fs.writeFileSync(master, 'M');
+  fs.writeFileSync(path.join(dir, 'renders/t1/render.json'), JSON.stringify({ master, jobs: [{ job: 'K1', clip }] }));
+  writeManifest(dir, webManifest({ approved: { cut: 'c1', final: path.join(dir, 'final.mp4'), upscaled: false, at: '2026-07-04T12:00:00.000Z' }, ...over }));
+  return dir;
+};
+
+test('reopened: approved.at older than reopenedAt → back to review (the final is still on disk)', () => {
+  const t = mkRunsDir();
+  try {
+    const dir = deliveredRun(t.dir, 'web-reopened', { reopenedAt: '2026-07-04T13:00:00.000Z', finals: [{ id: 'final-1', cut: 'c1', final: path.join(t.dir, 'web-reopened/final.mp4'), upscaled: false, at: '2026-07-04T12:00:00.000Z' }] });
+    const r = scanRun(dir);
+    assert.equal(r.status, 'review', 'a reopened run is not complete — it is open for changes again');
+    assert.equal(r.phase, 'review');
+    assert.equal(r.error, null, 'the superseded final is not "missing from disk" — it is simply superseded');
+    assert.ok(fs.existsSync(path.join(dir, 'final.mp4')), 'nothing was deleted');
+    assert.ok(r.manifest.approved, 'the previous approval is still recorded (it stays linked until replaced)');
+  } finally { t.cleanup(); }
+});
+
+test('re-approved after a reopen: approved.at newer than reopenedAt → complete again', () => {
+  const t = mkRunsDir();
+  try {
+    const dir = deliveredRun(t.dir, 'web-reapproved', { reopenedAt: '2026-07-04T13:00:00.000Z' });
+    // the second delivery, recorded after the reopen
+    writeManifest(dir, { ...JSON.parse(fs.readFileSync(path.join(dir, 'web.json'), 'utf8')), approved: { cut: 'c2', final: path.join(dir, 'final.mp4'), upscaled: false, at: '2026-07-04T14:00:00.000Z' } });
+    const r = scanRun(dir);
+    assert.equal(r.status, 'complete');
+    assert.equal(r.phase, 'deliver');
+  } finally { t.cleanup(); }
+});
+
+test('regression: a manifest with NO reopenedAt/finals behaves exactly as it did — complete', () => {
+  const t = mkRunsDir();
+  try {
+    const dir = deliveredRun(t.dir, 'web-never-reopened', {});
+    const m = JSON.parse(fs.readFileSync(path.join(dir, 'web.json'), 'utf8'));
+    delete m.reopenedAt; delete m.finals; delete m.history; // a run delivered before WS2-P6 existed
+    fs.writeFileSync(path.join(dir, 'web.json'), JSON.stringify(m));
+    assert.equal(scanRun(dir).status, 'complete');
+    // …and the "approved but the file is gone" rule still fires for it
+    fs.rmSync(path.join(dir, 'final.mp4'));
+    const gone = scanRun(dir);
+    assert.equal(gone.status, 'attention');
+    assert.match(gone.error.message, /missing from disk/);
+  } finally { t.cleanup(); }
+});
+
 test('cli-legacy: no web.json — engine run with nested render/ scans as source cli', () => {
   const t = mkRunsDir();
   try {

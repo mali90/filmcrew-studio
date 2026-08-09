@@ -3,7 +3,7 @@
 // restart recovers every run honestly. The UI may only claim what a file here proves.
 //
 // Status ladder (first match wins):
-//   complete   manifest.approved.final exists on disk
+//   complete   manifest.approved.final exists on disk and no later reopen superseded it
 //   planning   live plan/revise child (manifest.activeJob alive)          — or a plan still growing
 //   rendering  live spend child (render/render-job/assemble/upscale)
 //   attention  recorded-but-dead child (interrupted) | manifest.lastError | a failed job in the
@@ -21,6 +21,21 @@ const readJson = (p) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')); }
 // Liveness probe: is this pid still running? Exported so run-service shares the SAME default —
 // server.js injects nothing (like spawnCli), and dismissError calls isAlive directly, not via scanRun.
 export const defaultIsAlive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+
+/**
+ * The DELIVERED rule, in one place — this scan derives `complete` from it and run-service refuses
+ * paid work with it (assertNotFinalized). A run is delivered when it has an approved final that a
+ * later reopen has not superseded; reopening keeps `approved` (the file stays linked until a new
+ * approval replaces it), so the timestamps are what decide. A manifest with no `reopenedAt` was
+ * never reopened and reads exactly as it did before this existed.
+ * @returns {string|null} the delivered final's path (existence NOT checked here), or null
+ */
+export function finalizedFinal(manifest) {
+  const approved = manifest?.approved;
+  if (!approved?.final) return null;
+  if (manifest.reopenedAt && !(String(approved.at ?? '') > String(manifest.reopenedAt))) return null;
+  return approved.final;
+}
 
 /** Count the engine's per-agent artifacts: spec-00..06 (+1 when any QC cycle file exists). */
 function agentProgress(dir) {
@@ -145,7 +160,9 @@ export function scanRun(dir, { isAlive = defaultIsAlive } = {}) {
 
   let status;
   let error = manifest?.lastError ?? null;
-  const approvedFinal = manifest?.approved?.final;
+  // the final this run DELIVERED — null once a reopen supersedes it, which is what returns a
+  // reopened run to review instead of leaving it stuck on 'complete'
+  const approvedFinal = finalizedFinal(manifest);
   if (approvedFinal && exists(approvedFinal)) {
     status = 'complete';
   } else if (active && alive) {
@@ -211,4 +228,4 @@ export function listRuns(runsDir, opts = {}) {
     .sort((a, b) => String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? '')));
 }
 
-export default { scanRun, listRuns };
+export default { scanRun, listRuns, finalizedFinal };
