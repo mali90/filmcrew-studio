@@ -411,4 +411,15 @@ export async function lastFrameOf(video, outPng) {
   } catch { return null; }
 }
 
-export default { assembleVideo, probeClip, extractAudio, clipsHaveNativeAudio, grabFrame, lastFrameOf, audioFinishArgs };
+/** Grab a clip's FIRST frame (→ the PREVIOUS job's end frame, so a re-rendered segment can be
+ *  conditioned to land on its neighbour's opening image). Best-effort, exactly like lastFrameOf:
+ *  a failed grab downgrades a seam, it never kills a paid render. */
+export async function firstFrameOf(video, outPng) {
+  ensureDir(path.dirname(outPng));
+  try {
+    await runFfmpeg(['-y', '-i', video, '-update', '1', '-frames:v', '1', '-q:v', '2', outPng]);
+    return fs.existsSync(outPng) ? outPng : null;
+  } catch { return null; }
+}
+
+export default { assembleVideo, probeClip, extractAudio, clipsHaveNativeAudio, grabFrame, lastFrameOf, firstFrameOf, audioFinishArgs };
