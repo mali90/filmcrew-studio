@@ -94,7 +94,7 @@ function priced(perSecond, perJob, priceKey, rates) {
   return { perJob: rows, totalUsd: sumUsd(rows), currency: 'USD', label: 'estimate' };
 }
 
-export function estimateRender(spec, { backend, mode = 'full', jobId, cascade = false, resolution } = {}) {
+export function estimateRender(spec, { backend, mode = 'full', jobId, cascade = false, resolution, probeResolution } = {}) {
   const { key: priceKey, rates } = tableFor(backend);
   if (!rates) throw new Error(`no price table for backend "${backend}" (have: ${priceKeys().join(', ')})`);
   const jobs = spec?.kling?.jobs ?? [];
@@ -111,8 +111,10 @@ export function estimateRender(spec, { backend, mode = 'full', jobId, cascade = 
   }
   if (mode === 'probe') {
     picked = jobs.slice(0, 1);
-    // probes ride the same tier at the probe resolution (first job only is where the saving is)
-    perSecond = rates.probePerSecondUsd ?? rateFor(rates, rates.probeResolution ?? resolution);
+    // Probes ride the same tier at the probe resolution (first job only is where the saving is) —
+    // the CONFIGURED knob first: a probe set to ride 720p priced off the static 480p row would
+    // quote less than half the real bill.
+    perSecond = rates.probePerSecondUsd ?? rateFor(rates, probeResolution ?? rates.probeResolution ?? resolution);
   } else if (mode === 'job') {
     const idx = jobs.findIndex((j) => j?.job_id === jobId);
     if (idx === -1) throw new Error(`job "${jobId}" not found in spec.kling.jobs`);
@@ -147,6 +149,13 @@ function readEnvVar(envRoot, key, fallbackEnv) {
 export function readRenderResolution(envRoot, backend) {
   const is25 = typeof backend === 'string' && backend.includes('seedance-2.5');
   return readEnvVar(envRoot, is25 ? 'SEEDANCE25_RESOLUTION' : 'SEEDANCE_RESOLUTION') || (is25 ? '720p' : '480p');
+}
+
+/** The PROBE resolution the render child will use, per model — the same knob family as
+ *  readRenderResolution. Estimates must read it too (see estimateRender's probe branch). */
+export function readProbeResolution(envRoot, backend) {
+  const is25 = typeof backend === 'string' && backend.includes('seedance-2.5');
+  return readEnvVar(envRoot, is25 ? 'SEEDANCE25_PROBE_RESOLUTION' : 'SEEDANCE_PROBE_RESOLUTION') || '480p';
 }
 
 /** Back-compat wrapper: the pre-2.5 callers that only ever meant SEEDANCE_RESOLUTION. */

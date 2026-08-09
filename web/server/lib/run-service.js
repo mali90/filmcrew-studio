@@ -10,7 +10,7 @@ import { newManifest, writeManifest, readManifest, updateManifest } from './web-
 import { scanRun, listRuns, defaultIsAlive } from './run-scan.js';
 import { createRingLog } from './ring-log.js';
 import { watchRun } from './artifact-watch.js';
-import { estimateRender, readRenderResolution, readUpscaleProvider } from './estimator.js';
+import { estimateRender, readProbeResolution, readRenderResolution, readUpscaleProvider } from './estimator.js';
 import { safeChild } from './paths.js';
 // config-FREE import: run-service is loaded eagerly by app.js, and the demo/e2e server sets FAL_BASE_URL
 // only AFTER its static import chain — importing anything that pulls config.js here would snapshot the
@@ -41,7 +41,10 @@ const ledgerLine = (est) => ({
 export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr, bus, isAlive = defaultIsAlive, now = () => new Date() }) {
   // Seedance price scales with resolution, and the knob is per model (2.5 has its own) — so the
   // ledger records what THIS run's backend will actually be billed for.
-  const estOpts = (backend) => ({ resolution: readRenderResolution(envRoot ?? root, backend) });
+  const estOpts = (backend) => ({
+    resolution: readRenderResolution(envRoot ?? root, backend),
+    probeResolution: readProbeResolution(envRoot ?? root, backend),
+  });
   const ringLogs = new Map();   // runId → ring log
   const watchers = new Map();   // runId → watcher
   const announced = new Map();  // runId → Set<artifact rel> already sent to clients — persists across watcher restarts so a spec block is never lost to a startup race nor re-announced

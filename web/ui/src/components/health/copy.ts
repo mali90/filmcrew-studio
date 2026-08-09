@@ -25,6 +25,7 @@ export function webHint(c: Check, context: 'wizard' | 'settings'): string {
       if (/valid/.test(c.label)) return 'That planner isn’t one this app knows.';
       return 'No working key saved for the planner.';
     case 'backend': return 'That render backend isn’t one this app knows.';
+    case 'upscale-provider': return 'UPSCALE_PROVIDER in .env isn’t a provider this app knows. Use auto (upscale wherever the run rendered), fal, or segmind.';
     case 'ffmpeg': return 'Not found on this machine. It assembles your clips into the finished video.';
     case 'ffprobe': return 'Ships with ffmpeg — the install above covers it.';
     case 'references':

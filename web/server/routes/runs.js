@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { isRunId, safeChild } from '../lib/paths.js';
-import { estimateRender, estimateUpscale, jobSeconds, readRenderResolution, readUpscaleProvider } from '../lib/estimator.js';
+import { estimateRender, estimateUpscale, jobSeconds, readProbeResolution, readRenderResolution, readUpscaleProvider } from '../lib/estimator.js';
 // The registry is the ONE static import this server takes from the host src/ tree. It is safe
 // precisely because it has zero imports and reads no env (test/unit/render-models.test.js pins
 // that), so it cannot drag config.js — and a developer's real .env — into web/server's static
@@ -208,6 +208,7 @@ export function registerRunRoutes(app) {
       // Seedance is billed by pixel-seconds — price the resolution the render child will use, and
       // that knob is per model (2.5 reads SEEDANCE25_RESOLUTION and defaults to 720p, not 480p)
       resolution: readRenderResolution(app.ctx.envRoot, run.backend),
+      probeResolution: readProbeResolution(app.ctx.envRoot, run.backend),
     });
   });
 

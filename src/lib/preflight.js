@@ -107,12 +107,23 @@ export async function runChecks({ env = process.env } = {}) {
   // whoever's money would actually route there: a Segmind default backend, OR an enabled upscale
   // that resolves to Segmind — doctor passing while the approve-time upscale is guaranteed to fail
   // would be a lie that costs a render to discover.
-  const effectiveUpscaleProvider = resolveUpscaleProvider({
-    configured: config.upscale.provider,
-    runProvider: renderProvider,
-    hasFalKey: !!config.fal.apiKey,
-    hasSegmindKey: !!config.segmind.apiKey,
-  });
+  // A typo'd UPSCALE_PROVIDER must be a FAILED CHECK, not a doctor crash: resolveUpscaleProvider
+  // throws on values outside auto|fal|segmind, and a thrown runChecks means `doctor --json` emits
+  // nothing and the web health card can only say "doctor failed".
+  let effectiveUpscaleProvider = null;
+  let upscaleProviderBad = null;
+  try {
+    effectiveUpscaleProvider = resolveUpscaleProvider({
+      configured: config.upscale.provider,
+      runProvider: renderProvider,
+      hasFalKey: !!config.fal.apiKey,
+      hasSegmindKey: !!config.segmind.apiKey,
+    });
+  } catch (e) {
+    upscaleProviderBad = e.message;
+  }
+  add('upscale-provider', !upscaleProviderBad, `upscale provider valid (${config.upscale.provider || 'auto'})`,
+    'set UPSCALE_PROVIDER to auto, fal or segmind in .env');
   // An EXPLICIT UPSCALE_PROVIDER=segmind blocks even with the auto-upscale flag off: the review
   // UI offers approve-time upscaling regardless, and that manual action honors the explicit pick.
   const segmindBills = renderProvider === 'segmind'
@@ -130,9 +141,14 @@ export async function runChecks({ env = process.env } = {}) {
   const assetMode = renderProvider === 'segmind' ? config.segmind.uploadMode
     : renderFamily === 'seedance' ? config.seedance.uploadMode
     : config.fal.uploadMode;
-  add('render-assets', !segmindViaFalStorage || !!config.fal.apiKey,
+  // A mode outside data-uri|fal-storage would throw from segmindAssetUrl on the FIRST reference
+  // upload of a render — doctor must name it now, not report "reachable".
+  const assetModeValid = renderProvider !== 'segmind' || ['data-uri', 'fal-storage'].includes(assetMode);
+  add('render-assets', assetModeValid && (!segmindViaFalStorage || !!config.fal.apiKey),
     `render assets reachable (${renderProvider} · ${assetMode})`,
-    'set FAL_KEY (fal storage hosts the references Segmind downloads), or set SEGMIND_UPLOAD_MODE=data-uri to inline them and keep this a keyless-fal setup');
+    assetModeValid
+      ? 'set FAL_KEY (fal storage hosts the references Segmind downloads), or set SEGMIND_UPLOAD_MODE=data-uri to inline them and keep this a keyless-fal setup'
+      : `SEGMIND_UPLOAD_MODE "${assetMode}" is not a mode — use data-uri (inline, keyless) or fal-storage (fal CDN, needs FAL_KEY)`);
   add('backend', beNorm !== null, `render backend valid (${config.render.backend})`,
     `set RENDER_BACKEND to one of: ${RENDER_BACKENDS.join(', ')} in .env`);
   const voices = loadVoices();
