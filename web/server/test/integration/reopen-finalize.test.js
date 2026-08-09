@@ -80,16 +80,16 @@ async function approvedRun(idea) {
 }
 
 const FF_SKIP = FF ? null : 'ffmpeg not installed';
-let READY = false;
+let PENDING = { skip: FF_SKIP };
 if (FF) {
-  // One full approve, once, purely to ask "is the guard in place yet?". Wrapped so an unrelated
-  // failure parks the file as pending instead of exploding at module scope.
-  try {
-    const probe = await approvedRun('an arming probe for the reopen guard');
-    READY = (await post(`/api/runs/${probe}/render`, { mode: 'full' })).statusCode === 409;
-  } catch { READY = false; }
+  // One full approve, once, as a preflight: it names a missing guard ONCE at load instead of
+  // letting every spec below rediscover it. It is deliberately NOT wrapped in a try/catch any
+  // more — swallowing the error here is what let a regressed guard (render answering 202 again)
+  // silently park the whole file, so the one test that would have caught it never ran.
+  const probe = await approvedRun('an arming probe for the reopen guard');
+  const probeStatus = (await post(`/api/runs/${probe}/render`, { mode: 'full' })).statusCode;
+  PENDING = pending(probeStatus === 409, `WS2-P6: POST /render on a finalized run answered ${probeStatus}, want 409 (assertNotFinalized)`);
 }
-const PENDING = FF_SKIP ? { skip: FF_SKIP } : pending(READY, 'WS2-P6: assertNotFinalized + POST /reopen');
 
 // ── The guard ───────────────────────────────────────────────────────────────────────────────────
 

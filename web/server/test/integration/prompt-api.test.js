@@ -76,14 +76,15 @@ async function plannedRun(idea = 'a lighthouse keeper on his last night') {
   return runId;
 }
 
-// Two arming probes, because read (P3) and edit (P4) ship in that order and each phase has to be
-// independently green: the read specs arm on the read endpoint answering, the edit specs on the
-// write route existing at all (a route-table question, so no assumption about its error contract).
+// Both phases have landed, so these are no longer arming probes — they are preflight assertions
+// that name the failure once, at load, instead of letting 30 specs report the same 404. `pending`
+// throws on a falsy readiness now (see test/helpers/tdd.js), so a regressed endpoint FAILS the file
+// rather than quietly parking the specs that exist to catch it.
 const probeRun = await plannedRun('an arming probe');
-const READY = (await get(`/api/runs/${probeRun}/prompts`)).statusCode === 200;
-const PENDING = pending(READY, 'WS2-P3: GET /api/runs/:id/prompt|/prompts');
-const EDIT_READY = READY && app.hasRoute({ method: 'PUT', url: '/api/runs/:id/prompt' });
-const PENDING_EDIT = pending(EDIT_READY, 'WS2-P4: PUT/DELETE /api/runs/:id/prompt');
+const probeStatus = (await get(`/api/runs/${probeRun}/prompts`)).statusCode;
+const PENDING = pending(probeStatus === 200, `WS2-P3: GET /api/runs/:id/prompts answered ${probeStatus}, want 200`);
+const hasEditRoute = app.hasRoute({ method: 'PUT', url: '/api/runs/:id/prompt' });
+const PENDING_EDIT = pending(hasEditRoute, 'WS2-P4: PUT /api/runs/:id/prompt is not in the route table');
 
 // ── P3: read ────────────────────────────────────────────────────────────────────────────────────
 

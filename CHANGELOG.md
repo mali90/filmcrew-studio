@@ -183,6 +183,14 @@
   costs nothing.
 
 ### Fixed
+- **The prompt preview's byte budget is now pinned to the renderer's own defaults, for installs
+  with no `.env` at all.** The server may not import `config.js` (that would let a request
+  reconfigure the running process), so it re-declares the prompt-shaping defaults by hand. Every
+  test that compared preview against wire wrote an explicit `.env` first, so both sides read the
+  same number and the *defaults* path — the one a fresh install actually takes — was never
+  exercised: a budget changed in `config.js` alone would have shown you a meter measuring against
+  one cap while the render used another. The two sets of defaults are now composed against each
+  other byte for byte, so a drift fails the suite instead of reaching a user's screen.
 - **A pin the reference budget is about to drop is no longer sold as a join.** The re-render dialog
   and the prompt sheet asked the model *"can you pin this end?"* but not the budget *"is there a slot
   left for it?"* — so on a segment carrying a full cast (a Seedance model takes nine images; two
