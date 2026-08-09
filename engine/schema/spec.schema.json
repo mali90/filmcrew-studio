@@ -34,7 +34,7 @@
         "properties": {
           "shot_id": { "type": "string" },
           "beat": { "type": "string", "description": "e.g. hook, setup, escalation, turn, payoff, button" },
-          "duration_s": { "type": "number", "minimum": 1, "maximum": 15 },
+          "duration_s": { "type": "number", "minimum": 1, "maximum": 30, "description": "structural superset — each model's own per-job ceiling rules (15s on Kling/Seedance 2.0, 30s on Seedance 2.5; capsFor in src/lib/render-models.js)" },
           "description": { "type": "string", "description": "optional storyboard note (handed to the Scene Director)" },
           "kling": {
             "type": "object",

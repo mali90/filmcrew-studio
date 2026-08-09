@@ -54,7 +54,9 @@ describe('ApproveBar', () => {
     renderReview(<ApproveBar run={run} />);
     const checkbox = screen.getByRole('checkbox');
     expect(checkbox).toBeDisabled();
-    expect(screen.getByText(/already 1080p — there's nothing to upscale/i)).toBeInTheDocument();
+    // The threshold and label follow the estimate's delivered target (default ~1080p when the
+    // endpoint reports none) — a 4k target would keep this same cut upscalable.
+    expect(screen.getByText(/already 1080p — at or above the 1080p target/i)).toBeInTheDocument();
     // no price is advertised for a no-op
     expect(screen.queryByText(/≈/)).not.toBeInTheDocument();
     // approve itself stays available (it is free)

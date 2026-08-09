@@ -10,7 +10,7 @@ Set `qc`:
 
 Check at least:
 - `[project]` one clear idea faithful to the brief; hook + payoff present; duration in range.
-- `[shots]` shots cover hook→payoff; each `duration_s` is 1–15.
+- `[shots]` shots cover hook→payoff; each `duration_s` is at least 1s and within the per-job seconds ceiling in the project context's "Hard caps" line (do NOT assume 15 — the ceiling is the rendering model's own).
 - `[content]` every `content_prompt` is ≤512 chars and describes scene/action ONLY — **no subject appearance words** (hair, face, outfit, colors, logo). Flag any that describe the subject's look.
 - `[camera]` valid `shot_size` enum; framing varies across the cut.
 - `[elements]` `kling.elements` **may be empty** (`[]`) — that is a valid text-to-video render (no reference image), correct when no available reference depicts a subject in this idea. **If non-empty**, every `image` matches an available reference file AND each element is plausibly relevant to the idea (flag an attached reference that has nothing to do with the brief — it would force the wrong subject on screen).

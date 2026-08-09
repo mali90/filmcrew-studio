@@ -161,6 +161,16 @@ export function readRenderResolution(envRoot, backend) {
   return readEnvVar(envRoot, is25 ? 'SEEDANCE25_RESOLUTION' : 'SEEDANCE_RESOLUTION') || (is25 ? '720p' : '480p');
 }
 
+/** The short side the approve-time upscale will actually DELIVER: Segmind takes an explicit
+ *  target (UPSCALE_TARGET_RESOLUTION); fal's factor plan lifts toward ~1080p. The UI's
+ *  "already HD" threshold and its label both ride on this — a 4k target must keep offering the
+ *  upscale on a 1080p cut, and a 720p target must never advertise 1080. */
+export function readUpscaleTargetShortSide(envRoot, backend, childEnv) {
+  if (readUpscaleProvider(envRoot, backend, childEnv) !== 'segmind') return 1080;
+  const target = readEnvVar(envRoot, 'UPSCALE_TARGET_RESOLUTION', childEnv).toLowerCase();
+  return { '720p': 720, '1080p': 1080, '4k': 2160 }[target] ?? 1080;
+}
+
 /** The PROBE resolution the render child will use, per model — the same knob family as
  *  readRenderResolution. Estimates must read it too (see estimateRender's probe branch). */
 export function readProbeResolution(envRoot, backend) {

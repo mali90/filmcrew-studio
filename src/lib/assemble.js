@@ -189,9 +189,11 @@ async function finishAudio(stitched, outPath, opts) {
  *  exposes — 16:9, 9:16, 1:1 plus Seedance 2.5's 4:3, 3:4 and 21:9 — with the short side always on
  *  the correct axis. Anything unparseable (including 'adaptive'/'auto', which the registry never
  *  offers) falls back to the legacy portrait canvas. */
-export function canvasFor(aspect, srcShortSide = null) {
+export function canvasFor(aspect, srcShortSide = null, scale = null) {
   if (V.width && V.height) return { w: V.width, h: V.height };
-  const s = srcShortSide ? Math.min(V.shortSide, srcShortSide) : V.shortSide;
+  // `scale` overrides VIDEO_SHORT_SIDE for THIS stitch: the paid-upscale path passes what Topaz
+  // actually delivered, so a 4K upscale is not quietly stitched back down to the 1080 default.
+  const s = srcShortSide ? Math.min(scale ?? V.shortSide, srcShortSide) : (scale ?? V.shortSide);
   const m = /^(\d+):(\d+)$/.exec(aspect ?? '');
   if (!m) return { w: even(s), h: even((s * 16) / 9) }; // unknown → legacy portrait
   const [aw, ah] = [Number(m[1]), Number(m[2])];
@@ -271,7 +273,7 @@ async function trySeamlessStitch({ clipPaths, probes, continuity, canvas, target
 
 export async function assembleVideo(clipPaths, outPath, {
   audioTrack, loopAudio = false, nativeAudio = false, bedTrack = null, bedGainDb = -15, aspect = null,
-  continuity = null,
+  continuity = null, canvasScale = null,
 } = {}) {
   if (!clipPaths.length) throw new Error('No clips to assemble');
   for (const c of clipPaths) if (!fs.existsSync(c)) throw new Error(`Clip not found: ${c}`);
@@ -284,7 +286,7 @@ export async function assembleVideo(clipPaths, outPath, {
   const probes = [];
   for (const c of clipPaths) probes.push(await probeClip(c));
   const srcShorts = probes.map((p) => Math.min(p.width, p.height)).filter((n) => n > 0);
-  const canvas = canvasFor(aspect, srcShorts.length ? Math.min(...srcShorts) : null);
+  const canvas = canvasFor(aspect, srcShorts.length ? Math.min(...srcShorts) : null, canvasScale);
 
   // Frame rate: MATCH the source when the clips agree, so a 24fps run stays 24fps and no frames
   // are fabricated. An explicit VIDEO_FPS (V.fps) still forces a rate; 30 is only a last resort for

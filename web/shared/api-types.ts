@@ -151,6 +151,9 @@ export interface Estimate {
   currency: 'USD';
   label: 'estimate';
   unknownPrice?: { provider?: string | null; hint: string };
+  /** mode=upscale only: the short side the upscale would DELIVER (Segmind's explicit target, or
+   *  ~1080 for fal's factor plan) — the review UI's "already HD" gate judges against this. */
+  targetShortSide?: number;
 }
 export interface SetupStatus {
   envSource: '.env' | '.env.example' | 'none';

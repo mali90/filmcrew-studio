@@ -26,10 +26,6 @@ export function ApproveBar({ run, cutId = null }: { run: RunDetail; cutId?: stri
   // render's dimension for the latest selection — never bleed one cut's size onto an older cut
   // (an HD latest must not disable upscaling an older SD cut). Unknown ⇒ offer the upscale.
   const shortSide = selectedCut?.shortSide ?? (isLatestSelection ? run.latestRender?.masterShortSide ?? null : null);
-  const alreadyHD = shortSide != null && shortSide >= 1080;
-  // switching to an already-HD cut disables the toggle but leaves `upscale` stale — derive the
-  // real intent so the button, label, price and payload never disagree with the checkbox.
-  const effectiveUpscale = upscale && !alreadyHD;
 
   // What ReviewStage previews for the latest selection is run.latestRender (which, after an
   // interruption, may be a completed render with no cut record yet) — so target it implicitly
@@ -37,11 +33,20 @@ export function ApproveBar({ run, cutId = null }: { run: RunDetail; cutId?: stri
   // finalize/price then always act on the same master; an explicit OLDER cut still rides through.
   const submitCut = isLatestSelection ? undefined : cutId ?? undefined;
 
+  // Fetched regardless of the current size: the estimate also says what short side the upscale
+  // would DELIVER (Segmind takes an explicit target; fal lifts toward ~1080p), and the
+  // "already HD" gate below must judge against THAT — a 4k target keeps offering the upscale on a
+  // 1080p cut, a 720p target never advertises 1080.
   const upscaleEstimate = useQuery({
     queryKey: ['estimate', run.id, 'upscale', submitCut ?? null],
     queryFn: () => api.estimate(run.id, { mode: 'upscale', cut: submitCut }),
-    enabled: !alreadyHD,
   });
+  const targetShort = upscaleEstimate.data?.targetShortSide ?? 1080;
+  const targetLabel = targetShort >= 2160 ? '4K' : `${targetShort}p`;
+  const alreadyHD = shortSide != null && shortSide >= targetShort;
+  // switching to an already-at-target cut disables the toggle but leaves `upscale` stale — derive
+  // the real intent so the button, label, price and payload never disagree with the checkbox.
+  const effectiveUpscale = upscale && !alreadyHD;
 
   const approve = useMutation({
     mutationFn: () => api.approve(run.id, effectiveUpscale, submitCut),
@@ -68,13 +73,13 @@ export function ApproveBar({ run, cutId = null }: { run: RunDetail; cutId?: stri
         />
         <label htmlFor={checkboxId} className={alreadyHD ? 'flex-1 opacity-60' : 'flex-1 cursor-pointer'}>
           <span className="flex items-center gap-2 text-label text-ink">
-            Upscale to ~1080p with Topaz
+            Upscale to ~{targetLabel} with Topaz
             {!alreadyHD && !unknownPrice && <span className="tnum text-caption text-ink-muted">≈ {usd(upscaleEstimate.data?.totalUsd)}</span>}
           </span>
           <span className="mt-0.5 block text-caption text-ink-muted">
             {alreadyHD
-              ? `This video is already ${shortSide}p — there's nothing to upscale.`
-              : 'One Topaz job per clip — skip it if the render is already 1080p.'}
+              ? `This video is already ${shortSide}p — at or above the ${targetLabel} target.`
+              : `One Topaz job per clip — skip it if the render is already ${targetLabel}.`}
           </span>
         </label>
       </div>
