@@ -14,6 +14,8 @@
 //                               FIRST frame grabbed ("end where that clip begins").
 //     --prompt-overrides <file> a prompt-overrides.json sidecar — parsed and validated before any
 //                               submit, then snapshotted into the run dir
+//   Opening-frame precedence: --first-frame-from > the spec's authored job.first_frame > the seam
+//   frame chained from the previous job's clip (closing frame: --last-frame-from > job.last_frame).
 import path from 'node:path';
 import fs from 'node:fs';
 import config, { resolvePath } from '../../config.js';
@@ -36,12 +38,12 @@ async function main() {
 
   // Boundary and override flags are checked BEFORE anything is queued, and before a run dir is even
   // created: a typo must cost nothing, not a render and not a stray directory.
-  const overrides = str('prompt-overrides');
-  if (overrides) readPromptOverrides(resolvePath(overrides));
-  for (const flag of ['first-frame-from', 'last-frame-from']) {
+  for (const flag of ['first-frame-from', 'last-frame-from', 'prompt-overrides']) {
     const v = str(flag);
     if (v && !fs.existsSync(resolvePath(v))) throw new Error(`--${flag}: no such file — ${v}`);
   }
+  const overrides = str('prompt-overrides');
+  if (overrides) readPromptOverrides(resolvePath(overrides)); // shape errors, before any spend
 
   const runDir = str('out') ? resolvePath(str('out')) : path.join(resolvePath(config.paths.runs), newRunId('render'));
   const take = str('take') === undefined ? undefined : Number(str('take'));

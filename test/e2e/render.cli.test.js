@@ -5,10 +5,17 @@ import path from 'node:path';
 import { runCli, jsonTail } from '../helpers/cli.js';
 import { startFalServer } from '../helpers/fal-server.js';
 import { mkTmp } from '../helpers/tmp.js';
-import { ROOT } from '../helpers/fixtures.js';
+import { ROOT, ONE_PX_PNG } from '../helpers/fixtures.js';
+import { hasFfmpeg, tinyMp4Bytes } from '../helpers/ffmpeg-clips.js';
 
 const fal = await startFalServer({ videoBytes: Buffer.from('MP4') });
-test.after(async () => { await fal.close(); });
+// A FULL (non-probe) run stitches what the mock returns, so the boundary tests need clips ffmpeg
+// can actually read — a second mock, since the probe tests above are happy with garbage bytes.
+const FF = await hasFfmpeg();
+const realFal = await startFalServer({ videoBytes: FF ? await tinyMp4Bytes() : Buffer.from('MP4') });
+test.after(async () => { await fal.close(); await realFal.close(); });
+
+const sidecarOf = (runDir, jobId) => JSON.parse(fs.readFileSync(path.join(runDir, jobId, 'prompts.json'), 'utf8'));
 
 // --probe exists only for multi-job specs (it renders the first job); the golden example is a
 // single job, so probe tests split it into K1+K2 first.
@@ -63,5 +70,54 @@ test('render --probe on a single-job spec is refused before any spend', async ()
     assert.equal(code, 1);
     assert.match(stderr + stdout, /--probe needs a multi-job spec/);
     assert.equal(fal.requests.length, requestsBefore, 'nothing reached fal');
+  } finally { cleanup(); }
+});
+
+// ── WS2-P1: the two boundary pins bracket the RUN, they do not repeat per job ───────────────────
+
+test('render CLI: --first-frame-from pins the FIRST job and --last-frame-from the LAST', FF ? {} : { skip: 'ffmpeg not installed' }, async () => {
+  const { dir, cleanup } = mkTmp('render-cli-pins');
+  try {
+    const open = path.join(dir, 'open.png');
+    const close = path.join(dir, 'close.png');
+    for (const f of [open, close]) fs.writeFileSync(f, ONE_PX_PNG);
+    const runDir = path.join(dir, 'run');
+    const before = realFal.requests.length;
+    const { code, stdout, stderr } = await runCli('src/cli/render.js',
+      ['--spec', twoJobSpecFile(dir), '--out', runDir, '--first-frame-from', open, '--last-frame-from', close],
+      { env: { FAL_BASE_URL: realFal.baseUrl, FAL_KEY: 'fake', FAL_UPLOAD_MODE: 'data-uri', FAL_KLING_ENDPOINT: 'submit', FAL_MAX_RETRIES: '1',
+               OUT_DIR: dir, RUNS_DIR: dir, CACHE_DIR: dir, VIDEO_WIDTH: '128', VIDEO_HEIGHT: '128', VIDEO_FPS: '15', VIDEO_INTERPOLATE: 'false' } });
+    assert.equal(code, 0, stderr || stdout);
+
+    const submits = realFal.requests.slice(before).filter((q) => q.method === 'POST').map((q) => JSON.parse(q.body));
+    assert.equal(submits.length, 2, 'both jobs rendered');
+    assert.ok(submits[0].start_image_url, 'the opening pin rides job 1');
+    assert.ok(!submits[0].end_image_url, 'job 1 does not close the run, so it takes no closing pin');
+    assert.ok(submits[1].end_image_url, 'the closing pin rides the LAST job only');
+
+    const k1 = sidecarOf(runDir, 'K1');
+    const k2 = sidecarOf(runDir, 'K2');
+    assert.equal(k1.seam_in.frame, open);
+    assert.equal(k1.seam_in.from, null, 'an explicit pin continues no clip of this run');
+    assert.equal(k1.seam_out.mode, 'none', 'nothing pinned K1\'s close');
+    assert.equal(k2.seam_in.frame, path.join(runDir, 'K1', 'last_frame.png'), 'K2 keeps the chained seam — the pin was for the run, not every job');
+    assert.equal(k2.seam_in.from?.job, 'K1');
+    assert.equal(k2.seam_out.mode, 'native');
+  } finally { cleanup(); }
+});
+
+test('render CLI: --prompt-overrides pointing at nothing is refused before any spend', async () => {
+  const { dir, cleanup } = mkTmp('render-cli-overrides');
+  const before = fal.requests.length;
+  try {
+    const never = path.join(dir, 'never');
+    const { code, stderr } = await runCli('src/cli/render.js',
+      ['--spec', twoJobSpecFile(dir), '--out', never, '--prompt-overrides', path.join(dir, 'nope.json')],
+      { env: { FAL_BASE_URL: fal.baseUrl, FAL_KEY: 'fake', FAL_UPLOAD_MODE: 'data-uri', FAL_KLING_ENDPOINT: 'submit', FAL_MAX_RETRIES: '1' } });
+    assert.equal(code, 1);
+    assert.match(stderr, /--prompt-overrides/);
+    assert.match(stderr, /nope\.json/);
+    assert.equal(fal.requests.length, before, 'nothing reached fal');
+    assert.ok(!fs.existsSync(never), 'and no run dir was created');
   } finally { cleanup(); }
 });

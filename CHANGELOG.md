@@ -27,8 +27,11 @@
 - **`--first-frame-from` / `--last-frame-from` / `--prompt-overrides` on `render` and `render-job`.**
   Point a boundary flag at a still and it is used as-is; point it at a **clip** and the frame that
   touches this segment is grabbed (the neighbour's last frame for an opening pin, its first frame
-  for a closing pin). `--first-frame-from` beats the frame `--seam-from` would have derived. All
-  three are validated before anything is queued — a typo costs nothing.
+  for a closing pin). Opening-frame precedence is `--first-frame-from` > the spec's authored
+  `job.first_frame` > the chained seam frame, and the recorded lineage follows the frame that was
+  actually used — a clip that opened on an authored or hand-picked frame no longer names a source
+  clip it did not continue from. All three flags are validated before anything is queued — a typo
+  costs nothing.
 
 ### Fixed
 - A provider's **closing still is a courtesy, not the purchase**: a `return_last_frame` image that is

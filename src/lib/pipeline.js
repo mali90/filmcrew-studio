@@ -137,6 +137,26 @@ export async function resolveBoundaryFrame(input, { end, destDir }) {
 }
 
 /**
+ * Boundary-frame PRECEDENCE, decided in ONE place:
+ *
+ *   1. an explicit `--first-frame-from` / `--last-frame-from` (the operator, right now)
+ *   2. the spec's authored `job.first_frame` / `job.last_frame`
+ *   3. the chained seam frame (the previous clip's closing still)
+ *
+ * The renderers only know rules 2–3 (`job.first_frame || startFrame`), so an explicit pin has to
+ * reach them as the seam frame with the authored field REMOVED — otherwise a spec that authors an
+ * opening frame would quietly ignore the flag and render (and bill for) a boundary nobody asked for.
+ * The job is returned untouched when no pin is in play, so an ordinary render is unchanged.
+ */
+function jobWithPins(job, { startPin = false, endPin = false } = {}) {
+  if (!startPin && !endPin) return job;
+  const eff = { ...job };
+  if (startPin) delete eff.first_frame;
+  if (endPin) delete eff.last_frame;
+  return eff;
+}
+
+/**
  * Copy a validated overrides sidecar into the run dir, where it lives from now on
  * (<runDir>/prompt-overrides.json). Validation already happened at the flag, so a bad file never
  * reaches a submit; this only puts the good one where the run's own readers look for it.
@@ -164,8 +184,12 @@ export function uniqueOutPath(dir, base) {
 
 /**
  * @param {object} spec  a render-ready Production Spec
- * @param {{runDir:string, probe?:boolean, upscale?:boolean, backend?:string, take?:number}} opts
+ * @param {{runDir:string, probe?:boolean, upscale?:boolean, backend?:string, take?:number,
+ *          firstFrameFrom?:string, lastFrameFrom?:string, promptOverrides?:string}} opts
  *   `backend` overrides the spec/config backend; `take` (Seedance) varies a regen without a seed.
+ *   `firstFrameFrom`/`lastFrameFrom` bracket the RUN — the opening frame pins the FIRST job it
+ *   renders, the closing frame the LAST — and outrank both the authored `job.first_frame` and the
+ *   chained seam (jobWithPins); `promptOverrides` is a sidecar file snapshotted into the run dir.
  * @returns {Promise<{runDir:string, master?:string, cover?:string, probe?:boolean, jobs:object[]}>}
  */
 export async function renderSpec(spec, { runDir, probe = false, upscale = false, backend, take, outName, firstFrameFrom, lastFrameFrom, promptOverrides } = {}) {
@@ -183,8 +207,9 @@ export async function renderSpec(spec, { runDir, probe = false, upscale = false,
   // Seam continuity for a full multi-job (>15s) render: feed each clip's LAST frame to the NEXT job as
   // its start frame (start_image_url on fal / first_frame seed on cloud) so the cut is continuous
   // instead of the next job starting fresh from the reference Elements. Never on --probe (one job) or
-  // when disabled; a spec-authored job.first_frame always wins over the chained seam (in the
-  // renderers). The audio seam fade (assemble.js) smooths the join under this continuous visual.
+  // when disabled; the chained frame is the LOWEST-ranked opening frame — an explicit
+  // --first-frame-from and then a spec-authored job.first_frame both outrank it (see jobWithPins).
+  // The audio seam fade (assemble.js) smooths the join under this continuous visual.
   // Skip for a text-to-video (no-element) render on Kling: it has no reference-to-video path to accept
   // a seam start frame, so each job renders independently (Seedance seeds the seam as its lone image).
   const textToVideoKling = capsFor(be).family === 'kling' && !(spec.kling.elements?.length);
@@ -202,10 +227,15 @@ export async function renderSpec(spec, { runDir, probe = false, upscale = false,
   for (const [i, job] of toRender.entries()) {
     const seed = seedForJob(jobs.findIndex((j) => j.job_id === job.job_id), take ?? 0);
     const feedsNext = chain && i < toRender.length - 1;
-    const openFrame = (i === 0 && openPin) ? openPin : startFrame;
-    const endFrame = (i === toRender.length - 1) ? closePin : null;
-    const seamInFrom = openFrame === startFrame && startFrame && prev ? { take: takeId, job: prev.jobId, clip: prev.clip } : null;
-    const r = await RENDERERS[be].render({ job, spec, runDir, seed, lowRes: probe, startFrame: openFrame, endFrame, feedsNext, seamInFrom, nonce: take ?? 0 })
+    const startPin = i === 0 ? openPin : null;
+    const endPin = i === toRender.length - 1 ? closePin : null;
+    const openFrame = startPin ?? startFrame;
+    // The lineage follows the frame the clip REALLY opened on: an explicit pin and an authored
+    // job.first_frame both outrank the chained still, and a `from` recorded for a frame that was
+    // never used is the same false continuation claim as no record at all.
+    const usedChainedFrame = !startPin && !job.first_frame && startFrame;
+    const seamInFrom = usedChainedFrame && prev ? { take: takeId, job: prev.jobId, clip: prev.clip } : null;
+    const r = await RENDERERS[be].render({ job: jobWithPins(job, { startPin: !!startPin, endPin: !!endPin }), spec, runDir, seed, lowRes: probe, startFrame: openFrame, endFrame: endPin, feedsNext, seamInFrom, nonce: take ?? 0 })
       .catch((e) => { log.error(`[${job.job_id}] failed: ${e.message}`); return { jobId: job.job_id, error: e.message }; });
     results.push(r);
     // The previous job's sidecar was written before THIS clip existed: stamp where its closing frame
@@ -253,7 +283,11 @@ export async function renderSpec(spec, { runDir, probe = false, upscale = false,
  * them too (cascade) for a continuous seam, or expect a visible cut.
  * @param {object} spec
  * @param {string} jobId
- * @param {{runDir:string, backend?:string, take?:number, feedback?:string, seamFrom?:string, lowRes?:boolean}} opts
+ * @param {{runDir:string, backend?:string, take?:number, feedback?:string, seamFrom?:string,
+ *          lowRes?:boolean, firstFrameFrom?:string, lastFrameFrom?:string, promptOverrides?:string}} opts
+ *   `firstFrameFrom`/`lastFrameFrom` pin this job's own boundaries and outrank both the authored
+ *   `job.first_frame`/`job.last_frame` and the `seamFrom` chain (jobWithPins); `promptOverrides` is
+ *   a sidecar file snapshotted into the take dir.
  * @returns {Promise<{jobId:string, clip:string, totalDuration:number, segments:number, backend:string, staleDownstream:string[]}>}
  */
 export async function renderJob(spec, jobId, { runDir, backend, take = 0, feedback, seamFrom, lowRes = false, firstFrameFrom, lastFrameFrom, promptOverrides } = {}) {
@@ -267,8 +301,9 @@ export async function renderJob(spec, jobId, { runDir, backend, take = 0, feedba
   if (idx === -1) throw new Error(`job "${jobId}" not found in spec.kling.jobs (${jobs.map((j) => j?.job_id).join(', ')})`);
   const job = jobs[idx];
 
-  // Seam in: an authored job.first_frame wins inside the renderer; else chain from the previous
-  // job's last frame in a prior render dir, exactly like renderSpec's in-sequence chaining.
+  // Seam in: an explicit --first-frame-from wins, then an authored job.first_frame (both below),
+  // and only then this — the previous job's last frame in a prior render dir, exactly like
+  // renderSpec's in-sequence chaining.
   let startFrame = null;
   let seamInFrom = null;
   if (config.kling.chainFrames && idx > 0 && seamFrom) {
@@ -294,14 +329,18 @@ export async function renderJob(spec, jobId, { runDir, backend, take = 0, feedba
   if (firstFrameFrom) {
     startFrame = await resolveBoundaryFrame(firstFrameFrom, { end: 'in', destDir: jobDir });
     seamInFrom = null; // a hand-picked still has no take/job/clip of its own to point back at
+  } else if (job.first_frame) {
+    seamInFrom = null; // the authored frame is what the renderer will use — naming the chain's
+                       // source here would claim a continuation this clip does not have
   }
   const endFrame = lastFrameFrom ? await resolveBoundaryFrame(lastFrameFrom, { end: 'out', destDir: jobDir }) : null;
+  const effJob = jobWithPins(job, { startPin: !!firstFrameFrom, endPin: !!lastFrameFrom });
 
   const staleDownstream = downstreamJobs(spec, jobId);
 
   log.step(`Render job — ${jobId} — ${RENDERERS[be].label}${take ? ` [take ${take}]` : ''}`);
   const r = await RENDERERS[be].render({
-    job, spec, runDir, seed: seedForJob(idx, take), lowRes, startFrame, endFrame, seamInFrom,
+    job: effJob, spec, runDir, seed: seedForJob(idx, take), lowRes, startFrame, endFrame, seamInFrom,
     feedsNext: config.kling.chainFrames && staleDownstream.length > 0, nonce: take, feedback,
   });
 
