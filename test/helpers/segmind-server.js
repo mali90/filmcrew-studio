@@ -60,6 +60,10 @@ export async function startSegmindServer({ videoBytes = Buffer.from('FAKE-MP4'),
     // `opts.upscaledBytes` answers the Topaz download with a DIFFERENT file — that is how a test
     // reproduces Topaz handing back a clip whose audio track it dropped.
     if (u.pathname.startsWith('/dl/')) {
+      if (u.pathname.endsWith('last_frame.png')) {
+        res.writeHead(200, { 'content-type': 'image/png' });
+        return res.end(opts.lastFrameBytes ?? Buffer.from('PROVIDER-PNG'));
+      }
       const bytes = (u.pathname.endsWith('upscaled.mp4') && opts.upscaledBytes) || videoBytes;
       res.writeHead(200, { 'content-type': 'video/mp4' });
       return res.end(bytes);
@@ -124,7 +128,12 @@ export async function startSegmindServer({ videoBytes = Buffer.from('FAKE-MP4'),
       if (opts.expired) return json(404, { detail: 'Request not found' });
       const job = queued.find((q) => q.id === u.pathname.split('/').pop());
       const name = /topaz/i.test(job?.slug ?? '') ? 'upscaled.mp4' : 'out.mp4';
-      return json(200, { video: { url: `${base}/dl/${name}` }, seed: 70000 });
+      const out = { video: { url: `${base}/dl/${name}` }, seed: 70000 };
+      // A job that ASKED for `return_last_frame` gets the generator's own closing still back — the
+      // exact pixels the next segment should open on. `opts.omitLastFrame` reproduces a provider
+      // that accepted the flag and sent nothing, which must fall back to an ffmpeg frame grab.
+      if (job?.args?.return_last_frame && !opts.omitLastFrame) out.last_frame = { url: `${base}/dl/last_frame.png` };
+      return json(200, out);
     }
 
     res.writeHead(404); res.end();
