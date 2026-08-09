@@ -435,3 +435,12 @@ test('refLabel degrades to the shipping style rather than emitting a broken cita
   assert.equal(refLabel({}, 'image', 2), '@Image2');
   assert.equal(refLabel({ refStyle: 'spaced' }, 'audio', 2), '@Audio 2');
 });
+
+test('the published spec schema names exactly the registry backends', async () => {
+  // engine/schema/spec.schema.json ships to spec authors and editors — its render_backend enum
+  // drifting behind ALL_BACKENDS would reject specs the engine itself accepts.
+  const { ALL_BACKENDS } = await import('../../src/lib/render-models.js');
+  const schemaPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../engine/schema/spec.schema.json');
+  const schema = JSON.parse(fs.readFileSync(schemaPath, 'utf8'));
+  assert.deepEqual(new Set(schema.properties.render_backend.enum), new Set(ALL_BACKENDS));
+});

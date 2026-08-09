@@ -3,7 +3,7 @@
 // and offer the fal key as an optional extra — Kling and voice minting run on fal, but a
 // Segmind-only install is valid and must not be gated on an account it doesn't have. Money is
 // involved either way, so on success we nudge about credit rather than celebrating.
-import type { Dispatch } from 'react';
+import { useEffect, type Dispatch } from 'react';
 import { api, ApiClientError } from '../../api/client';
 import { canonicalBackendFor } from '../../../../shared/render-models';
 import { FixFooter } from './FixFooter';
@@ -16,13 +16,17 @@ const providerOf = (backend: string): 'fal' | 'segmind' => {
   catch { return 'fal'; }
 };
 
-export function StepFal({ state, dispatch }: { state: WizardState; dispatch: Dispatch<WizardAction> }) {
+export function StepFal({ state, dispatch, falKeyStored = false }: { state: WizardState; dispatch: Dispatch<WizardAction>; falKeyStored?: boolean }) {
   const provider = providerOf(state.backend);
   // On the Segmind path the fal key is OPTIONAL — but a non-empty one must validate: saving an
   // invalid fal key flips SEGMIND_UPLOAD_MODE's default to fal-storage, and the first
   // reference-bearing render would then die on fal storage auth after setup reported success.
+  // A rerun hides the same hazard behind an EMPTY field: buildUpdates preserves a stored FAL_KEY,
+  // whose mere presence keeps steering uploads to fal-storage — so an empty field with a stored
+  // key gates continue on validating the STORED key (the server checks it when none is typed).
+  const storedInPlay = provider === 'segmind' && !state.falKey && falKeyStored;
   const canContinue = provider === 'segmind'
-    ? state.segmindCheck.state === 'valid' && (!state.falKey || state.falCheck.state === 'valid')
+    ? state.segmindCheck.state === 'valid' && ((!state.falKey && !storedInPlay) || state.falCheck.state === 'valid')
     : state.falCheck.state === 'valid';
 
   const validateFal = async () => {
@@ -77,6 +81,13 @@ export function StepFal({ state, dispatch }: { state: WizardState; dispatch: Dis
     }
   };
 
+  // Kick the stored-key check off unprompted — the reviewer should never have to know that an
+  // empty field still leaves a key in play. Runs once per idle (typing resets the check to idle,
+  // so clearing a typed key re-checks the stored one).
+  useEffect(() => {
+    if (storedInPlay && state.falCheck.state === 'idle') void validateFal();
+  });
+
   const falField = (
     <KeyField
       label="fal.ai API key"
@@ -122,6 +133,13 @@ export function StepFal({ state, dispatch }: { state: WizardState; dispatch: Dis
           one it must validate: renders would route reference uploads through it.
         </p>
         <div className="mt-2">{falField}</div>
+        {storedInPlay && (
+          <p className="mt-2 text-caption text-ink-muted">
+            A fal key is already stored from an earlier setup — it will keep handling reference
+            uploads and voice minting, so it is checked here. Paste a new key to replace it, or
+            remove FAL_KEY from .env for a Segmind-only install.
+          </p>
+        )}
 
         <FixFooter state={state} dispatch={dispatch} canContinue={canContinue} scope="fal" />
       </div>

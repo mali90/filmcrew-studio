@@ -7,7 +7,7 @@
   "properties": {
     "spec_version": { "const": "1.0" },
     "render_backend": {
-      "enum": ["kling-o3@fal", "seedance-2.0@fal", "kling", "seedance"],
+      "enum": ["kling-o3@fal", "seedance-2.0@fal", "seedance-2.5@fal", "seedance-2.0@segmind", "seedance-2.5@segmind", "kling", "seedance"],
       "description": "Optional: which backend renders kling.jobs[] (default: RENDER_BACKEND / kling). The engine stamps the canonical `<model>@<provider>` id; the legacy one-word aliases stay valid forever. The spec is backend-neutral; Seedance adds a 4s/job minimum. Keep this enum in sync with ALL_BACKENDS in src/lib/render-models.js."
     },
     "project": {

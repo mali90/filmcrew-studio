@@ -14,10 +14,14 @@ import { StepReview } from '../components/setup/StepReview';
 import { StepDoctor } from '../components/setup/StepDoctor';
 import { StepDone } from '../components/setup/StepDone';
 import { initialWizardState, STEPS, wizardReducer, type WizardState } from '../components/setup/wizard';
+import { useSetupGate } from '../hooks/useSetupGate';
 
 export default function SetupPage({ initial }: { initial?: Partial<WizardState> }) {
   // `initial` exists for tests/deep-links only — real sessions always start at the welcome step.
   const [state, dispatch] = useReducer(wizardReducer, { ...initialWizardState, ...initial });
+  // Reruns arrive with keys already in .env that the blank wizard fields hide — the fal step must
+  // know a stored FAL_KEY is in play (it keeps steering Segmind uploads to fal-storage).
+  const { status } = useSetupGate();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const step = STEPS[state.step];
@@ -39,7 +43,7 @@ export default function SetupPage({ initial }: { initial?: Partial<WizardState> 
     >
       {step === 'welcome' && <StepWelcome onNext={next} />}
       {step === 'llm' && <StepLlm state={state} dispatch={dispatch} />}
-      {step === 'fal' && <StepFal state={state} dispatch={dispatch} />}
+      {step === 'fal' && <StepFal state={state} dispatch={dispatch} falKeyStored={status?.fal.hasKey ?? false} />}
       {step === 'backend' && <StepBackend state={state} dispatch={dispatch} />}
       {step === 'presets' && <StepPresets state={state} dispatch={dispatch} />}
       {step === 'review' && <StepReview state={state} dispatch={dispatch} />}

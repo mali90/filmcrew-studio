@@ -83,7 +83,14 @@ export function registerSetupRoutes(app) {
 
   app.post('/api/setup/validate-fal', async (req) => {
     const { validateFal } = await import(path.join(root, 'src/lib/fal.js'));
-    return validateFal(String(req.body?.apiKey ?? ''));
+    // An EMPTY key means "check the STORED one" (rerun flows): on the Segmind path the fal field
+    // is optional and buildUpdates preserves an existing FAL_KEY — whose mere presence keeps
+    // steering uploads to fal-storage. Setup must judge the key that will actually be used;
+    // with nothing stored either, validateFal('') still answers { ok:false, reason:'missing' }.
+    const typed = String(req.body?.apiKey ?? '');
+    if (typed) return validateFal(typed);
+    const { get } = await envSettings.read();
+    return validateFal(get('FAL_KEY') || get('FAL_API_KEY') || '');
   });
 
   app.post('/api/setup/validate-segmind', async (req) => {

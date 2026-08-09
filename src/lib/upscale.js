@@ -185,8 +185,21 @@ async function upscaleVideoFal({ inPath, outDir, factor, model }) {
 
   log.step(`fal Topaz upscale ${upscaleFactor}× [${model ?? FAL.topazModel}] : ${path.basename(inPath)}`);
   const { topazUpscale } = await import('./fal.js');
-  const up = await topazUpscale(inPath, { destDir: outDir, upscaleFactor, model });
-  return withSourceAudio(inPath, up, outDir, srcHasAudio, 'fal Topaz');
+  // Stage the download AWAY from the source (same hazard as the Segmind branch): a fal result URL
+  // carrying the input's basename would land on top of the source clip — after which the audio
+  // restore below would read the silent upscale as both sides, and a PAID upscale loses its sound.
+  const stage = fs.mkdtempSync(path.join(outDir, '.fal-upscale-'));
+  try {
+    const up = await topazUpscale(inPath, { destDir: stage, upscaleFactor, model });
+    const result = await withSourceAudio(inPath, up, outDir, srcHasAudio, 'fal Topaz');
+    if (result !== up) return result; // re-muxed into outDir — the staged download is scrap
+    // Audio survived, so the staged file IS the result: promote it under a collision-proof name.
+    const final = path.join(outDir, `upscaled_${path.basename(up)}`);
+    fs.renameSync(up, final);
+    return final;
+  } finally {
+    fs.rmSync(stage, { recursive: true, force: true });
+  }
 }
 
 /**
