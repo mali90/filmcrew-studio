@@ -81,6 +81,14 @@ export function makeRun(status: RunStatus, over: Partial<RunDetail> = {}): RunDe
             master: null, masterExists: false, masterUrl: null, cover: null, coverUrl: null,
           }
         : null,
+    // One entry per clip in `latestRender.jobs`: an intact single-take chain (K2 opened on K1's
+    // closing frame and that K1 is still the one in the cut).
+    continuity: rendered
+      ? [
+          { jobId: 'K1', index: 0, take: 't1', continuesFromPrev: false, confidence: 'recorded', from: null, reason: 'no-prev' },
+          { jobId: 'K2', index: 1, take: 't1', continuesFromPrev: true, confidence: 'recorded', from: { take: 't1', job: 'K1' }, reason: 'source-matches' },
+        ]
+      : null,
     coverUrl: rendered ? '/api/media/runs/x/renders/t1/cover.png' : null,
     finalUrl: status === 'complete' ? '/api/media/out/ocean-final.mp4' : null,
     finalFsPath: status === 'complete' ? '/abs/out/ocean-final.mp4' : null,

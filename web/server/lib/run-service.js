@@ -201,6 +201,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     if (kind === 'render') { // full render — finishRender already assembled + wrote render.json
       updateManifest(dir, (m) => {
         mergeJobClips(m, result.jobs);
+        mergeLineage(m, result.jobs);
         const takeId = path.basename(result.runDir ?? '');
         m.cuts.push({ id: `c${m.cuts.length + 1}`, take: takeId, master: result.master ?? null, shortSide: result.masterShortSide ?? null, ...stitchFields(result), createdAt: now().toISOString() });
         return m;
@@ -209,13 +210,13 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     }
 
     if (kind === 'probe') { // stitch precedes review: assemble the probe clip now (free)
-      updateManifest(dir, (m) => { mergeJobClips(m, result.jobs); return m; });
+      updateManifest(dir, (m) => { mergeJobClips(m, result.jobs); mergeLineage(m, result.jobs); return m; });
       if (result.runDir) enqueueAssemble(runId, result.runDir);
       return;
     }
 
     if (kind === 'render-job') {
-      updateManifest(dir, (m) => { mergeJobClips(m, [{ jobId: result.jobId, clip: result.clip }]); return m; });
+      updateManifest(dir, (m) => { mergeJobClips(m, [result]); mergeLineage(m, [result]); return m; });
       const cascade = pendingCascade.get(runId);
       if (cascade && cascade.jobs.length) {
         const nextJob = cascade.jobs.shift();
@@ -269,18 +270,66 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     }
   }
 
+  /**
+   * The take a clip belongs to: renders/<take>/<job>/clip.mp4 → '<take>'. The path is the only
+   * honest source — a job's newest clip may well live in an older take than the one being written.
+   */
+  const takeOfClip = (clip) => (clip ? path.basename(path.dirname(path.dirname(String(clip)))) : null);
+
+  /**
+   * Track each job's newest clip LINEAGE — which take it came out of and the seams the renderer
+   * recorded for it (schema:2). `jobClips` alone cannot answer "does segment 2 still continue from
+   * segment 1?", because a clip's seam names the take/job/clip it opened on and that source may
+   * since have been replaced (run b1nx). Ids and the renderer's own seam records only; the
+   * per-joint verdict is computed from them by lib/lineage.js, never stored.
+   */
+  function mergeLineage(m, jobs) {
+    m.clipLineage = m.clipLineage ?? {};
+    for (const j of jobs ?? []) {
+      const id = j.jobId ?? j.job;
+      if (!id || !j.clip) continue; // a failed job replaces nothing — its predecessor's lineage stands
+      m.clipLineage[id] = { take: takeOfClip(j.clip), seamIn: j.seamIn ?? null, seamOut: j.seamOut ?? null };
+    }
+  }
+
   /** Write a full-composition render.json into takeDir: every spec job's newest clip, in order. */
   function composeCut(runId, takeDir) {
     const dir = dirFor(runId);
     const spec = readJson(path.join(dir, 'spec.json'));
     const m = readManifest(dir);
     if (!spec || !m?.jobClips) return;
-    const jobs = (spec.kling?.jobs ?? []).map((j) => ({ jobId: j.job_id, clip: m.jobClips[j.job_id] ?? null }));
+    // Each clip carries its OWN seams into the composition, read from the take it was rendered in
+    // (cached per take dir — a composition of N jobs usually spans one or two takes). Dropping them
+    // here is what made every mixed cut indistinguishable from an intact chain.
+    const takeJobs = new Map();
+    const seamsFor = (jobId, clip) => {
+      const takeId = takeOfClip(clip);
+      const takeDirOf = clip ? path.dirname(path.dirname(String(clip))) : null;
+      if (takeDirOf && !takeJobs.has(takeDirOf)) {
+        const rj = readJson(path.join(takeDirOf, 'render.json'));
+        takeJobs.set(takeDirOf, new Map((rj?.jobs ?? []).map((rec) => [rec.jobId ?? rec.job, rec])));
+      }
+      const rec = takeDirOf ? takeJobs.get(takeDirOf)?.get(jobId) : null;
+      // The manifest's own record is the fallback for a take whose render.json is gone or predates
+      // the composition (the CLI writes it before the web layer ever sees the take).
+      const fb = m.clipLineage?.[jobId];
+      return {
+        take: takeId ?? fb?.take ?? null,
+        seamIn: rec?.seamIn ?? (fb?.take === takeId ? fb?.seamIn : null) ?? null,
+        seamOut: rec?.seamOut ?? (fb?.take === takeId ? fb?.seamOut : null) ?? null,
+      };
+    };
+    const jobs = (spec.kling?.jobs ?? []).map((j) => {
+      const clip = m.jobClips[j.job_id] ?? null;
+      return { jobId: j.job_id, clip, ...seamsFor(j.job_id, clip) };
+    });
     const existing = readJson(path.join(takeDir, 'render.json')) ?? {};
-    // Composition BREAKS the seam lineage: these clips come from different takes, so a downstream
-    // clip was chained to the OLD take of the job before it (that is what the cascade warning is
-    // about). Inheriting `chained: true` from the take we are overwriting would tell the seamless
-    // stitcher to drop a real frame at what is now a genuine cut, so it is cleared, not spread.
+    // Composition BREAKS the run-wide seam lineage: these clips come from different takes, so a
+    // downstream clip may have been chained to the OLD take of the job before it (that is what the
+    // cascade warning is about). Inheriting `chained: true` from the take we are overwriting would
+    // tell the seamless stitcher to drop a real frame at what is now a genuine cut, so it is
+    // cleared, not spread. The per-JOINT truth now lives in each job's seamIn/seamOut above —
+    // `chained` stays only so readers written before those fields keep behaving exactly as they did.
     fs.writeFileSync(path.join(takeDir, 'render.json'), JSON.stringify({ ...existing, project: spec.project?.title, composed: true, chained: false, jobs }, null, 2) + '\n');
   }
 

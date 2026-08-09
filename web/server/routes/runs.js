@@ -10,8 +10,84 @@ import { estimateRender, estimateUpscale, jobSeconds, readProbeResolution, readR
 // that), so it cannot drag config.js — and a developer's real .env — into web/server's static
 // graph. The canary in test/integration/runs-caps.test.js walks this graph and enforces it.
 import { normalizeBackend, capsFor, castLimitFor, ALL_BACKENDS } from '../../../src/lib/render-models.js';
+// The continuity rule (WS2-P2) is a pure function over a run record — no fs, no config — so it is
+// safe in this static graph; everything filesystem-shaped stays in this file.
+import { computeLineage, serializeContinuity } from '../lib/lineage.js';
 
 const SPEC_FILE_RE = /^(revisions\/r\d+\/)?spec[-\w]*\.json$/;
+const TAKE_DIR_RE = /^t\d+$/;
+
+const readJsonFile = (p) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; } };
+
+/** renders/<take>/<job>/clip.mp4 → '<take>'. A job's newest clip may sit in an OLDER take than the
+ *  one composing the cut — the path is the only record of which, and only the id ever leaves here. */
+const takeIdOfClip = (clip) => (clip ? path.basename(path.dirname(path.dirname(String(clip)))) : null);
+
+/** Every take of a run, oldest first, each holding only the jobs really RENDERED into it: a composed
+ *  cut lists clips from older takes too, and indexing those under the composing take would invent a
+ *  chain that never existed. `wanted` (a set of take ids) trims the disk reads to the takes the cut
+ *  actually names; the legacy derivation replays the WHOLE history, so it asks for all of them. */
+function takesOf(runDir, cutDir, wanted = null) {
+  let dirs = [];
+  try {
+    const rendersRoot = path.join(runDir, 'renders');
+    dirs = fs.readdirSync(rendersRoot)
+      .filter((n) => TAKE_DIR_RE.test(n) && (!wanted || wanted.has(n)))
+      .sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)))
+      .map((n) => path.join(rendersRoot, n));
+  } catch { /* a CLI run keeps its one take beside the spec */ }
+  if (!dirs.length && cutDir) dirs = [cutDir];
+  return dirs.map((d) => {
+    const id = path.basename(d);
+    const jobs = (readJsonFile(path.join(d, 'render.json'))?.jobs ?? [])
+      .filter((j) => (takeIdOfClip(j.clip) ?? id) === id)
+      .map((j) => ({
+        jobId: j.jobId ?? j.job ?? null,
+        clip: j.clip ?? null,
+        seamIn: j.seamIn ?? null,
+        seamOut: j.seamOut ?? null,
+        // present only on records that carry it — the legacy derivation asks whether the field
+        // EXISTS before trusting its value
+        ...(Object.hasOwn(j, 'startFrame') ? { startFrame: j.startFrame } : {}),
+      }));
+    return { take: id, jobs };
+  });
+}
+
+/**
+ * Per-segment continuity for the cut the review page is showing (the newest completed take — a take
+ * still rendering has no render.json and honestly answers null). Ids only: `serializeContinuity`
+ * strips paths and nothing here may add one back.
+ * @returns {ReturnType<typeof serializeContinuity>['segments'] | null}
+ */
+function continuityOf(run) {
+  const cutDir = run?.latestRender?.dir;
+  if (!cutDir || !run?.dir) return null;
+  try {
+    const cut = readJsonFile(path.join(cutDir, 'render.json'));
+    if (!Array.isArray(cut?.jobs) || !cut.jobs.length) return null;
+    const cutTake = path.basename(cutDir);
+    const entries = cut.jobs.map((j) => {
+      const jobId = j.jobId ?? j.job ?? null;
+      // Which take this clip came out of: its own path first (the only record a composition cannot
+      // lose), then what the composer wrote, then the manifest's lineage index, and only as a last
+      // resort the take doing the composing.
+      return { jobId, take: takeIdOfClip(j.clip) ?? j.take ?? run.manifest?.clipLineage?.[jobId]?.take ?? cutTake };
+    });
+    // A cut whose every clip carries a recorded seam is answered from the takes it names; one that
+    // doesn't is a pre-WS2 run, and its derivation replays the full take history.
+    const recorded = cut.jobs.every((j) => j.seamIn && typeof j.seamIn === 'object');
+    const record = {
+      runId: run.id,
+      chained: cut.chained, // tri-state on purpose: absent ≠ false for the legacy derivation
+      takes: takesOf(run.dir, cutDir, recorded ? new Set(entries.map((e) => e.take)) : null),
+      cut: entries,
+    };
+    return serializeContinuity(computeLineage(record)).segments;
+  } catch {
+    return null; // a badge is never worth failing the run page over
+  }
+}
 
 // Mirror the engine's slug() (src/lib/util.js): the run guard must resolve an environment exactly as
 // the engine will — a display name ("Neon City") resolves like the CLI would, and a traversal-shaped
@@ -54,6 +130,7 @@ export function registerRunRoutes(app) {
   const serializeRun = (run) => run && {
     ...run,
     dir: undefined,
+    continuity: continuityOf(run),
     latestRender: serializeRender(run.latestRender),
     coverUrl: urlFor(run.cover),
     finalUrl: run.manifest?.approved?.final ? urlFor(run.manifest.approved.final) : null,

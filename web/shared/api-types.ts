@@ -62,6 +62,25 @@ export interface Manifest {
   lastError: RunError | null;
   activeJob: { kind: ActionKind; pid: number; startedAt: string; queueId?: string } | null;
   jobClips?: Record<string, string>;
+  // Where each job's newest clip came from and the seams the renderer recorded for it. Absent on
+  // runs made before WS2-P1 — their continuity is derived from take history and flagged as such.
+  clipLineage?: Record<string, { take: string; seamIn?: unknown; seamOut?: unknown }>;
+}
+
+/**
+ * One segment of the cut on screen, and whether it really continues from the segment before it.
+ * `confidence:'derived'` means the answer was reconstructed from take history (a pre-WS2 run) — the
+ * UI draws a dashed "join unknown" connector for those, never a solid link. Ids only, by contract:
+ * no filesystem path is ever serialized here.
+ */
+export interface ContinuityEntry {
+  jobId: string;
+  index: number;
+  take: string | null;         // the take this clip was rendered in
+  continuesFromPrev: boolean;
+  confidence: 'recorded' | 'derived';
+  from: { take: string | null; job: string | null } | null; // the clip its opening frame came off, when recorded
+  reason: string;              // machine token (see lib/lineage.js CONTINUITY_REASONS) — the UI words it
 }
 
 export interface RunSummary {
@@ -77,6 +96,9 @@ export interface RunSummary {
   planned: boolean;
   agents: AgentProgress;
   latestRender: RenderView | null;
+  // Aligned 1:1 with `latestRender.jobs`; null while a take is still rendering (nothing recorded yet)
+  // or when the run has no cut at all.
+  continuity: ContinuityEntry[] | null;
   coverUrl: string | null;
   finalUrl: string | null;
   finalFsPath: string | null;

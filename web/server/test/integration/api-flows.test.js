@@ -119,6 +119,16 @@ test('rerender-job: new take + seam from the latest cut + AUTO re-stitch → rev
   assert.equal(run.manifest.takes[1].mode, 'job');
   assert.equal(run.manifest.takes[1].feedback, 'warmer light');
   assert.equal(run.manifest.cuts.length, 2, 'each stitch is a recorded cut');
+
+  // WS2-P2, live: the manifest records which take each clip came out of, and the composition
+  // carries that clip's OWN seams instead of dropping them (without those, a cut that mixes takes
+  // is indistinguishable from an intact chain — run b1nx).
+  assert.equal(run.manifest.clipLineage.K1.take, 't2', 'the re-render moved K1 to the new take');
+  const composed = JSON.parse(fs.readFileSync(path.join(runsDir, runId, 'renders', 't2', 'render.json'), 'utf8'));
+  assert.ok(composed.jobs.every((j) => 'seamIn' in j && 'seamOut' in j), 'each composed clip carries its own seams');
+  assert.equal(composed.chained, false, 'the run-wide flag stays off for a composition — per-joint truth is in the seams');
+  assert.equal(run.continuity.length, run.latestRender.jobs.length);
+  assert.equal(run.continuity[0].continuesFromPrev, false, 'the opening segment continues from nothing');
 });
 
 test('SSE per-run: snapshot first, then live agent/spec-block/status events during planning', async () => {
@@ -413,6 +423,12 @@ test('cascade re-render: K1 + downstream K2 land in ONE take with BOTH clip reco
   assert.ok(Number.isInteger(run.latestRender.masterShortSide), 'masterShortSide is stamped at assembly');
   assert.ok(run.latestRender.masterShortSide < 1080, 'demo clips are small — upscale stays offered');
   assert.ok(run.manifest.cuts.length > before.manifest.cuts.length, 'a fresh cut was recorded');
+  // WS2-P2: a cascade re-renders the downstream job too, so the chain is intact and the read model
+  // may say so — this is the 5mjo shape, live, and the one the seamless stitcher is allowed to run on.
+  assert.deepEqual(Object.keys(run.manifest.clipLineage ?? {}).sort(), ['K1', 'K2']);
+  assert.deepEqual(run.continuity.map((c) => c.continuesFromPrev), [false, true]);
+  for (const c of run.continuity) assert.equal(c.confidence, 'recorded', 'both seams were written down');
+  assert.deepEqual(run.continuity[1].from, { take: 't2', job: 'K1' });
 });
 
 test('approve with upscale: Topaz child runs, final recorded, run completes', { skip: FF ? false : 'ffmpeg not installed' }, async () => {

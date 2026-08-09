@@ -10,6 +10,16 @@
   *that* a seam frame was used said nothing about **which clip** it came from, so a cut mixing take
   2's first segment with take 1's second looked exactly like an intact chain — this is what the
   seam-invisible stitcher needs to stop falling back to a hard cut on mixed timelines.
+- **The review read model answers, per segment, whether it really continues from the one before
+  it.** `GET /api/runs/:id` (and the library list) now carry `continuity[]`, one entry per clip in
+  the cut, computed by a pure rule: a segment continues from its predecessor **iff the clip its
+  opening frame was taken off is the clip currently at that position** — not merely "a seam frame
+  was used". Re-rendering one segment therefore breaks exactly the joint after it and nothing else.
+  Runs made before the lineage existed are reconstructed from take history and marked
+  `confidence: 'derived'`, so the UI can say *join unknown* instead of claiming a link it cannot
+  see. Take/job ids only: no filesystem path is ever serialized. The manifest gained `clipLineage`
+  (which take each job's newest clip came out of, with its seams), and a composed cut now carries
+  every clip's own `seamIn`/`seamOut` into `render.json` instead of dropping them.
 - **Boundary frames are applied honestly, per model.** One decision (`chooseSeamMode`) now answers
   "how is this clip pinned to its neighbours?" for the renderers, the prompt preview and the UI
   copy: `native` (a real first/last-frame anchor — the only mode anything may call *seamless*),
