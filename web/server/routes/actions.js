@@ -31,9 +31,11 @@ export function registerActionRoutes(app) {
 
   app.post('/api/runs/:id/rerender-job', async (req, reply) => {
     guard(req);
-    const { jobId, cascade = false, feedback, take } = req.body ?? {};
+    const { jobId, cascade = false, feedback, take, boundaries } = req.body ?? {};
     if (!jobId) throw Object.assign(new Error('jobId is required'), { statusCode: 400, hint: 'which job should be re-rendered, e.g. K2' });
-    const r = svc.rerenderJob(req.params.id, { jobId, cascade: !!cascade, feedback, take: Number(take) || undefined });
+    // `boundaries` (auto|both|start|end|none) is validated in the service, so a programmatic caller
+    // gets the same 400 the HTTP one does.
+    const r = svc.rerenderJob(req.params.id, { jobId, cascade: !!cascade, feedback, take: Number(take) || undefined, boundaries });
     return reply.code(202).send(r);
   });
 

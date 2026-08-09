@@ -327,8 +327,14 @@ export async function renderJob(spec, jobId, { runDir, backend, take = 0, feedba
   // this segment must join, and that is a stronger statement than "whatever the last take ended on".
   const jobDir = path.join(runDir, job.job_id);
   if (firstFrameFrom) {
-    startFrame = await resolveBoundaryFrame(firstFrameFrom, { end: 'in', destDir: jobDir });
-    seamInFrom = null; // a hand-picked still has no take/job/clip of its own to point back at
+    const pinned = await resolveBoundaryFrame(firstFrameFrom, { end: 'in', destDir: jobDir });
+    // A pin that lands on the very frame the chain would have used IS that chain: the web layer
+    // names the boundary outright (so the choice survives whatever chainFrames is set to) while
+    // --seam-from still says which take/job/clip it came off. Dropping the source there would tell
+    // the continuity rule this clip opens on nothing, and every re-rendered joint would read as a
+    // scene cut. Any OTHER still is hand-picked and genuinely points nowhere.
+    if (!startFrame || path.resolve(pinned) !== path.resolve(startFrame)) seamInFrom = null;
+    startFrame = pinned;
   } else if (job.first_frame) {
     seamInFrom = null; // the authored frame is what the renderer will use — naming the chain's
                        // source here would claim a continuation this clip does not have

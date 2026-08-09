@@ -12,6 +12,10 @@ import { createRingLog } from './ring-log.js';
 import { watchRun } from './artifact-watch.js';
 import { estimateRender, readProbeResolution, readRenderResolution, readUpscaleProvider } from './estimator.js';
 import { safeChild } from './paths.js';
+// Both config-free by construction (the runs-caps canary walks this graph): the continuity rule is a
+// pure function over a run record, and the model registry imports nothing at all.
+import { computeLineage, resolveBoundaries, BOUNDARY_MODES } from './lineage.js';
+import { capsFor, normalizeBackend } from '../../../src/lib/render-models.js';
 // config-FREE import: run-service is loaded eagerly by app.js, and the demo/e2e server sets FAL_BASE_URL
 // only AFTER its static import chain — importing anything that pulls config.js here would snapshot the
 // wrong (real) fal endpoint and make the validators/renders miss the mock.
@@ -220,7 +224,14 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
       const cascade = pendingCascade.get(runId);
       if (cascade && cascade.jobs.length) {
         const nextJob = cascade.jobs.shift();
-        enqueueRenderJob(runId, { jobId: nextJob, takeDir: cascade.takeDir, seamFrom: cascade.takeDir, feedback: cascade.feedback, take: cascade.take, promptOverrides: cascade.promptOverrides });
+        enqueueRenderJob(runId, {
+          jobId: nextJob, takeDir: cascade.takeDir, seamFrom: cascade.takeDir,
+          // The closing pin belongs to the LAST job of the cascade and to no other: every earlier
+          // job's ending is defined by the job that follows it in this same chain, so pinning one
+          // would fight the chain it was queued to rebuild.
+          lastFrameFrom: cascade.jobs.length ? undefined : cascade.lastFrameFrom,
+          feedback: cascade.feedback, take: cascade.take, promptOverrides: cascade.promptOverrides,
+        });
         return;
       }
       pendingCascade.delete(runId);
@@ -291,6 +302,41 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
       m.clipLineage[id] = { take: takeOfClip(j.clip), seamIn: j.seamIn ?? null, seamOut: j.seamOut ?? null };
     }
   }
+
+  /**
+   * The cut as the pure continuity rule wants it: one entry per plan job, pointing at that job's
+   * NEWEST clip and the seams the renderer recorded for it. `clipLineage` is exactly what composeCut
+   * would write into the next take, so the answer matches the cut the reviewer is looking at — and
+   * it costs no disk read at all.
+   */
+  function cutRecordFor(runId, m, jobIds) {
+    const byTake = new Map();
+    const cut = jobIds.map((jobId) => {
+      const lin = m?.clipLineage?.[jobId] ?? null;
+      const clip = m?.jobClips?.[jobId] ?? null;
+      const take = lin?.take ?? takeOfClip(clip);
+      if (take && clip) {
+        if (!byTake.has(take)) byTake.set(take, []);
+        byTake.get(take).push({ jobId, clip, seamIn: lin?.seamIn ?? null, seamOut: lin?.seamOut ?? null });
+      }
+      return { jobId, take };
+    });
+    // Oldest take first: the legacy derivation replays history in this order, and a map keyed by
+    // job order would hand it the wrong one.
+    const nOf = (t) => Number(/^t(\d+)$/.exec(t)?.[1] ?? 0);
+    const takes = [...byTake.entries()].sort((a, b) => nOf(a[0]) - nOf(b[0])).map(([take, jobs]) => ({ take, jobs }));
+    return { runId, takes, cut };
+  }
+
+  /** The model registry's caps for a backend, or null when the run names one we no longer know. */
+  const capsOf = (backend) => { try { return capsFor(normalizeBackend(backend).id); } catch { return null; } };
+
+  /** How many cast references a job carries — all chooseSeamMode asks about the cast. Mirrors what
+   *  characterGroups() resolves: the job's own element ids, or the whole roster when it names none. */
+  const castRefCountFor = (spec, jobId) => {
+    const job = (spec?.kling?.jobs ?? []).find((j) => j.job_id === jobId);
+    return job?.elements?.length || (spec?.kling?.elements?.length ?? 0);
+  };
 
   /** Write a full-composition render.json into takeDir: every spec job's newest clip, in order. */
   function composeCut(runId, takeDir) {
@@ -367,14 +413,19 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     });
   }
 
-  function enqueueRenderJob(runId, { jobId, takeDir, seamFrom, feedback, take, promptOverrides }) {
+  function enqueueRenderJob(runId, { jobId, takeDir, seamFrom, firstFrameFrom, lastFrameFrom, feedback, take, promptOverrides }) {
     const dir = dirFor(runId);
     return mgr.enqueue({
       runId, lane: 'spend', kind: 'render-job',
       script: CLI(root, 'render-job.js'),
       args: [
         '--spec', path.join(dir, 'spec.json'), '--job', jobId, '--out', takeDir,
+        // --seam-from names the take the opening frame came off (that is what makes the joint
+        // readable afterwards); --first-frame-from names the frame itself, so the boundary the user
+        // chose is honoured however the chaining default is configured.
         ...(seamFrom ? ['--seam-from', seamFrom] : []),
+        ...(firstFrameFrom ? ['--first-frame-from', firstFrameFrom] : []),
+        ...(lastFrameFrom ? ['--last-frame-from', lastFrameFrom] : []),
         ...(feedback ? ['--feedback', feedback] : []),
         ...(take ? ['--take', String(take)] : []),
         ...(promptOverrides ? ['--prompt-overrides', promptOverrides] : []),
@@ -529,12 +580,16 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     return revise(runId, { feedback: CONTENT_POLICY_REVISE_FEEDBACK });
   }
 
-  function rerenderJob(runId, { jobId, cascade = false, feedback, take }) {
+  function rerenderJob(runId, { jobId, cascade = false, feedback, take, boundaries = 'auto' }) {
     const dir = dirFor(runId);
     const spec = readJson(path.join(dir, 'spec.json'));
     if (!spec) throw Object.assign(new Error('this run has no plan yet'), { statusCode: 409, hint: 'plan before rendering' });
     const jobs = (spec.kling?.jobs ?? []).map((j) => j.job_id);
     if (!jobs.includes(jobId)) throw Object.assign(new Error(`job "${jobId}" is not in this plan`), { statusCode: 400, hint: `jobs: ${jobs.join(', ')}` });
+    const mode = boundaries ?? 'auto';
+    if (!BOUNDARY_MODES.includes(mode)) {
+      throw Object.assign(new Error(`"${mode}" is not a boundary plan`), { statusCode: 400, hint: `boundaries: ${BOUNDARY_MODES.join(', ')}` });
+    }
     assertNoSpendInFlight(runId);
     const m = readManifest(dir);
     const takeDir = nextTakeDir(dir);
@@ -544,17 +599,38 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     const cascadeJobs = cascade ? downstream : [];
     const backend = m?.backend ?? 'kling';
     const est = estimateRender(spec, { backend, mode: 'job', jobId, cascade, ...estOpts(backend) });
+
+    // WS2-P5 — which boundaries this take pins, decided by the pure rule over the cut as it stands.
+    // The take is one chain: its OPENING pin belongs to the first job rendered, its CLOSING pin to
+    // the last, because every job in between has both ends defined by its cascade neighbours.
+    const lastRendered = cascadeJobs.at(-1) ?? jobId;
+    const lineage = computeLineage(cutRecordFor(runId, m, jobs));
+    const planFor = (id) => resolveBoundaries({
+      jobIds: jobs, jobId: id, continuity: lineage, mode,
+      caps: capsOf(backend), castRefCount: castRefCountFor(spec, id),
+    });
+    const opening = planFor(jobId);
+    const closing = lastRendered === jobId ? opening : planFor(lastRendered);
+
     // Seam-in: renderJob wants <seamFrom>/<prevJob>/last_frame.png. The trustworthy source is the
     // take dir that produced the PREVIOUS job's newest clip (manifest.jobClips) — the latest cut's
     // dir may be a composed cut or a single-job take that never held the neighbour's frame.
-    const prevJobId = jobs[jobs.indexOf(jobId) - 1];
+    const prevJobId = opening.start ? opening.start.from?.jobId ?? jobs[jobs.indexOf(jobId) - 1] : null;
     const prevClip = prevJobId ? m?.jobClips?.[prevJobId] : null;
     let seamFrom;
     if (prevClip && fs.existsSync(path.join(path.dirname(prevClip), 'last_frame.png'))) {
       seamFrom = path.dirname(path.dirname(prevClip)); // <takeDir>/<prevJob>/clip.mp4 → <takeDir>
-    } else if (m?.cuts?.at(-1)?.take) {
+    } else if (prevJobId && m?.cuts?.at(-1)?.take) {
       seamFrom = path.join(dir, 'renders', m.cuts.at(-1).take);
     }
+    const openingFrame = seamFrom && prevJobId ? path.join(seamFrom, prevJobId, 'last_frame.png') : null;
+    const firstFrameFrom = openingFrame && fs.existsSync(openingFrame) ? openingFrame : undefined;
+    // Seam-out: the NEXT segment's own clip, handed to the child as a CLIP — grabbing its opening
+    // frame is the renderer's job (one implementation of that grab, and it is the one that already
+    // knows which end of a neighbour a closing pin wants).
+    const nextClip = closing.end ? m?.jobClips?.[closing.end.to?.jobId] : null;
+    const lastFrameFrom = nextClip && fs.existsSync(nextClip) ? nextClip : undefined;
+
     // Every job this take will render — the cascade jobs land in the SAME take dir, so they read the
     // same snapshot (that is why it is taken once, here, and not per enqueue).
     const overrides = snapshotPromptOverrides(dir, takeDir, [jobId, ...cascadeJobs]);
@@ -564,10 +640,23 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
       mm.lastError = null;
       return mm;
     });
-    if (cascadeJobs.length) pendingCascade.set(runId, { takeDir, takeId, jobs: [...cascadeJobs], feedback, take, promptOverrides: overrides.args[1] ?? null });
-    const queued = enqueueRenderJob(runId, { jobId, takeDir, seamFrom, feedback, take, promptOverrides: overrides.args[1] ?? null });
+    if (cascadeJobs.length) pendingCascade.set(runId, { takeDir, takeId, jobs: [...cascadeJobs], feedback, take, promptOverrides: overrides.args[1] ?? null, lastFrameFrom });
+    const queued = enqueueRenderJob(runId, {
+      jobId, takeDir, seamFrom, firstFrameFrom,
+      lastFrameFrom: cascadeJobs.length ? undefined : lastFrameFrom, // the last cascade job gets it
+      feedback, take, promptOverrides: overrides.args[1] ?? null,
+    });
     emitStatus(runId);
-    return { takeId, queued, estUsd: est.totalUsd, cascadeJobs };
+    // What was actually pinned, not what was asked for: a boundary whose frame is not on disk is
+    // reported as unpinned, so the dialog never claims a join this take will not have.
+    const applied = {
+      mode,
+      start: seamFrom ? opening.start : null,
+      end: lastFrameFrom ? closing.end : null,
+      startMode: seamFrom ? opening.startMode : 'none',
+      endMode: lastFrameFrom ? closing.endMode : 'none',
+    };
+    return { takeId, queued, estUsd: est.totalUsd, cascadeJobs, boundaries: applied };
   }
 
   function assemble(runId, { composition } = {}) {

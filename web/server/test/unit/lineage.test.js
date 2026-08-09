@@ -201,6 +201,111 @@ test('resolveBoundaries on a single-segment cut offers nothing to join to', PEND
   assert.equal(only.last, null);
 });
 
+// ── WS2-P5: the boundary plan a frame-conditioned re-render buys ───────────────────────────────
+//
+// `auto` is the load-bearing one. It MIRRORS the cut as it stands: a joint that is linked today
+// stays linked, one that is broken stays broken. It must never quietly repair a break — the whole
+// point of the dialog is that repairing a joint is a thing the user chooses and pays for.
+
+const BOUNDARY_PENDING = pending(lineage?.BOUNDARY_MODES,
+  'WS2-P5: resolveBoundaries({ jobIds, jobId, continuity, caps, mode })');
+
+const K = ['K1', 'K2', 'K3'];
+const planFor = (run, jobId, mode, extra = {}) => lineage.resolveBoundaries({
+  jobIds: K.slice(0, run.cut.length), jobId, mode, continuity: lineage.computeLineage(run), ...extra,
+});
+
+test("auto pins only the joints the cut ALREADY has — b1nx's break stays broken", BOUNDARY_PENDING, () => {
+  // b1nx's single joint is recorded-broken (K2 opens on a K1 the cut no longer contains).
+  const k2 = planFor(b1nx, 'K2', 'auto');
+  assert.equal(k2.start, null, 'auto must not silently repair the break — that is the explicit ask');
+  assert.equal(k2.end, null, 'K2 ends the cut');
+  assert.deepEqual(k2.first, { index: 0, jobId: 'K1', take: 't2' }, 'the neighbour is still OFFERED');
+
+  const k1 = planFor(b1nx, 'K1', 'auto');
+  assert.equal(k1.start, null, 'the first segment never gets a start pin');
+  assert.equal(k1.end, null, 'the joint into K2 is broken today, so auto leaves it broken');
+});
+
+test('auto on an intact chain (5mjo) keeps BOTH joins of a middle segment', BOUNDARY_PENDING, () => {
+  const mid = planFor(fivemjo, 'K2', 'auto');
+  assert.deepEqual(mid.start, { frame: 'last', from: { index: 0, jobId: 'K1', take: 't4' } },
+    "the opening pin takes the PREVIOUS clip's last frame");
+  assert.deepEqual(mid.end, { frame: 'first', to: { index: 2, jobId: 'K3', take: 't4' } },
+    "the closing pin takes the NEXT clip's first frame — that is how K3's join survives a K2 re-render");
+});
+
+test('both/start/end force each end; none renders standalone', BOUNDARY_PENDING, () => {
+  assert.ok(planFor(b1nx, 'K2', 'both').start, 'both REPAIRS the joint auto left broken');
+  const both = planFor(fivemjo, 'K2', 'both');
+  assert.ok(both.start && both.end, 'both pins both ends');
+
+  const startOnly = planFor(fivemjo, 'K2', 'start');
+  assert.ok(startOnly.start && startOnly.end === null);
+  const endOnly = planFor(fivemjo, 'K2', 'end');
+  assert.ok(endOnly.end && endOnly.start === null);
+
+  const none = planFor(fivemjo, 'K2', 'none');
+  assert.equal(none.start, null);
+  assert.equal(none.end, null);
+  assert.equal(none.startMode, 'none');
+  assert.equal(none.endMode, 'none');
+});
+
+test('the ends of the cut have nothing to pin to, whatever is asked for', BOUNDARY_PENDING, () => {
+  const head = planFor(fivemjo, 'K1', 'both');
+  assert.equal(head.start, null, 'the first segment never gets a start pin');
+  assert.ok(head.end, 'but it can still be pinned to the segment after it');
+  const tail = planFor(fivemjo, 'K3', 'both');
+  assert.ok(tail.start);
+  assert.equal(tail.end, null, 'the last segment never gets an end pin');
+});
+
+test('the pin STRENGTH is the renderer\'s answer, not the dialog\'s', BOUNDARY_PENDING, () => {
+  // Segmind's native slots are mutually exclusive with reference images (the correction note): a
+  // cast-less segment goes native, one with cast refs is soft-pinned and may only ever be called
+  // "near-seamless (reference-guided)".
+  const segmind = { family: 'seedance', label: 'Seedance', nativeFirstFrame: true, nativeLastFrame: true, firstFrameExcludesRefs: true };
+  const bare = planFor(fivemjo, 'K2', 'both', { caps: segmind, castRefCount: 0 });
+  assert.equal(bare.startMode, 'native');
+  assert.equal(bare.endMode, 'native');
+
+  const withCast = planFor(fivemjo, 'K2', 'both', { caps: segmind, castRefCount: 2 });
+  assert.equal(withCast.startMode, 'soft', 'keeping the cast means soft-pinning the frame');
+  assert.equal(withCast.endMode, 'soft');
+
+  const unknown = planFor(fivemjo, 'K2', 'both');
+  assert.equal(unknown.startMode, 'soft', 'with no caps on file, claim the WEAKER of the two');
+});
+
+test('a reconstruction is not evidence: a legacy run keeps the chain it has always rendered', BOUNDARY_PENDING, () => {
+  const l = lineage.computeLineage(legacy);
+  assert.ok(l.segments.every((s) => s.confidence === 'derived'), 'this fixture is the pre-P1 shape');
+  const plan = lineage.resolveBoundaries({ jobIds: ['K1', 'K2'], jobId: 'K2', mode: 'auto', continuity: l });
+  assert.ok(plan.start, 'auto neither repairs a derived break nor drops a chain over a guess');
+});
+
+test('a job the cut does not hold yet is planned from the job list alone', BOUNDARY_PENDING, () => {
+  const plan = lineage.resolveBoundaries({ jobIds: ['K1', 'K2', 'K3'], jobId: 'K2', mode: 'auto' });
+  assert.equal(plan.index, 1);
+  assert.ok(plan.start, 'nothing recorded to mirror → the historical default: chain the opening frame');
+  assert.equal(plan.end, null, 'and pin no ending, exactly as re-renders have always behaved');
+  assert.deepEqual(plan.first, { index: 0, jobId: 'K1', take: null });
+});
+
+test('an unknown boundary mode is refused, not guessed at', BOUNDARY_PENDING, () => {
+  assert.throws(() => planFor(fivemjo, 'K2', 'bogus'), /boundary mode/);
+  assert.deepEqual(lineage.BOUNDARY_MODES, ['auto', 'both', 'start', 'end', 'none']);
+});
+
+test('resolveBoundaries is pure, and its answer names no filesystem path', BOUNDARY_PENDING, () => {
+  const l = lineage.computeLineage(fivemjo);
+  const before = JSON.stringify(l);
+  const blob = JSON.stringify(lineage.resolveBoundaries({ jobIds: K, jobId: 'K2', mode: 'both', continuity: l }));
+  assert.equal(JSON.stringify(l), before, 'the caller\'s lineage is not mutated');
+  assert.ok(!/[/\\]/.test(blob), 'take/job ids only — a host directory is a leak');
+});
+
 test('lineage.js is pure: it imports no config, no fs, and no run-service', PENDING, () => {
   const src = fs.readFileSync(path.join(HERE, '../../lib/lineage.js'), 'utf8');
   for (const forbidden of ['node:fs', 'node:path', 'config.js', 'run-service', 'dotenv']) {

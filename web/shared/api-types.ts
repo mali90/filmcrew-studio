@@ -168,6 +168,30 @@ export type GlobalEvent =
 
 // ── Endpoint payloads ──
 export interface CreateRunBody { idea: string; backend: Backend; aspect: Aspect; durationS: number | null; cast?: string[]; environment?: string }
+
+// ── Frame-conditioned re-render (WS2-P5) ──
+/** What a re-render pins at its two ends. `auto` mirrors the joins the cut already has — it keeps a
+ *  linked joint linked and leaves a broken one broken; repairing a break is always an explicit ask. */
+export type BoundaryMode = 'auto' | 'both' | 'start' | 'end' | 'none';
+/** A neighbour segment, by id — never a host path. */
+export interface BoundaryNeighbour { index: number; jobId: string | null; take: string | null }
+/** How each end was ACTUALLY pinned (null = nothing pinned; the frame was missing or not asked for).
+ *  `startMode`/`endMode` come from the renderer's own chooseSeamMode: only `native` may be called
+ *  seamless in copy, `soft` is "near-seamless (reference-guided)", `none` is a scene cut. */
+export interface BoundaryPlan {
+  mode: BoundaryMode;
+  start: { frame: 'last'; from: BoundaryNeighbour | null } | null;
+  end: { frame: 'first'; to: BoundaryNeighbour | null } | null;
+  startMode: 'native' | 'soft' | 'none' | 'unsupported';
+  endMode: 'native' | 'soft' | 'none' | 'unsupported';
+}
+export interface RerenderJobBody { jobId: string; cascade?: boolean; feedback?: string; take?: number; boundaries?: BoundaryMode }
+export interface RerenderJobResult {
+  takeId: string;
+  estUsd: number | null;
+  cascadeJobs: string[];
+  boundaries: BoundaryPlan;
+}
 // `usd`/`totalUsd` are NULLABLE on purpose: some providers publish no per-second rate (every Segmind
 // model we drive), and the estimator answers "I don't know" rather than guessing a sibling's price or
 // 500ing the run page. null + `unknownPrice` = the rate is not on file; the render still costs money.

@@ -2,7 +2,8 @@
 // server's {error, hint} body — surfaces verbatim in the UI's error states.
 import type {
   CharactersResponse, CliStatus, CreateRunBody, DoctorReport, EnvironmentsResponse, Estimate, InstallCliEvent, ModelsResponse,
-  PromptView, PromptsResponse, ReferencesList, RunDetail, RunSummary, SetPromptBody, SetupStatus, VoicesList,
+  PromptView, PromptsResponse, ReferencesList, RerenderJobBody, RerenderJobResult, RunDetail, RunSummary,
+  SetPromptBody, SetupStatus, VoicesList,
 } from '../../../shared/api-types';
 
 const BASE = '/api';
@@ -106,8 +107,9 @@ export const api = {
 
   render: (id: string, mode: 'probe' | 'full') => post<{ takeId: string; estUsd: number | null }>(`/runs/${id}/render`, { mode }),
   revise: (id: string, body: { feedback: string; scope?: string }) => post<{ revisionId: string }>(`/runs/${id}/revise`, body),
-  rerenderJob: (id: string, body: { jobId: string; cascade?: boolean; feedback?: string }) =>
-    post<{ takeId: string; estUsd: number | null; cascadeJobs: string[] }>(`/runs/${id}/rerender-job`, body),
+  /** Paid. `boundaries` says which ends to pin (default `auto` — mirror the joins the cut has). */
+  rerenderJob: (id: string, body: RerenderJobBody) =>
+    post<RerenderJobResult>(`/runs/${id}/rerender-job`, body),
   assemble: (id: string, composition?: Record<string, string>) => post<unknown>(`/runs/${id}/assemble`, { composition }),
   approve: (id: string, upscale: boolean, cut?: string) =>
     post<{ final: string | null }>(`/runs/${id}/approve`, { upscale, ...(cut ? { cut } : {}) }),

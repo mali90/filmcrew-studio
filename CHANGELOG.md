@@ -3,6 +3,21 @@
 ## Unreleased
 
 ### Added
+- **A re-render can now be pinned to the clips on either side of it, and by default it keeps the
+  joins the cut already has.** `POST /api/runs/:id/rerender-job` takes `boundaries` —
+  `auto` · `both` · `start` · `end` · `none`. `auto` mirrors the cut as it stands: a joint that is
+  whole today stays whole, and one that is already broken stays broken. It never quietly repairs a
+  break, because repairing one costs money and is a thing you should be choosing, not discovering on
+  the invoice. `both`/`start`/`end` ask outright, `none` renders the segment on its own. The new
+  ability is the closing pin: pinning a segment's *ending* to the next clip's opening frame keeps the
+  join downstream of it alive **without** re-rendering everything after it — until now the only way
+  to keep that join was to pay for the whole tail. Whichever ends are pinned, the child is told both
+  which frame (`--first-frame-from`) and which take it came off (`--seam-from`), so the joint stays
+  readable afterwards and the seamless stitcher can still act on it. During a cascade the closing pin
+  belongs to the last job in the chain and to no other — every earlier one's ending is defined by the
+  job that follows it, so pinning it would fight the chain it was queued to rebuild. How strongly
+  each end is actually held comes from the renderer's own `chooseSeamMode`, so only a native anchor
+  is ever reported as a true seam; a reference-guided pin says so.
 - **The prompt sheet now has an editor, and it meters what you type in the unit the model actually
   counts.** `Edit prompt` opens the words themselves — the authored scene body, not the composed
   prompt, because the style directive, the identity clause, the speech rules and the frame pins are

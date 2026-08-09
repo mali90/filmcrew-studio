@@ -19,9 +19,17 @@
 // Pure by construction: no filesystem, no host config module, no runs service, no I/O of any kind.
 // Input is a plain run record (the runs service assembles it); output is ids only — a take/job pair
 // is meaningful to the UI, a host directory is a leak.
+//
+// The one import is `chooseSeamMode`, the single place that decides how a backend applies a boundary
+// frame. A re-render dialog that answered that question for itself would eventually promise a
+// "seamless" join the renderer soft-pins — so it asks the same function the renderer asks.
+import { chooseSeamMode } from '../../../src/lib/prompt-compose.js';
 
 /** Joint verdicts, in the order of how much the UI is allowed to promise. */
 export const JOINT_KINDS = Object.freeze(['linked', 'broken', 'isolated', 'unknown']);
+
+/** What a re-render may ask for at its two ends. `auto` is the default on every surface. */
+export const BOUNDARY_MODES = Object.freeze(['auto', 'both', 'start', 'end', 'none']);
 
 /**
  * Machine tokens explaining a verdict. The UI turns these into copy — never the other way round, so
@@ -50,6 +58,7 @@ export const CONTINUITY_REASONS = Object.freeze([
  * @typedef {{index:number, jobId:string|null, take:string|null, continuesFromPrev:boolean,
  *            confidence:'recorded'|'derived', from:{take:string|null,job:string|null}|null,
  *            reason:string}} Segment
+ * @typedef {{index:number, jobId:string|null, take:string|null}} Neighbour
  * @typedef {{index:number, fromIndex:number, toIndex:number, fromJobId:string|null,
  *            toJobId:string|null, kind:string, linked:boolean,
  *            confidence:'recorded'|'derived', reason:string}} Joint
@@ -267,21 +276,95 @@ export function serializeContinuity(lineage) {
 }
 
 /**
- * The neighbours a re-render of segment `index` may be pinned to: `first` is the segment before it
- * (whose closing frame becomes this one's opening frame) and `last` the segment after it (whose
- * opening frame becomes this one's closing frame). Either is null at the ends of the cut — the P5
- * dialog then says "opens on a cut" / "ends on a cut" rather than naming a neighbour that does not
- * exist.
- * @param {{segments:Segment[]}} lineage
- * @param {number} index
- * @returns {{first:{index:number,jobId:string|null,take:string|null}|null, last:{index:number,jobId:string|null,take:string|null}|null}}
+ * What a re-render of one segment should pin at each end — and how strongly the UI may describe it.
+ *
+ * Two ways to name the segment, one answer:
+ *   resolveBoundaries(lineage, 1)                                  by cut position; mode = 'auto'
+ *   resolveBoundaries({ jobIds, jobId, continuity, caps, castRefCount, mode })
+ *
+ * `first`/`last` are the CANDIDATES — the neighbours that exist at all, so the dialog can say
+ * "opens on a cut" instead of naming a segment that is not there. `start`/`end` are the DECISION for
+ * `mode`, and `startMode`/`endMode` say how this backend would really apply each one (straight from
+ * chooseSeamMode, so the dialog's sentence and the renderer cannot disagree about which joins may be
+ * called seamless).
+ *
+ * The modes:
+ *   auto            mirror the cut as it stands — a joint that is linked today stays linked, one
+ *                   that is broken stays broken. Auto NEVER silently repairs a break; that is what
+ *                   the dialog's explicit choice is for. With nothing on record to mirror (a job the
+ *                   cut does not contain yet) it keeps the historical default: chain the opening
+ *                   frame, pin no ending.
+ *   both/start/end  force that end, whenever the neighbour exists at all
+ *   none            render standalone — both joins become scene cuts
+ *
+ * `frame` names WHICH frame of the neighbour is wanted, never a path: this module reads no
+ * filesystem. An opening pin takes the previous clip's LAST frame; a closing pin takes the next
+ * clip's FIRST frame. Backwards, it would pin the wrong end of the neighbour and pay for it.
+ *
+ * @param {{segments:Segment[]}|{jobIds?:string[], jobId?:string, index?:number,
+ *          continuity?:{segments:Segment[]}|Segment[], caps?:object, castRefCount?:number,
+ *          mode?:string}} input
+ * @param {number} [index]  cut position — supplying it selects the positional call shape
+ * @returns {{mode:string, index:number, jobId:string|null,
+ *            first:Neighbour|null, last:Neighbour|null,
+ *            start:{frame:'last', from:Neighbour|null}|null,
+ *            end:{frame:'first', to:Neighbour|null}|null,
+ *            startMode:string, endMode:string}}
  */
-export function resolveBoundaries(lineage, index) {
-  const segments = Array.isArray(lineage?.segments) ? lineage.segments : [];
-  const i = Number(index);
-  if (!Number.isInteger(i) || i < 0 || i >= segments.length) return { first: null, last: null };
-  const neighbour = (s) => (s ? { index: s.index, jobId: s.jobId ?? null, take: s.take ?? null } : null);
-  return { first: neighbour(segments[i - 1]), last: neighbour(segments[i + 1]) };
+export function resolveBoundaries(input, index) {
+  const opts = index === undefined ? (input ?? {}) : { continuity: input, index };
+  const mode = opts.mode ?? 'auto';
+  if (!BOUNDARY_MODES.includes(mode)) {
+    throw new Error(`unknown boundary mode "${mode}" — expected one of ${BOUNDARY_MODES.join(', ')}`);
+  }
+  const raw = opts.continuity;
+  const segments = Array.isArray(raw) ? raw : Array.isArray(raw?.segments) ? raw.segments : [];
+  const jobIds = (Array.isArray(opts.jobIds) ? opts.jobIds : []).map(str).filter(Boolean);
+
+  // The cut is the authority on order and on takes; the plan's job list stands in for a job the cut
+  // does not hold yet (a fresh job, or a run whose clips were never assembled).
+  const order = Array.from({ length: Math.max(segments.length, jobIds.length) }, (_, k) => ({
+    index: k,
+    jobId: str(segments[k]?.jobId) ?? jobIds[k] ?? null,
+    take: str(segments[k]?.take),
+    seg: segments[k] ?? null,
+  }));
+
+  const wantedId = str(opts.jobId);
+  const i = Number.isInteger(opts.index) ? opts.index
+    : wantedId ? order.findIndex((e) => e.jobId === wantedId) : -1;
+  const cur = i >= 0 ? order[i] ?? null : null;
+  const prev = cur && i > 0 ? order[i - 1] : null;
+  const next = cur ? order[i + 1] ?? null : null;
+  const face = (e) => (e ? { index: e.index, jobId: e.jobId, take: e.take } : null);
+
+  // "Is this joint whole right now?" — the RECORDED verdict when there is one, otherwise the
+  // caller's historical default. A reconstruction is not evidence (the joint kinds already refuse
+  // to let anything act on one), so auto neither repairs a derived break nor drops a chain over a
+  // guess: it renders what a run of that vintage has always rendered.
+  const joined = (seg, fallback) => (seg?.confidence === 'recorded' ? Boolean(seg.continuesFromPrev) : fallback);
+  const wantStart = Boolean(prev)
+    && (mode === 'both' || mode === 'start' || (mode === 'auto' && joined(cur.seg, true)));
+  const wantEnd = Boolean(next)
+    && (mode === 'both' || mode === 'end' || (mode === 'auto' && joined(next.seg, false)));
+
+  const seam = chooseSeamMode({
+    caps: opts.caps,
+    castRefCount: Number(opts.castRefCount) || 0,
+    hasSeamIn: wantStart,
+    hasSeamOut: wantEnd,
+  });
+  return {
+    mode,
+    index: cur ? cur.index : -1,
+    jobId: cur?.jobId ?? wantedId ?? null,
+    first: face(prev),
+    last: face(next),
+    start: wantStart ? { frame: 'last', from: face(prev) } : null,
+    end: wantEnd ? { frame: 'first', to: face(next) } : null,
+    startMode: seam.in.mode,
+    endMode: seam.out.mode,
+  };
 }
 
-export default { JOINT_KINDS, CONTINUITY_REASONS, computeLineage, serializeContinuity, resolveBoundaries };
+export default { JOINT_KINDS, BOUNDARY_MODES, CONTINUITY_REASONS, computeLineage, serializeContinuity, resolveBoundaries };

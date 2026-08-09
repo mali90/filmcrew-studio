@@ -97,6 +97,30 @@ test('render-job: --first-frame-from BEATS the frame --seam-from would have deri
   const side = JSON.parse(fs.readFileSync(path.join(runDir, 'K2', 'prompts.json'), 'utf8'));
   assert.equal(path.basename(side.seam_in.frame), path.basename(PIN_PNG), 'the explicit flag wins');
   assert.notEqual(side.seam_in.frame, derived);
+  assert.equal(side.seam_in.from, null, 'a hand-picked still points back at no take, job or clip');
+});
+
+// WS2-P5: the web layer names the boundary BOTH ways — --seam-from for the take the frame came off,
+// --first-frame-from for the frame itself, so the reviewer's choice survives however chainFrames is
+// configured. Naming the same frame twice must not cost the lineage: without the recorded source,
+// lib/lineage.js reads every re-rendered joint as a scene cut and the seamless stitcher never runs.
+test('render-job: --first-frame-from ON the chained frame KEEPS the recorded seam source', PENDING, async () => {
+  const spec = writeSpec('rj-same', TWO_JOBS);
+  const prior = path.join(work.dir, 'same-take');
+  fs.mkdirSync(path.join(prior, 'K1'), { recursive: true });
+  const derived = path.join(prior, 'K1', 'last_frame.png');
+  fs.writeFileSync(derived, ONE_PX_PNG);
+  fs.writeFileSync(path.join(prior, 'render.json'), JSON.stringify({ jobs: [{ jobId: 'K1', clip: path.join(prior, 'K1', 'clip.mp4') }] }));
+  const runDir = path.join(work.dir, 'rj-same-out');
+  const r = await runCli('src/cli/render-job.js', [
+    '--spec', spec, '--job', 'K2', '--out', runDir, '--seam-from', prior, '--first-frame-from', derived,
+  ], { env: CHILD_ENV });
+  assert.equal(r.code, 0, r.stderr);
+  const side = JSON.parse(fs.readFileSync(path.join(runDir, 'K2', 'prompts.json'), 'utf8'));
+  assert.equal(side.seam_in.frame, derived);
+  assert.equal(side.seam_in.from?.job, 'K1', 'the joint stays readable — this IS the chain, spelled out');
+  assert.equal(side.seam_in.from?.take, path.basename(prior));
+  assert.equal(side.seam_in.from?.clip, path.join(prior, 'K1', 'clip.mp4'));
 });
 
 test('render-job: --last-frame-from <clip> grabs that clip\'s FIRST frame (end where the next one begins)', PENDING_FF, async () => {
