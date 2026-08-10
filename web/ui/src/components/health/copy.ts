@@ -28,6 +28,10 @@ export function webHint(c: Check, context: 'wizard' | 'settings'): string {
     case 'upscale-provider': return 'UPSCALE_PROVIDER in .env isn’t a provider this app knows. Use auto (upscale wherever the run rendered), fal, or segmind.';
     case 'ffmpeg': return 'Not found on this machine. It assembles your clips into the finished video.';
     case 'ffprobe': return 'Ships with ffmpeg — the install above covers it.';
+    // Soft: the render still finishes, it just looks worse at the seams. The number lives in the
+    // check's own label, so this says what it costs and who does the updating.
+    case 'ffmpeg-version':
+      return 'Your ffmpeg is too old for the crossfade the seamless stitcher uses, so long cuts join with a hard cut at every seam. Update it yourself (macOS: brew upgrade ffmpeg · Windows: winget upgrade Gyan.FFmpeg) — the app never installs or updates ffmpeg.';
     case 'references':
       return context === 'wizard'
         ? 'Optional — you’ll add reference images on the Cast page once you’re in.'

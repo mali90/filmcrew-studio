@@ -190,6 +190,17 @@
   card's blurb now names the provider that bills *this* install rather than assuming fal, and says
   which key each part of the pipeline needs — a fal-only and a Segmind-only install are both
   ordinary setups.
+- **The health check now tells you when your ffmpeg is too old to stitch a seam, instead of you
+  finding out in the finished film.** It only ever proved that ffmpeg *runs* — and a build older
+  than **4.3** runs perfectly well, then can't crossfade, because the filter the seamless stitcher
+  uses (`xfade`) doesn't exist before 4.3; the stitch falls back to a hard cut at every seam.
+  `npm run doctor` and the web health card now read the version off `ffmpeg -version`, show it when
+  it's fine, and when it isn't say what it costs and give you the upgrade command for your OS. It is
+  a **warning, never a blocker**: the video still delivers, and the app never installs or upgrades
+  ffmpeg for you — you run that command, as you always have. A version we can't read (a git snapshot
+  like `N-1234-gabcdef`) is reported as unknown and passes; a binary that works but won't label
+  itself is no evidence of a problem. The minimum is written down in `docs/SETUP.md` beside the
+  install commands.
 
 ### Fixed
 - **The prompt preview's byte budget is now pinned to the renderer's own defaults, for installs

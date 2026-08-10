@@ -341,7 +341,7 @@ export interface ModelsResponse {
 // person whose default backend renders on Segmind and merely informs everyone else.
 export type CheckId =
   | 'fal-key' | 'segmind-key' | 'render-assets' | 'backend' | 'upscale-provider'
-  | 'voices' | 'voice-clips' | 'llm' | 'ffmpeg' | 'ffprobe' | 'references';
+  | 'voices' | 'voice-clips' | 'llm' | 'ffmpeg' | 'ffmpeg-version' | 'ffprobe' | 'references';
 export interface DoctorReport {
   checks: { id: CheckId; ok: boolean; label: string; hint: string; soft: boolean }[];
   hard: number;

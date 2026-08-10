@@ -25,12 +25,63 @@ export const SOFT = ['reference images', 'character voices', 'voice ref clips', 
  */
 export const isSoft = (c) => (typeof c.soft === 'boolean' ? c.soft : SOFT.some((s) => c.label.startsWith(s)));
 
-/** Spawn `bin -version` and resolve true iff it runs (used for ffmpeg/ffprobe presence). */
+/** Spawn `bin -version` and resolve true iff it runs (ffprobe presence, and init.js's system probe;
+ *  ffmpeg itself goes through probeFfmpeg below, which also keeps the banner). */
 export function whichVersion(bin) {
   return new Promise((resolve) => {
     const c = spawn(bin, ['-version'], { stdio: ['ignore', 'ignore', 'ignore'] });
     c.on('error', () => resolve(false));
     c.on('close', (code) => resolve(code === 0));
+  });
+}
+
+// The seamless stitch crossfades every joint with ffmpeg's `xfade` filter, which does not exist
+// before 4.3 — on an older build the stitch fails and assemble.js falls back to a hard cut at every
+// seam. That is a degraded master, not a broken one, so the floor is a WARNING (soft) check.
+export const FFMPEG_MIN_VERSION = '4.3';
+const FFMPEG_MIN = [4, 3];
+// Upgrade, not install (init.js owns the install commands): the user runs these, we never do.
+const FFMPEG_UPDATE_HINT = {
+  darwin: 'brew upgrade ffmpeg',
+  win32: 'winget upgrade -e --id Gyan.FFmpeg',
+  linux: "sudo apt upgrade ffmpeg (or your distro's package manager — some distros ship 4.x for years)",
+};
+
+/**
+ * Read the release number out of `ffmpeg -version` output: {release, major, minor} or null when the
+ * banner carries no release we can compare (git snapshots like "N-1234-gabcdef", or anything that
+ * isn't ffmpeg's banner at all). Null means UNKNOWN, never "too old" — a binary that runs but won't
+ * label itself is no evidence of a problem, and doctor must not cry wolf over it.
+ */
+export function parseFfmpegVersion(output) {
+  const banner = /^\s*ffmpeg version\s+(\S+)/i.exec(String(output ?? '').split('\n')[0]);
+  if (!banner) return null;
+  // Distro builds glue their packaging onto the release ("6.1.1-3ubuntu5") and some prefix it with
+  // n or v ("n7.1"); git snapshots ("N-1234-gabcdef") open with no number at all and stay unknown.
+  const num = /^[nv]?(\d+)(?:\.(\d+))?/.exec(banner[1]);
+  if (!num) return null;
+  // `release` is display only and goes into a padded doctor label, so cap what a stray binary can
+  // print into it.
+  return { release: banner[1].slice(0, 40), major: Number(num[1]), minor: Number(num[2] ?? 0) };
+}
+
+/** True iff a parsed version is at/above the floor. UNKNOWN (null) passes — see parseFfmpegVersion. */
+export const ffmpegVersionOk = (v) => !v || v.major > FFMPEG_MIN[0] || (v.major === FFMPEG_MIN[0] && v.minor >= FFMPEG_MIN[1]);
+
+/** Spawn `bin -version` and resolve {ok, banner} — the presence check and the version floor read the
+ *  same single spawn. Output is tiny (a few KB) and drained, so nothing can block on a full pipe. */
+export function probeFfmpeg(bin) {
+  return new Promise((resolve) => {
+    let out = '';
+    let c;
+    try {
+      c = spawn(bin, ['-version'], { stdio: ['ignore', 'pipe', 'ignore'] });
+    } catch {
+      return resolve({ ok: false, banner: '' });
+    }
+    c.stdout?.on('data', (d) => { out += d; });
+    c.on('error', () => resolve({ ok: false, banner: '' }));
+    c.on('close', (code) => resolve({ ok: code === 0, banner: out }));
   });
 }
 
@@ -182,8 +233,18 @@ export async function runChecks({ env = process.env } = {}) {
   }
 
   // 3. ffmpeg / ffprobe
-  add('ffmpeg', await whichVersion(config.video.ffmpeg), `ffmpeg present (${config.video.ffmpeg})`, 'install ffmpeg and/or set FFMPEG_BIN');
+  const ff = await probeFfmpeg(config.video.ffmpeg);
+  add('ffmpeg', ff.ok, `ffmpeg present (${config.video.ffmpeg})`, 'install ffmpeg and/or set FFMPEG_BIN');
   add('ffprobe', await whichVersion(config.video.ffprobe), `ffprobe present (${config.video.ffprobe})`, 'install ffmpeg (ffprobe) and/or set FFPROBE_BIN');
+  // SOFT, and only once ffmpeg answers at all — a missing ffmpeg is already red above, and the app
+  // never installs or upgrades it (the web/wizard hand you the command, you run it), so an old build
+  // can only ever be a warning that names what it costs.
+  if (ff.ok) {
+    const v = parseFfmpegVersion(ff.banner);
+    add('ffmpeg-version', ffmpegVersionOk(v), `ffmpeg ${FFMPEG_MIN_VERSION}+ for seamless stitching (${v ? v.release : 'version unknown'})`,
+      `update ffmpeg yourself (${FFMPEG_UPDATE_HINT[process.platform] || FFMPEG_UPDATE_HINT.linux}) — ${FFMPEG_MIN_VERSION} is where the crossfade the seamless stitcher uses arrives; until then cuts stitch with a hard cut at every seam`,
+      { soft: true });
+  }
   // SOFT: the stitcher only improves CHAINED seams. Without it every cut still assembles, just with
   // a hard cut (and a small lighting pop) at each seam — so this must never block a render.
   add('seamstitch', (await seamstitchAvailable()).ok, 'seamless stitcher available (python3 + numpy + pillow)',
@@ -213,4 +274,7 @@ export function formatChecks(checks) {
   return out;
 }
 
-export default { runChecks, hardFailures, formatChecks, whichVersion, probeCli, probeCliBin, isSoft, SOFT };
+export default {
+  runChecks, hardFailures, formatChecks, whichVersion, probeFfmpeg, probeCli, probeCliBin, isSoft, SOFT,
+  parseFfmpegVersion, ffmpegVersionOk, FFMPEG_MIN_VERSION,
+};
