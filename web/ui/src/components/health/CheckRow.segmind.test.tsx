@@ -9,7 +9,7 @@
 //     hint must name BOTH ways out rather than just "add a fal key".
 // Neither offers the Cast affordance the other soft rows do — there is nothing to fix in Cast.
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import type { DoctorReport } from '../../../../shared/api-types';
 import { CheckRow } from './CheckRow';
@@ -42,6 +42,30 @@ describe('health copy — the provider checks', () => {
     row({ ...SEGMIND_KEY, soft: false });
     const hint = screen.getByText(/Add SEGMIND_API_KEY to \.env/);
     expect(hint).toHaveTextContent(/segmind\.com/i);
+  });
+
+  // Both destinations grew a Segmind field, so the row may finally offer the jump — but only when
+  // it is HARD. Sending a fal user to a key form for a provider they never chose is noise, and the
+  // soft row's hint already says what the key would buy.
+  it('only a HARD Segmind key offers the jump to the Keys card', () => {
+    const onAnchor = vi.fn();
+    render(
+      <MemoryRouter>
+        <ul>
+          <CheckRow
+            check={{ ...SEGMIND_KEY, soft: false }} context="settings" refetching={false}
+            failedRechecks={0} allChecks={[SEGMIND_KEY]} onRecheck={() => {}} onAnchor={onAnchor}
+          />
+        </ul>
+      </MemoryRouter>,
+    );
+    screen.getByRole('button', { name: 'Fix in Keys' }).click();
+    expect(onAnchor).toHaveBeenCalledWith('keys-heading');
+  });
+
+  it('a soft Segmind key offers no fix button at all', () => {
+    row(SEGMIND_KEY);
+    expect(screen.queryByRole('button', { name: 'Fix in Keys' })).not.toBeInTheDocument();
   });
 
   it('render-assets offers BOTH remedies — a fal key or data-uri uploads', () => {

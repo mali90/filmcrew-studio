@@ -189,7 +189,10 @@
   written, so saving a new fal key leaves a configured `SEGMIND_API_KEY` exactly where it was. The
   card's blurb now names the provider that bills *this* install rather than assuming fal, and says
   which key each part of the pipeline needs — a fal-only and a Segmind-only install are both
-  ordinary setups.
+  ordinary setups. Now that the field exists, a failing Segmind key in the health list carries a
+  *Fix in Keys* button that lands you on it, instead of only naming the `.env` variable — but only
+  when the check is hard (your backend really does render on Segmind); a fal install still sees the
+  quiet optional note it saw before.
 - **The health check now tells you when your ffmpeg is too old to stitch a seam, instead of you
   finding out in the finished film.** It only ever proved that ffmpeg *runs* — and a build older
   than **4.3** runs perfectly well, then can't crossfade, because the filter the seamless stitcher
