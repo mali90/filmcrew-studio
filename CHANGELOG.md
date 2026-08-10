@@ -181,6 +181,15 @@
   actually used — a clip that opened on an authored or hand-picked frame no longer names a source
   clip it did not continue from. All three flags are validated before anything is queued — a typo
   costs nothing.
+- **Settings › Keys holds the Segmind key too.** Setup could ask for it, but afterwards there was
+  nowhere in the app to rotate or add one — a Segmind install had to hand-edit `.env`. The field
+  sits beside the fal one with the same masked placeholder and the same live *Validate*, which
+  probes the model your default backend actually names (a 2.0 install is no longer judged against
+  the 2.5 slug). **An empty field never clears a stored key**: only keys you actually type are
+  written, so saving a new fal key leaves a configured `SEGMIND_API_KEY` exactly where it was. The
+  card's blurb now names the provider that bills *this* install rather than assuming fal, and says
+  which key each part of the pipeline needs — a fal-only and a Segmind-only install are both
+  ordinary setups.
 
 ### Fixed
 - **The prompt preview's byte budget is now pinned to the renderer's own defaults, for installs

@@ -1,7 +1,8 @@
-// API keys — fal.ai and the LLM provider. Secrets (fal + LLM key) write only on "Save keys"; the
-// non-secret provider/transport/model auto-save the moment you change them (so navigating away never
-// loses the choice, and Health re-checks against the live selection). CLI transport swaps the key
-// field for a detect/install/login panel; Copilot is CLI-only so it locks transport to CLI.
+// API keys — the two render providers and the LLM provider. Secrets (fal + Segmind + LLM key) write
+// only on "Save keys", and only when typed; the non-secret provider/transport/model auto-save the
+// moment you change them (so navigating away never loses the choice, and Health re-checks against
+// the live selection). CLI transport swaps the key field for a detect/install/login panel; Copilot
+// is CLI-only so it locks transport to CLI.
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
@@ -28,12 +29,14 @@ export function KeysCard() {
   const cliAll = useQuery({ queryKey: ['cli-status'], queryFn: api.cliStatusAll });
 
   const [falKey, setFalKey] = useState('');
+  const [segmindKey, setSegmindKey] = useState('');
   const [llmKey, setLlmKey] = useState('');
   const [provider, setProvider] = useState('claude');
   const [transport, setTransport] = useState('api');
   const [model, setModel] = useState('');
   const [seeded, setSeeded] = useState(false);
   const [falCheck, setFalCheck] = useState<KeyCheck>({ state: 'idle' });
+  const [segmindCheck, setSegmindCheck] = useState<KeyCheck>({ state: 'idle' });
   const [llmCheck, setLlmCheck] = useState<KeyCheck>({ state: 'idle' });
   const modelTimer = useRef<ReturnType<typeof setTimeout>>();
 
@@ -47,6 +50,9 @@ export function KeysCard() {
   useEffect(() => () => clearTimeout(modelTimer.current), []);
 
   const keyEnv = PROVIDERS.find((p) => p.value === provider)?.keyEnv ?? 'LLM_API_KEY';
+  // Whose account the DEFAULT backend bills — the server already resolved it from RENDER_BACKEND,
+  // so the copy never has to guess which of the two render keys this install lives on.
+  const renderProvider = status.data?.renderProvider ?? 'fal';
   const maskedFor = (envKey: string) => {
     const row = env.data?.rows.find((r) => r.key === envKey);
     return row?.set ? row.value : 'not set';
@@ -90,6 +96,21 @@ export function KeysCard() {
     }
   };
 
+  const validateSegmind = async () => {
+    setSegmindCheck({ state: 'checking' });
+    try {
+      // Send the CONFIGURED backend: the endpoint probes that model at ITS slug, so validating a
+      // 2.0 install against the default 2.5 slug would reject a perfectly good key (and hide a
+      // typo'd SEGMIND_SEEDANCE20_SLUG until the first paid render).
+      const r = await api.validateSegmind(segmindKey, status.data?.defaults.backend);
+      // A validation that had to do something anomalous (queued a probe job, empty account) says so
+      // in `warning` — it is still a valid key, and the note is more use than a bare "Key valid".
+      setSegmindCheck(r.ok ? { state: 'valid', note: r.warning } : { state: 'invalid', reason: r.reason ?? 'key rejected' });
+    } catch (e) {
+      setSegmindCheck({ state: 'invalid', reason: e instanceof ApiClientError ? e.hint : 'validation failed' });
+    }
+  };
+
   const validateLlm = async () => {
     setLlmCheck({ state: 'checking' });
     try {
@@ -105,8 +126,10 @@ export function KeysCard() {
     onSuccess: () => {
       toast({ kind: 'success', text: 'Keys saved. Children read .env fresh — no restart needed.' });
       setFalKey('');
+      setSegmindKey('');
       setLlmKey('');
       setFalCheck({ state: 'idle' });
+      setSegmindCheck({ state: 'idle' });
       setLlmCheck({ state: 'idle' });
       qc.invalidateQueries({ queryKey: ['settings-env'] });
       qc.invalidateQueries({ queryKey: ['doctor'] });
@@ -117,7 +140,11 @@ export function KeysCard() {
 
   const onSave = () => {
     const updates: Record<string, string> = {};
+    // Only what was actually TYPED. Both render keys can be configured at once (Segmind renders,
+    // fal mints voices and holds reference uploads), the fields show a mask rather than the secret,
+    // and a blank value CLEARS the key server-side — so "empty" has to mean "leave it alone".
     if (falKey.trim()) updates.FAL_KEY = falKey.trim();
+    if (segmindKey.trim()) updates.SEGMIND_API_KEY = segmindKey.trim();
     if (llmKey.trim()) updates[keyEnv] = llmKey.trim();
     if (!Object.keys(updates).length) {
       toast({ kind: 'info', text: 'Nothing to save — enter a key first. (Provider, model, and transport save on change.)' });
@@ -133,7 +160,9 @@ export function KeysCard() {
   return (
     <section aria-labelledby="keys-heading" className="rounded-r3 border border-line bg-surface-1 p-5">
       <h2 id="keys-heading" className="text-heading text-ink">Keys</h2>
-      <p className="mt-1 text-dense text-ink-muted">fal.ai renders the clips; your LLM provider plans them.</p>
+      <p className="mt-1 text-dense text-ink-muted">
+        Your LLM provider plans the clips; {renderProvider === 'segmind' ? 'Segmind' : 'fal.ai'} renders them.
+      </p>
 
       <div className="mt-4 space-y-5">
         <KeyField
@@ -144,6 +173,22 @@ export function KeysCard() {
           check={falCheck}
           placeholder={maskedFor('FAL_KEY')}
         />
+
+        <KeyField
+          label="Segmind key"
+          value={segmindKey}
+          onChange={(v) => { setSegmindKey(v); setSegmindCheck({ state: 'idle' }); }}
+          onValidate={validateSegmind}
+          check={segmindCheck}
+          placeholder={maskedFor('SEGMIND_API_KEY')}
+        />
+
+        <p className="text-caption text-ink-muted">
+          Which render key you need follows what you actually run: your default backend bills its own
+          provider, Kling and voice minting always run on fal.ai, and the Topaz upscale follows the
+          render unless UPSCALE_PROVIDER pins it elsewhere. A fal-only and a Segmind-only install are
+          both valid — and a field left empty leaves the stored key untouched.
+        </p>
 
         <div className="flex flex-wrap items-end gap-3">
           <div>
