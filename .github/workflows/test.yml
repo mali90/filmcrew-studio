@@ -7,7 +7,7 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -19,6 +19,14 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
 
+      # ffmpeg's VERSION is pinned by the runner image (ubuntu-24.04 -> 6.1.1), not by apt, which
+      # offers only one. That pin is deliberate: the seam metrics in test/integration/seamstitch-cli
+      # are decoded-pixel measurements that move by ~1 luma between ffmpeg 6 and 8 — enough to flip
+      # §9's gate — so `ubuntu-latest` silently rolling to the next LTS would change what CI measures.
+      # 24.04 is also what Ubuntu LTS users actually run, so CI matches the common deployment.
+      # Reproduce a CI-identical box locally with:
+      #   docker run --rm -v "$PWD":/w -w /w ubuntu:24.04 \
+      #     bash -c 'apt-get update && apt-get install -y ffmpeg python3-numpy python3-pil nodejs npm && node --test test/integration/seamstitch-cli.test.js'
       - name: Install ffmpeg (for assembly tests)
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
@@ -54,7 +62,7 @@ jobs:
         run: npm test
 
   web-server:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -76,7 +84,7 @@ jobs:
         run: npm --prefix web/server test
 
   web-ui:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -94,7 +102,7 @@ jobs:
         run: npm --prefix web/ui run build
 
   web-e2e:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5

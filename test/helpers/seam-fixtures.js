@@ -11,9 +11,20 @@
 //    ungraded base scored drift 2.34 at its own joint 1, over the 1.5 threshold, before any stitching.
 //    A held frame keeps the gate measuring what it is for.
 // 2. The base frame is levels-compressed (eq=contrast) so §10.1's grade shifts have headroom. At full
-//    range, brightness=+0.06 clips testsrc2's white bars at 255, and clipped highlights are info no
+//    range, a positive brightness shift clips testsrc2's white bars at 255, and clipped highlights are info no
 //    LUT can recover: the corrected segment stayed ~2 luma dark and the gate failed the tool for an
 //    artifact of the fixture. The tool targets a generator's slight drift, not a blown test chart.
+// 3. Segment 3's grade ACCUMULATES on segment 2's (both drift brighter and more saturated) instead of
+//    swinging back the other way. The matcher leaves a residual roughly PROPORTIONAL to the jump it
+//    has to correct — ~7-11% of it, measured, whatever the grade's shape — so the old fixture, whose
+//    seg02 went +0.06 bright while seg03 went -0.05 dark, posed a joint-2 jump of ~19 luma against
+//    joint 1's ~10, and the ~1.3-2.0 left over straddled §9's drift<=1.5 gate: green on ffmpeg 8,
+//    red on ffmpeg 6 (and on x86-64 CI), i.e. failing on an environment difference rather than on a
+//    regression. A chained generator drifts progressively anyway, so accumulating the shift both
+//    models the real thing and keeps each joint's raw jump modest (~10 luma at joint 1, ~4 at joint
+//    2), which the matcher corrects to ~0.6-1.0 — clear of the gate on ffmpeg 6 and 8 alike. Test C
+//    is the tight one: re-encoding segment 3 into an odd bucket and cover-fitting it back amplifies
+//    whatever residual is left, so re-measure BOTH tests (not just B) after any grade change.
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -66,8 +77,8 @@ export async function makeChainedClips({ dir, fps = 24, size = '160x96', frames 
   // Grades come AFTER the trim so the shared boundary frame is graded too — the generator's drift.
   const cuts = [
     { out: 'seg01.mp4', start: 0, grade: null },
-    { out: 'seg02.mp4', start: frames - 1, grade: 'eq=brightness=0.06:saturation=1.15' },
-    { out: 'seg03.mp4', start: 2 * frames - 2, grade: 'eq=brightness=-0.05:gamma_g=1.06' },
+    { out: 'seg02.mp4', start: frames - 1, grade: 'eq=brightness=0.05:saturation=1.12' },
+    { out: 'seg03.mp4', start: 2 * frames - 2, grade: 'eq=brightness=0.07:saturation=1.14' },
   ];
   const segments = [];
   for (const { out, start, grade } of cuts) {
