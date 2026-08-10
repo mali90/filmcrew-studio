@@ -77,22 +77,50 @@ upscaling spends more. There is no free usage.
   Its longer 30s job window means *fewer* jobs for a long video, not a cheaper one — you pay per
   generated second either way. `SEEDANCE25_RESOLUTION=480p` is the cheap setting, and
   `--probe` rides `SEEDANCE25_PROBE_RESOLUTION` (480p).
-- **Segmind** — billed **per job in credits**, not per generated second, and it does **not publish** a
-  public rate for `seedance-2.0`, `seedance-2.5` or `topaz-video-upscale` — see
-  [Segmind: no rate on file](#segmind-no-rate-on-file) just below.
+- **Seedance on Segmind** — the same two models at roughly **half fal's rate**. Segmind bills **per
+  job in credits** rather than per generated second, but publishes the equivalent per-second rate for
+  each resolution — see [Segmind: about half fal's rate](#segmind-about-half-fals-rate) just below.
 
-### Segmind: no rate on file
+### Segmind: about half fal's rate
 
-Segmind does not publish a public per-second rate for either Seedance model or its Topaz upscale, and
-this project **will not invent one or borrow fal's**. So for `seedance-2.0@segmind`,
-`seedance-2.5@segmind` and Segmind upscaling the estimator returns **no figure** — the UI shows an
-amber **"Price not set"** note and **warns without blocking**.
+Segmind publishes a per-second rate for both Seedance models and for its Topaz upscale, so those
+backends are estimated like any other. The figures below are the **16:9** column checked on
+2026-08-10 — the same 16:9-derived convention the fal rows use. 9:16 is identical; the other ratios
+differ by under 3%.
 
-**These renders still cost real money.** Check the current price on the model's own page
-(`segmind.com/models/<slug>/pricing`) before committing to a long run, and watch the credit balance:
-every finished Segmind job reports its cost and your remaining credits, which are logged and recorded
-in the run's `prompts.json`. Filling a rate in is a one-line edit to `web/server/lib/prices.json` —
-each Segmind row carries a `PRICE CHECK REQUIRED` note.
+- **Seedance 2.0 on Segmind** (`seedance-2.0@segmind`):
+
+  | Resolution | ≈ $/second | 15s job |
+  |---|---|---|
+  | 480p (default) | $0.0703 | ≈ $1.05 |
+  | 720p | $0.1512 | ≈ $2.27 |
+  | 1080p | $0.34 | ≈ $5.10 |
+  | 4k | $1.3721 | ≈ $20.58 |
+
+- **Seedance 2.5 on Segmind** (`seedance-2.5@segmind`), **720p by default** like its fal twin:
+
+  | Resolution | ≈ $/second | 15s job |
+  |---|---|---|
+  | 480p | $0.1065 | ≈ $1.60 |
+  | 720p (default) | $0.2389 | ≈ $3.58 |
+
+  Segmind publishes **no 1080p and no 4k tier for 2.5** — those two rates are the whole table, so
+  pinning a higher resolution is refused rather than estimated at a tier that does not exist. Turning
+  audio generation on does **not** change the price. A request carrying **video references** bills a
+  ~40% cheaper video-to-video tier ($0.0637/s at 480p, $0.1429/s at 720p); the estimate does not model
+  that discount, so it reads high rather than low for those runs.
+
+- **Segmind's Topaz upscale** — **$0.125 per second, flat**, billed on the **input** video's duration.
+  Segmind publishes this one rate and no per-target breakdown, so `UPSCALE_TARGET_RESOLUTION` changes
+  what you get, not what you pay. (fal's Topaz is ≈ $0.12/s — the one place the two are near-level.)
+
+Comparing like for like, Segmind is about half fal's price for the same model (fal 2.0: $0.135/$0.3024;
+fal 2.5: $0.2205/$0.4730). That gap is real, not a typo — it is worth re-checking on the model's own
+page (`segmind.com/models/<slug>/pricing`) before committing to a long run rather than assumed stale.
+
+These are **estimates, not invoices**. Segmind bills in credits, and every finished Segmind job
+reports its actual cost and your remaining credit balance, which are logged and recorded in the run's
+`prompts.json` — that is the number that actually left your account.
 
 ### Keep costs down
 
@@ -112,10 +140,12 @@ each Segmind row carries a `PRICE CHECK REQUIRED` note.
   lengths before adopting it.
 - Only add **`--upscale`** when you're happy with the result — it now really upscales **every
   sub-1080p clip** (one Topaz job per clip), which is real extra spend on probe/480p renders.
-- **Leave `UPSCALE_TARGET_RESOLUTION` at `1080p`.** It applies to Segmind's Topaz, whose `4k` setting
-  is 4× the pixels and roughly 4× the bill; nothing derives it for you, so 4k only ever happens
-  because you asked. `UPSCALE_PROVIDER` (default `auto`) upscales wherever the run rendered, which
-  also avoids paying a second vendor to move the file.
+- **Leave `UPSCALE_TARGET_RESOLUTION` at `1080p`.** It applies to Segmind's Topaz, whose published
+  rate is **flat per input second** — so `4k` does not change the estimate, even though it is 4× the
+  pixels and a far heavier job. What Segmind's credits actually charge for it is the vendor's
+  business, not this table's, so check the balance if you turn it up; nothing derives it for you, and
+  4k only ever happens because you asked. `UPSCALE_PROVIDER` (default `auto`) upscales wherever the
+  run rendered, which also avoids paying a second vendor to move the file.
 
 > `npm run init` connects your keys and can run a small test render of the bundled example to
 > confirm everything works end-to-end.

@@ -139,7 +139,7 @@ test('$alias hop preserves the kling audio-off rate (a literal backend check wou
 });
 
 test('$alias resolves ONE hop and still fails loudly on a genuinely unknown compound id', () => {
-  // NB: 'seedance-2.5@segmind' USED to belong here. It is now a real (unpriced) row — see
+  // NB: 'seedance-2.5@segmind' USED to belong here. It is now a real, priced row — see
   // estimator-providers.test.js for the difference between "no rate on file" and "no such backend".
   assert.throws(() => estimateRender(threeJobs(), { backend: 'kling-o3@segmind', mode: 'full' }), /backend/);
   assert.throws(() => estimateRender(threeJobs(), { backend: 'seedance-3.0@fal', mode: 'full' }), /backend/);
@@ -148,15 +148,16 @@ test('$alias resolves ONE hop and still fails loudly on a genuinely unknown comp
 // The registry is the thing that grows: a model/provider added there with no matching price row
 // would 500 the estimate endpoint for every run on it. This is the coupling stated as an assertion,
 // so the failure lands on whoever adds the model rather than on a user opening a run page.
-test('EVERY renderable backend id in the registry has a ROW — priced or explicitly unknown', async () => {
+test('EVERY renderable backend id in the registry has a PRICED row', async () => {
   const { BACKEND_IDS, ALL_BACKENDS } = await import('../../../../src/lib/render-models.js');
   assert.ok(BACKEND_IDS.length > 0);
   for (const id of [...BACKEND_IDS, ...ALL_BACKENDS]) {
     const e = estimateRender(threeJobs(), { backend: id, mode: 'full', resolution: '480p' });
-    // A provider whose prices are unpublished (Segmind) answers null + a hint rather than throwing;
-    // anything with a rate must still price to a real, positive number.
-    if (e.totalUsd === null) assert.ok(e.unknownPrice?.hint, `${id}: unknown price must carry a hint`);
-    else assert.ok(Number.isFinite(e.totalUsd) && e.totalUsd > 0, `${id} priced to a real number, got ${e.totalUsd}`);
+    // Every shipped pair is priced today. A provider that published nothing would answer null + a
+    // hint rather than throw (estimator-providers.test.js pins that path against a synthetic row) —
+    // but shipping a REAL backend in that state is the bug this catches.
+    assert.ok(Number.isFinite(e.totalUsd) && e.totalUsd > 0, `${id} priced to a real number, got ${e.totalUsd}`);
+    assert.ok(!e.unknownPrice, `${id} ships unpriced — users would see "Price not set"`);
   }
 });
 
@@ -239,15 +240,19 @@ test('readUpscaleProvider: explicit wins, auto upscales where the run rendered, 
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-// The two are one system: a Segmind-rendered run must not show a fal Topaz figure on approve.
-test('a Segmind run prices its upscale as unknown, a fal run keeps its number', () => {
+// The two are one system: a Segmind-rendered run must show SEGMIND's Topaz figure on approve, not
+// fal's. The rates are close ($0.125 vs $0.12 per input second), which is exactly why a mix-up here
+// would survive a casual glance — so this asserts the provider routing, not just "some number".
+test('a Segmind run prices its upscale at Segmind\'s rate, a fal run at fal\'s', () => {
   const clips = [{ jobId: 'K1', seconds: 5 }];
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-upv2-'));
   try {
     fs.writeFileSync(path.join(dir, '.env'), 'FAL_KEY=x\nSEGMIND_API_KEY=y\n');
     const seg = estimateUpscale(clips, { provider: readUpscaleProvider(dir, 'seedance-2.5@segmind') });
-    assert.equal(seg.totalUsd, null);
-    assert.match(seg.unknownPrice.hint, /segmind/i);
-    assert.ok(estimateUpscale(clips, { provider: readUpscaleProvider(dir, 'kling-o3@fal') }).totalUsd > 0);
+    const fal = estimateUpscale(clips, { provider: readUpscaleProvider(dir, 'kling-o3@fal') });
+    assert.equal(seg.totalUsd, 0.63);   // 5s × $0.125
+    assert.equal(fal.totalUsd, 0.6);    // 5s × $0.12
+    assert.ok(!seg.unknownPrice && !fal.unknownPrice, 'both providers publish a Topaz rate now');
+    assert.notEqual(seg.totalUsd, fal.totalUsd, 'a Segmind run must never quote fal money');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

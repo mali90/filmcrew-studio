@@ -256,6 +256,34 @@
   asked for depends on which provider your backend bills), and the test walks it that way.
 
 ### Changed
+- **Segmind's prices are on file — and they are roughly half fal's for the same model.** Every
+  Segmind surface used to say the rate was "not on file yet", because it genuinely wasn't: the price
+  table shipped three `PRICE CHECK REQUIRED` rows and the interface refused to guess. Those rows are
+  now filled in from segmind.com's own pricing pages, checked **2026-08-10** and recorded (with the
+  date) in each row's `_source`: **Seedance 2.0** at `$0.0703/s` (480p), `$0.1512/s` (720p),
+  `$0.34/s` (1080p) and `$1.3721/s` (4k); **Seedance 2.5** at `$0.1065/s` (480p) and `$0.2389/s`
+  (720p), with **no 1080p or 4k tier published** — pinning one is refused rather than priced at a
+  tier that does not exist; and **Topaz** at a flat `$0.125/s` billed on the *input* clip's duration,
+  with no per-target breakdown, so `UPSCALE_TARGET_RESOLUTION` changes what you get and not what you
+  pay. Comparable fal rates are `$0.135/$0.3024` and `$0.2205/$0.4730` — the gap is real, and each
+  row says so in prose so a future reader does not "correct" it back. Rows stay independent (no
+  aliasing), so filling one in can never silently reprice another. Setup cards, the create-page hint,
+  the plan and re-render buttons, the approve-time upscale and the run's cost ledger all quote real
+  Segmind money now instead of the amber *Price not set* note. A Segmind 2.5 render carrying **video
+  references** bills a ~40% cheaper video-to-video tier that the estimate does not model, so it reads
+  high rather than low for those runs — noted in the row, as fal's 2.5 row already notes its own.
+- **An upscale is flagged "no published rate" only when that is actually true.** The approve-time
+  ledger decided by provider *name* — anything that was not fal was recorded as unpriced — so a
+  Segmind upscale would have been written into the cost ledger as "estimate unavailable" while the
+  estimate endpoint quoted it a real figure. It now asks the estimator instead of naming providers,
+  and stays correct the next time a rate lands.
+- **The unknown-price path is kept honest by a synthetic vendor, not by a real one.** Warning without
+  blocking, never inventing a figure, and flagging unpriced spend so it can't read as free are all
+  still exactly right for a vendor that publishes nothing — but every test proving it pointed at
+  Segmind, so pricing Segmind would have quietly deleted the coverage. `prices.json` now carries two
+  clearly-marked synthetic `examplevendor` rows for that purpose, a guard test fails on any *real*
+  row still shipping unpriced or carrying a `_todo`, and no registry backend may point at the fake
+  vendor.
 - **The library list no longer pays for continuity.** Per-segment join facts are read from disk, and
   the list re-fetches on every progress tick during a render — so a busy library was doing dozens of
   synchronous reads a second on the same loop that streams progress, for a field only the run page

@@ -10,7 +10,7 @@ import { newManifest, writeManifest, readManifest, updateManifest } from './web-
 import { scanRun, listRuns, defaultIsAlive, finalizedFinal } from './run-scan.js';
 import { createRingLog } from './ring-log.js';
 import { watchRun } from './artifact-watch.js';
-import { estimateRender, readProbeResolution, readRenderResolution, readUpscaleProvider } from './estimator.js';
+import { estimateRender, estimateUpscale, readProbeResolution, readRenderResolution, readUpscaleProvider } from './estimator.js';
 import { safeChild } from './paths.js';
 // Both config-free by construction (the runs-caps canary walks this graph): the continuity rule is a
 // pure function over a run record, and the model registry imports nothing at all.
@@ -862,13 +862,19 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     // a free-lane assemble appending a newer cut mid-upscale must not relabel THIS final onto it.
     pendingApprove.set(runId, chosen?.id ?? cuts.at(-1)?.id ?? null);
     updateManifest(dir, (m) => {
-      // `unpriced` is reserved for a provider with NO published rate: fal's Topaz has one (the
-      // estimate endpoint quotes it per-clip), so flagging it too would label a priced spend
-      // "not on file" on every fal-upscaled run.
+      // `unpriced` is reserved for a provider with NO published rate. fal and Segmind both publish
+      // a Topaz rate (the estimate endpoint quotes either per-clip), so flagging one would label a
+      // priced spend "not on file". ASK the estimator which it is — with no clips it answers from
+      // the rate row alone — rather than naming providers here, or this line goes stale the next
+      // time a rate lands in prices.json.
+      // A provider with no row AT ALL throws in there; that is still "no rate we can quote", and an
+      // approve already past its checks must not die over a ledger note.
       const upscaleProvider = readUpscaleProvider(envRoot ?? root, m.backend, childEnv);
-      m.costLedger.push(upscaleProvider === 'fal'
-        ? { ts: now().toISOString(), action: 'upscale', estUsd: null, note: 'topaz per-clip — see estimate' }
-        : { ts: now().toISOString(), action: 'upscale', estUsd: null, unpriced: true, note: 'estimate unavailable — no published rate for this provider' });
+      let unpricedUpscale = true;
+      try { unpricedUpscale = Boolean(estimateUpscale([], { provider: upscaleProvider }).unknownPrice); } catch { /* unpriced */ }
+      m.costLedger.push(unpricedUpscale
+        ? { ts: now().toISOString(), action: 'upscale', estUsd: null, unpriced: true, note: 'estimate unavailable — no published rate for this provider' }
+        : { ts: now().toISOString(), action: 'upscale', estUsd: null, note: 'topaz per-clip — see estimate' });
       m.lastError = null;
       return m;
     });

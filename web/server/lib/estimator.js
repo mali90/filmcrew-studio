@@ -2,8 +2,8 @@
 // in prices.json (editable ballparks — clearly labeled estimates, never billing). Job durations
 // are derived from the spec exactly like the validator derives them.
 //
-// Some providers publish no rate at all (Segmind, for every model we drive). That is a KNOWN state,
-// not an error: those runs render and bill exactly like any other, so the estimator answers
+// A provider may publish no rate at all. That is a KNOWN state, not an error: those runs
+// render and bill exactly like any other, so the estimator answers
 // `totalUsd: null` + an `unknownPrice` hint rather than throwing (a 500 would take a working run
 // page down) or borrowing a sibling's rate (an invented number on a paid button is worse than
 // none). An unregistered backend id is still a bug and still throws loudly.
@@ -194,7 +194,7 @@ export function readUpscaleProvider(envRoot, backend, childEnv) {
   try { runProvider = normalizeBackend(backend).provider; } catch { /* unknown/absent backend */ }
   const has = {
     // BOTH fal spellings: setup and the runtime config accept FAL_API_KEY too — judging only
-    // FAL_KEY would route this estimate to Segmind (unpriced) while the engine bills fal.
+    // FAL_KEY would price this estimate at Segmind's Topaz rate while the engine bills fal's.
     fal: Boolean(readEnvVar(envRoot, 'FAL_KEY', childEnv) || readEnvVar(envRoot, 'FAL_API_KEY', childEnv)),
     segmind: Boolean(readEnvVar(envRoot, 'SEGMIND_API_KEY', childEnv)),
   };
@@ -205,7 +205,8 @@ export function readUpscaleProvider(envRoot, backend, childEnv) {
 }
 
 /** Estimate a Topaz upscale over clip durations (one Topaz job per sub-1080p clip). Topaz runs on
- *  either provider now, and Segmind publishes no rate for it — so this answers per provider. */
+ *  either provider now and the two bill differently ($0.12/s on fal, $0.125/s on Segmind, both on
+ *  the INPUT duration) — so this answers per provider rather than quoting one vendor's number. */
 export function estimateUpscale(clips, { provider = 'fal' } = {}) {
   const priceKey = provider === 'fal' ? 'topaz' : `topaz@${provider}`;
   const { key, rates } = tableFor(priceKey);

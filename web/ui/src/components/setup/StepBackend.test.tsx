@@ -61,13 +61,28 @@ describe('StepBackend — honest money copy', () => {
     expect(card).toHaveTextContent('$0.47');
   });
 
-  it('every Segmind card says the rate is not on file and quotes NO figure', () => {
+  it('quotes Segmind\'s real published rate — about half fal\'s for the same model', () => {
+    const { group } = renderStep();
+    expect(within(group).getByRole('radio', { name: /Seedance 2\.0 Segmind/ })).toHaveTextContent('$0.07');
+    expect(within(group).getByRole('radio', { name: /Seedance 2\.5 Segmind/ })).toHaveTextContent('$0.24');
+  });
+
+  it('every card quotes a figure — no shipped pair is left saying "not on file"', () => {
+    // The cards are DERIVED from the registry, so a provider added without a rate would silently
+    // fall back to RATE_UNKNOWN and ship a card that quotes nothing. Fail here instead.
     const { group } = renderStep();
     for (const card of within(group).getAllByRole('radio')) {
-      if (!/Segmind/.test(card.textContent ?? '')) continue;
-      expect(card).toHaveTextContent(/not on file/i);
-      expect(card).toHaveTextContent(/costs money/i);   // not free — it is unpriced, which is different
-      expect(card.textContent ?? '').not.toMatch(/\$\s?\d/);
+      expect(card.textContent ?? '').toMatch(/\$\d/);
+      expect(card).not.toHaveTextContent(/not on file/i);
+      expect(card).not.toHaveTextContent(/\bfree\b/i);   // renders are never free, on any provider
     }
+  });
+
+  it('prices the PAIR, not the model — the same Seedance costs different money per provider', () => {
+    const { group } = renderStep();
+    const rateOf = (name: RegExp) =>
+      /\$(\d+\.\d+)/.exec(within(group).getByRole('radio', { name }).textContent ?? '')?.[1];
+    expect(rateOf(/Seedance 2\.5 Segmind/)).not.toEqual(rateOf(/Seedance 2\.5 fal/));
+    expect(Number(rateOf(/Seedance 2\.5 Segmind/))).toBeLessThan(Number(rateOf(/Seedance 2\.5 fal/)));
   });
 });

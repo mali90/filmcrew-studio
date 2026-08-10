@@ -16,7 +16,7 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   /** Estimated cost in USD — renders the integrated CostTag segment. */
   costUsd?: number | null;
   /**
-   * The action costs money but NO per-second rate is on file (Segmind publishes none). This is a
+   * The action costs money but NO per-second rate is on file for its provider. This is a
    * different state from `costUsd === null`, which means "the estimate is still loading" and rightly
    * disables the button: an unknown rate never resolves, so blocking would strand a perfectly
    * renderable backend behind a spinner forever. The button stays clickable and the tag stops

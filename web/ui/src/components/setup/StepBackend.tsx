@@ -11,13 +11,17 @@ import {
 import { FixFooter } from './FixFooter';
 import type { WizardAction, WizardState } from './wizard';
 
-// Rates somebody PUBLISHES, keyed by the pair that is billed. A pair missing here has no published
-// per-second rate (every Segmind model we drive): it says so — it never inherits a sibling's figure,
-// and it is never called free, because the render does cost money.
+// Rates somebody PUBLISHES, keyed by the pair that is billed — the price is a property of the PAIR,
+// not the model: the same Seedance costs about half as much on Segmind as on fal. A pair missing here
+// has no published per-second rate: it says so — it never inherits a sibling's figure, and it is never
+// called free, because the render does cost money. Every pair the registry ships is priced today, so
+// RATE_UNKNOWN is the fallback for the NEXT provider added, not dead code.
 const RATE: Record<string, string> = {
   'kling-o3@fal': '≈ $0.11/s est',
   'seedance-2.0@fal': '≈ $0.14/s est at 480p',
   'seedance-2.5@fal': '≈ $0.47/s est at 720p',
+  'seedance-2.0@segmind': '≈ $0.07/s est at 480p',
+  'seedance-2.5@segmind': '≈ $0.24/s est at 720p',
 };
 const RATE_UNKNOWN = 'rate not on file yet — the render still costs money';
 

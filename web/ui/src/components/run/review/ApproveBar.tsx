@@ -69,8 +69,8 @@ export function ApproveBar({ run, cutId = null }: { run: RunDetail; cutId?: stri
     onError: (e) => toast({ kind: 'error', text: e instanceof ApiClientError ? `${e.message} — ${e.hint}` : e.message }),
   });
 
-  // Topaz runs on whichever provider this run rendered on, and Segmind publishes no rate for it —
-  // so the toggle may be priceable, unknown, or (already HD) irrelevant.
+  // Topaz runs on whichever provider this run rendered on, and the two bill differently — so the
+  // toggle may be priceable, unknown (a provider with no published rate), or (already HD) irrelevant.
   const unknownPrice = upscaleEstimate.data?.unknownPrice ?? null;
 
   const label = `${reopened ? 'Replace final' : 'Approve'}${effectiveUpscale ? ' & upscale' : ''}`;

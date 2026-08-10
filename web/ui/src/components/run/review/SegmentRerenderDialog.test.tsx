@@ -336,14 +336,16 @@ describe('SegmentRerenderDialog — the money (D13/D17)', () => {
       totalUsd: null,
       currency: 'USD',
       label: 'estimate',
-      unknownPrice: { provider: 'segmind', hint: 'Segmind does not publish a per-second rate for this model.' },
+      unknownPrice: { provider: 'examplevendor', hint: 'examplevendor does not publish a per-second rate for this model.' },
     })));
     const bodies: unknown[] = [];
     server.use(http.post('/api/runs/:id/rerender-job', async ({ request }) => {
       bodies.push(await request.json());
       return HttpResponse.json({ takeId: 't2', estUsd: null, cascadeJobs: [], boundaries: { mode: 'auto' } });
     }));
-    open(onBackend(threeSegmentRun(), 'seedance-2.0@segmind'));
+    // a SYNTHETIC unpriced vendor: every backend we ship is priced, and this test is about the
+    // dialog's reaction to an unpriced ESTIMATE, not about who happens to publish rates.
+    open(onBackend(threeSegmentRun(), 'seedance-2.0@fal'));
 
     const go = await screen.findByRole('button', { name: /^Re-render K2 price not set$/ });
     expect(go).toBeEnabled();

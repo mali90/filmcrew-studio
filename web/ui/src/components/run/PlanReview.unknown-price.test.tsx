@@ -1,8 +1,7 @@
 // What a paid button says when the RATE IS NOT ON FILE.
 //
-// Segmind publishes no prices for its Seedance or Topaz models, so the estimator answers
-// `{ totalUsd: null, unknownPrice: { hint } }` for those backends. The UI has to hold two true
-// things at once, and it is easy to get either one wrong:
+// When a vendor publishes no rate, the estimator answers `{ totalUsd: null, unknownPrice: { hint } }`
+// and the UI has to hold two true things at once, and it is easy to get either one wrong:
 //
 //   1. WARN, DON'T BLOCK. `costUsd: null` already means "the estimate hasn't loaded yet" and
 //      correctly disables a money button until it does. An unknown RATE is a different state: it
@@ -11,6 +10,11 @@
 //   2. NEVER INVENT A NUMBER. No "$0.00", no "free", no borrowed sibling rate. The copy has to say
 //      the render costs money and that the per-second rate is not on file yet — an amber note, not
 //      a green one, because unknown cost is a caution.
+//
+// The estimate is stubbed with a SYNTHETIC unpriced vendor rather than a real one. Every provider we
+// ship publishes a rate today (Segmind's landed 2026-08-10, and pricing it broke every test that had
+// used Segmind as a stand-in for "unpriced"), so naming a real vendor here would tie this component's
+// coverage to a fact about someone's pricing page. The shape is what matters, not who sent it.
 //
 // TDD (red first): Estimate has no `unknownPrice`, and Button disables on a null cost.
 import { screen, within } from '@testing-library/react';
@@ -25,7 +29,7 @@ const UNKNOWN_PRICE = {
   totalUsd: null,
   currency: 'USD',
   label: 'estimate',
-  unknownPrice: { provider: 'segmind', hint: "Segmind does not publish a per-second rate for this model — check segmind.com/models/seedance-2.5/pricing and fill it in." },
+  unknownPrice: { provider: 'examplevendor', hint: "examplevendor does not publish a per-second rate for this model — check examplevendor.invalid/models/pricing and fill it in." },
 };
 
 const serveUnknownPrice = () => server.use(http.get('/api/runs/:id/estimate', () => HttpResponse.json(UNKNOWN_PRICE)));
@@ -71,7 +75,7 @@ describe('PlanReview — an unpriced backend', () => {
     const note = await screen.findByText(/price not set/i);
     // honest wording: unknown ≠ free. The hint the server sent is what tells a user how to fix it.
     expect(note.parentElement?.textContent ?? '').toMatch(/costs money|will be billed|charges/i);
-    expect(note.parentElement?.textContent ?? '').toMatch(/segmind\.com/i);
+    expect(note.parentElement?.textContent ?? '').toMatch(/examplevendor\.invalid/i);
   });
 
   it('a PRICED backend is completely unchanged — the note never appears', async () => {

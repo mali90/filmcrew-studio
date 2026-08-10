@@ -1,4 +1,5 @@
-// The honest answer when a provider publishes no per-second rate (every Segmind model we drive).
+// The honest answer when a provider publishes no per-second rate. Every provider we ship is priced
+// today; this is the path the NEXT one lands on until its rates are looked up, so it stays generic.
 //
 // Two things have to be true at once, and it is easy to get either one wrong:
 //   1. Unknown is NOT free. The render bills exactly like any other, so the copy says so in words —

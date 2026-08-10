@@ -214,13 +214,15 @@ and **minted character voices** (`npm run mint-voice` needs `FAL_KEY`). Without 
 Seedance uses its reference-clip voice mode, so recurring characters are best-effort rather than
 identical across videos.
 
-> **Segmind pricing is not in this repo's price table.** Segmind does not publish a public
-> per-second rate for `seedance-2.0`, `seedance-2.5` or `topaz-video-upscale`, and this project will
-> not invent one or borrow another vendor's. So for the Segmind backends the estimator shows
-> **"Price not set"** instead of a dollar figure, and the render button still lets you proceed —
-> it warns, it does not block. **These renders cost real money**; check the current rate on the
-> model's own page at `segmind.com/models/<slug>/pricing` before a long run. Filling in the rate is
-> a one-line edit to `web/server/lib/prices.json` (each row carries a `PRICE CHECK REQUIRED` note).
+> **Segmind is about half fal's price for the same model.** Checked 2026-08-10 (16:9, the convention
+> the whole price table uses): `seedance-2.0` is **$0.0703/s** at 480p and **$0.1512/s** at 720p
+> ($0.34 at 1080p, $1.3721 at 4k); `seedance-2.5` is **$0.1065/s** at 480p and **$0.2389/s** at 720p,
+> with **no 1080p or 4k tier published**; `topaz-video-upscale` is **$0.125/s flat**, billed on the
+> input clip's duration. Compare with fal's $0.135/$0.3024 (2.0) and $0.2205/$0.4730 (2.5) — the gap
+> is real, not a typo. **These renders cost real money**, and the estimator quotes them like any other
+> backend; re-check the model's own page at `segmind.com/models/<slug>/pricing` before a long run, and
+> watch the credit balance, which is what actually gets debited. Rates live in
+> `web/server/lib/prices.json`, one row per `<model>@<provider>` pair.
 
 **Caps are checked before you spend.** Starring more characters than the chosen model can carry is
 rejected before any LLM call (Kling 3.0 Omni takes 1 starred character, Seedance 2.0 takes 2 and
