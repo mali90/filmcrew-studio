@@ -42,13 +42,20 @@ npm -v
   *(No winget? Get "ffmpeg-release-full" from https://www.gyan.dev/ffmpeg/builds/, unzip, add its
   `bin` folder to your PATH.)*
 
+**Minimum version: ffmpeg 4.3.** Anything you install today is far newer — the one to watch is an
+older Linux machine, which can be stuck on 4.2 for years. Below 4.3 videos still render, but ffmpeg
+lacks the crossfade the [seamless stitcher](STITCHING.md) uses, so a long shot joins with a **hard
+cut at every seam**. `npm run doctor` warns you if yours is too old. The app never installs or
+upgrades ffmpeg itself — you run the upgrade: `brew upgrade ffmpeg` (macOS),
+`winget upgrade -e --id Gyan.FFmpeg` (Windows), or your package manager (Linux).
+
 Check (in a **new** terminal):
 ```
 ffmpeg -version
 ffprobe -version
 ```
-✅ Both print version info. "command not found" / "not recognized" → reopen the terminal (PATH hasn't
-updated yet).
+✅ Both print version info, and ffmpeg's first line reads **4.3 or newer**. "command not found" /
+"not recognized" → reopen the terminal (PATH hasn't updated yet).
 
 ---
 

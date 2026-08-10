@@ -181,6 +181,29 @@
   actually used — a clip that opened on an authored or hand-picked frame no longer names a source
   clip it did not continue from. All three flags are validated before anything is queued — a typo
   costs nothing.
+- **Settings › Keys holds the Segmind key too.** Setup could ask for it, but afterwards there was
+  nowhere in the app to rotate or add one — a Segmind install had to hand-edit `.env`. The field
+  sits beside the fal one with the same masked placeholder and the same live *Validate*, which
+  probes the model your default backend actually names (a 2.0 install is no longer judged against
+  the 2.5 slug). **An empty field never clears a stored key**: only keys you actually type are
+  written, so saving a new fal key leaves a configured `SEGMIND_API_KEY` exactly where it was. The
+  card's blurb now names the provider that bills *this* install rather than assuming fal, and says
+  which key each part of the pipeline needs — a fal-only and a Segmind-only install are both
+  ordinary setups. Now that the field exists, a failing Segmind key in the health list carries a
+  *Fix in Keys* button that lands you on it, instead of only naming the `.env` variable — but only
+  when the check is hard (your backend really does render on Segmind); a fal install still sees the
+  quiet optional note it saw before.
+- **The health check now tells you when your ffmpeg is too old to stitch a seam, instead of you
+  finding out in the finished film.** It only ever proved that ffmpeg *runs* — and a build older
+  than **4.3** runs perfectly well, then can't crossfade, because the filter the seamless stitcher
+  uses (`xfade`) doesn't exist before 4.3; the stitch falls back to a hard cut at every seam.
+  `npm run doctor` and the web health card now read the version off `ffmpeg -version`, show it when
+  it's fine, and when it isn't say what it costs and give you the upgrade command for your OS. It is
+  a **warning, never a blocker**: the video still delivers, and the app never installs or upgrades
+  ffmpeg for you — you run that command, as you always have. A version we can't read (a git snapshot
+  like `N-1234-gabcdef`) is reported as unknown and passes; a binary that works but won't label
+  itself is no evidence of a problem. The minimum is written down in `docs/SETUP.md` beside the
+  install commands.
 
 ### Fixed
 - **The prompt preview's byte budget is now pinned to the renderer's own defaults, for installs
@@ -236,6 +259,34 @@
   asked for depends on which provider your backend bills), and the test walks it that way.
 
 ### Changed
+- **Segmind's prices are on file — and they are roughly half fal's for the same model.** Every
+  Segmind surface used to say the rate was "not on file yet", because it genuinely wasn't: the price
+  table shipped three `PRICE CHECK REQUIRED` rows and the interface refused to guess. Those rows are
+  now filled in from segmind.com's own pricing pages, checked **2026-08-10** and recorded (with the
+  date) in each row's `_source`: **Seedance 2.0** at `$0.0703/s` (480p), `$0.1512/s` (720p),
+  `$0.34/s` (1080p) and `$1.3721/s` (4k); **Seedance 2.5** at `$0.1065/s` (480p) and `$0.2389/s`
+  (720p), with **no 1080p or 4k tier published** — pinning one is refused rather than priced at a
+  tier that does not exist; and **Topaz** at a flat `$0.125/s` billed on the *input* clip's duration,
+  with no per-target breakdown, so `UPSCALE_TARGET_RESOLUTION` changes what you get and not what you
+  pay. Comparable fal rates are `$0.135/$0.3024` and `$0.2205/$0.4730` — the gap is real, and each
+  row says so in prose so a future reader does not "correct" it back. Rows stay independent (no
+  aliasing), so filling one in can never silently reprice another. Setup cards, the create-page hint,
+  the plan and re-render buttons, the approve-time upscale and the run's cost ledger all quote real
+  Segmind money now instead of the amber *Price not set* note. A Segmind 2.5 render carrying **video
+  references** bills a ~40% cheaper video-to-video tier that the estimate does not model, so it reads
+  high rather than low for those runs — noted in the row, as fal's 2.5 row already notes its own.
+- **An upscale is flagged "no published rate" only when that is actually true.** The approve-time
+  ledger decided by provider *name* — anything that was not fal was recorded as unpriced — so a
+  Segmind upscale would have been written into the cost ledger as "estimate unavailable" while the
+  estimate endpoint quoted it a real figure. It now asks the estimator instead of naming providers,
+  and stays correct the next time a rate lands.
+- **The unknown-price path is kept honest by a synthetic vendor, not by a real one.** Warning without
+  blocking, never inventing a figure, and flagging unpriced spend so it can't read as free are all
+  still exactly right for a vendor that publishes nothing — but every test proving it pointed at
+  Segmind, so pricing Segmind would have quietly deleted the coverage. `prices.json` now carries two
+  clearly-marked synthetic `examplevendor` rows for that purpose, a guard test fails on any *real*
+  row still shipping unpriced or carrying a `_todo`, and no registry backend may point at the fake
+  vendor.
 - **The library list no longer pays for continuity.** Per-segment join facts are read from disk, and
   the list re-fetches on every progress tick during a render — so a busy library was doing dozens of
   synchronous reads a second on the same loop that streams progress, for a field only the run page

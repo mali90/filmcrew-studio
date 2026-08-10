@@ -1,6 +1,6 @@
 // The Segmind-only story, driven through the real UI against the zero-spend demo: pick Seedance 2.5
 // on Segmind, plan, render, review, and approve WITH a Topaz upscale — all of it on the Segmind
-// mock, none of it priced.
+// mock, and all of it priced at SEGMIND's own published rates.
 //
 // Everything else that knows about Segmind is asserted at a lower altitude: the transport against
 // its mock, the renderer through renderSpec, the estimator against prices.json, the picker in jsdom,
@@ -10,8 +10,8 @@
 // fail here — this spec is the only place the whole chain runs as one.
 //
 // Two things it pins that only the full chain can show:
-//   * an UNPRICED backend renders anyway — the paid buttons say "Price not set", carry no $ figure,
-//     and still work (warn, don't block)
+//   * a Segmind run quotes SEGMIND money the whole way down — the estimate the run page fetches, the
+//     render button, and the approve-time Topaz upscale all price off the segmind rows, never fal's
 //   * approve-with-upscale completes on Segmind, which is what makes a fal-free install able to
 //     finish a film
 import { test, expect } from '@playwright/test';
@@ -23,7 +23,7 @@ test.beforeEach(async ({ request }) => {
   });
 });
 
-test('a Segmind run renders and upscales end to end, and never quotes a price it does not have', async ({ page, request }) => {
+test('a Segmind run renders and upscales end to end, priced at Segmind\'s own rates', async ({ page, request }) => {
   // the demo really is serving a Segmind mock — otherwise the render below would be reaching a host
   const health = await (await request.get('/__demo/health')).json();
   expect(String(health.segmind)).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
@@ -36,21 +36,22 @@ test('a Segmind run renders and upscales end to end, and never quotes a price it
   await expect(provider).toBeVisible();
   await provider.getByRole('radio', { name: 'Segmind' }).click();
 
-  // the create-page hint is honest before a cent is committed: no rate, but not free either
+  // the create-page hint is honest before a cent is committed: Segmind's real rate, not fal's
   const hint = page.getByTestId('backend-hint');
-  await expect(hint).toContainText(/not on file|not published/i);
-  await expect(hint).not.toContainText(/\$\s?\d/);
+  await expect(hint).toContainText('$0.24');            // $0.2389/s at 720p, Segmind's published figure
+  await expect(hint).not.toContainText(/not on file/i);
+  await expect(hint).not.toContainText(/\bfree\b/i);
 
   await page.getByRole('textbox').first().fill('a lantern keeper counts the ships home');
   await page.getByRole('button', { name: /plan it/i }).click();
   await expect(page).toHaveURL(/\/runs\/web-/);
   await expect(page.getByText(/plan is ready/i).first()).toBeVisible({ timeout: 60_000 });
 
-  // an unpriced backend warns instead of blocking: amber note, no figure, button still live
-  await expect(page.getByText(/price not set/i).first()).toBeVisible();
+  // the plan prices off the Segmind rows — a figure on the button, and no "not on file" anywhere
+  await expect(page.getByText(/price not set/i)).toHaveCount(0);
   const render = page.getByRole('button', { name: /full render/i }).first();
   await expect(render).toBeEnabled();
-  await expect(render).not.toContainText('$');
+  await expect(render).toContainText('$');
   await render.click();
   const confirmDialog = page.getByRole('dialog');
   if (await confirmDialog.isVisible().catch(() => false)) {
@@ -66,7 +67,7 @@ test('a Segmind run renders and upscales end to end, and never quotes a price it
   await upscale.check();
   const approve = page.getByRole('button', { name: /^approve & upscale/i });
   await expect(approve).toBeEnabled();
-  await expect(approve).not.toContainText('$'); // Topaz on Segmind has no published rate either
+  await expect(approve).toContainText('$'); // Segmind's Topaz publishes $0.125/s — approve quotes it
   await approve.click();
   const approveDialog = page.getByRole('dialog');
   if (await approveDialog.isVisible().catch(() => false)) {

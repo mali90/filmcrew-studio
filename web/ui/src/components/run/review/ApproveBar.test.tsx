@@ -29,7 +29,9 @@ function captureApprove() {
 
 describe('ApproveBar', () => {
   // ── Topaz on a provider that publishes no rate ────────────────────────────
-  // The upscale now runs wherever the run rendered, and Segmind prices none of it. Approving with
+  // The upscale runs wherever the run rendered. Both providers we ship price it, so this drives the
+  // no-rate path from a SYNTHETIC vendor rather than naming a real one — the component's job is to
+  // react to the SHAPE of an unpriced estimate, not to any vendor's pricing page. Approving with
   // upscale must still be possible — with the caution in prose instead of a fabricated figure.
   it('an unpriced upscale stays approvable and says so in words, never in dollars', async () => {
     const captured = captureApprove();
@@ -38,7 +40,7 @@ describe('ApproveBar', () => {
       totalUsd: null,
       currency: 'USD',
       label: 'estimate',
-      unknownPrice: { provider: 'segmind', hint: 'Segmind does not publish a per-second rate — check segmind.com/models/topaz-video-upscale/pricing.' },
+      unknownPrice: { provider: 'examplevendor', hint: 'examplevendor does not publish a per-second rate — check examplevendor.invalid/models/topaz/pricing.' },
     })));
     markPaidConfirmed();
     renderReview(<ApproveBar run={makeRun('review')} />);
@@ -49,7 +51,7 @@ describe('ApproveBar', () => {
 
     const note = await screen.findByText(/price not set/i);
     expect(note.parentElement?.textContent ?? '').toMatch(/costs money/i);
-    expect(note.parentElement?.textContent ?? '').toMatch(/segmind\.com/i);
+    expect(note.parentElement?.textContent ?? '').toMatch(/examplevendor\.invalid/i);
     expect(screen.queryByText(/≈ \$/)).not.toBeInTheDocument();   // no figure anywhere on the card
     expect(screen.queryByText(/≈—/)).not.toBeInTheDocument();     // and no em-dash masquerading as one
 

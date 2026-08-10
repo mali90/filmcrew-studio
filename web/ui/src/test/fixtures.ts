@@ -107,6 +107,8 @@ export const SETUP_COMPLETE = {
   envSource: '.env' as const,
   llm: { provider: 'claude', transport: 'cli', model: null, hasKey: true },
   fal: { hasKey: true },
+  segmind: { hasKey: false },
+  renderProvider: 'fal' as const,
   defaults: { backend: 'kling' as const, aspect: '9:16' as const, resolution: '1080p' },
   complete: true,
 };

@@ -553,26 +553,34 @@ test('DELETE while the plan is still queued/active is refused with a hint', asyn
   await post(`/api/runs/${runId}/cancel`, {});
 });
 
-// ── Estimates for backends whose vendor publishes no rate ────────────────────
+// ── Estimates for a Segmind-backed run ───────────────────────────────────────
 // The estimate endpoint is on the run page's critical path: it is fetched the moment a plan lands.
-// A Segmind-backed run must therefore answer "the rate is not on file" — 200 with totalUsd:null —
-// rather than 500ing the page for a backend that renders perfectly well.
-test('estimate: a Segmind-backed run answers 200 with an unknown price, never a 500', async () => {
+// A Segmind-backed run must answer with SEGMIND's money — its own published rate, roughly half
+// fal's for the same model — rather than 500ing, quoting fal, or falling back to "not on file".
+test('estimate: a Segmind-backed run answers 200 priced at Segmind\'s own rate', async () => {
   const { runId } = (await post('/api/runs', { idea: 'a lantern in the fog', backend: 'seedance-2.5@segmind', aspect: '16:9', durationS: null })).json();
   await waitForStatus(runId, 'plan-ready');
 
   const est = await get(`/api/runs/${runId}/estimate?mode=full`);
   assert.equal(est.statusCode, 200, est.body);
   const body = est.json();
-  assert.equal(body.totalUsd, null);
+  assert.ok(body.totalUsd > 0, 'Segmind publishes a per-second rate — the run page quotes it');
+  assert.ok(!body.unknownPrice, 'and no longer claims the rate is missing');
   assert.equal(body.currency, 'USD');
   assert.ok(body.perJob.length > 0);
   for (const j of body.perJob) {
     assert.ok(j.seconds > 0, 'the seconds half of the estimate never depended on a rate');
-    assert.equal(j.usd, null, 'and no per-job figure is invented either');
+    assert.ok(j.usd > 0, 'and every job carries its own figure');
   }
-  assert.match(body.unknownPrice.hint, /segmind/i);
-  assert.match(body.unknownPrice.hint, /costs money/i, 'unknown is not free, and the hint says so');
+  // 2.5 on Segmind renders 720p by default at $0.2389/s — about half fal's $0.473/s. The backend is
+  // a property of the RUN, so proving the two don't share a rate needs a second run on fal.
+  const falRun = (await post('/api/runs', { idea: 'a lantern in the fog', backend: 'seedance-2.5@fal', aspect: '16:9', durationS: null })).json();
+  await waitForStatus(falRun.runId, 'plan-ready');
+  const onFal = (await get(`/api/runs/${falRun.runId}/estimate?mode=full`)).json();
+  assert.ok(onFal.totalUsd > 0);
+  // per-SECOND, so the comparison holds even if the two plans come out different lengths
+  const perSecond = (e) => e.totalUsd / e.perJob.reduce((a, j) => a + j.seconds, 0);
+  assert.ok(perSecond(body) < perSecond(onFal) * 0.75, `a Segmind run must not be priced at fal money (${perSecond(body)}/s vs ${perSecond(onFal)}/s)`);
 
   // The approve-time upscale rides the same run, and `auto` bills wherever a key actually exists:
   // with no Segmind key this install can only reach fal's Topaz, and that fal price is the honest
@@ -580,19 +588,28 @@ test('estimate: a Segmind-backed run answers 200 with an unknown price, never a 
   // SEGMIND_API_KEY='' in childEnv (so a test can never bill the real API), and dotenv never
   // overwrites an existing variable, so writing a key into .env changes NOTHING for the child and
   // must change nothing for the estimate either. An EXPLICIT provider pick, however, short-circuits
-  // before any key check — that is how this run moves home, where the rate is not on file.
+  // before any key check — that is how this run moves home, onto Segmind's own Topaz rate.
+  //
+  // Both providers publish a Topaz rate now and they are CLOSE ($0.12 vs $0.125 per input second),
+  // so `> 0` no longer proves which one was billed — these compare the actual figures.
   const envFile = path.join(envRoot, '.env');
   const original = fs.readFileSync(envFile, 'utf8');
   try {
-    assert.ok((await get(`/api/runs/${runId}/estimate?mode=upscale`)).json().totalUsd > 0, 'keyless-Segmind upscales on fal, at fal money');
+    const onFalTopaz = (await get(`/api/runs/${runId}/estimate?mode=upscale`)).json();
+    assert.ok(onFalTopaz.totalUsd > 0, 'keyless-Segmind upscales on fal, at fal money');
     fs.writeFileSync(envFile, `${original}SEGMIND_API_KEY=seg-test-key\n`);
     const stillFal = await get(`/api/runs/${runId}/estimate?mode=upscale`);
-    assert.ok(stillFal.json().totalUsd > 0, 'the childEnv pin wins exactly as it does in the spawned CLI');
+    assert.equal(stillFal.json().totalUsd, onFalTopaz.totalUsd, 'the childEnv pin wins exactly as it does in the spawned CLI');
     fs.writeFileSync(envFile, `${original}UPSCALE_PROVIDER=segmind\n`);
     const up = await get(`/api/runs/${runId}/estimate?mode=upscale`);
     assert.equal(up.statusCode, 200, up.body);
-    assert.equal(up.json().totalUsd, null);
-    assert.match(up.json().unknownPrice.hint, /segmind/i);
+    const onSegmindTopaz = up.json();
+    assert.ok(!onSegmindTopaz.unknownPrice, 'Segmind publishes a Topaz rate — approve quotes it');
+    assert.ok(
+      onSegmindTopaz.totalUsd > onFalTopaz.totalUsd,
+      `Segmind Topaz ($0.125/s) bills above fal's ($0.12/s), so an explicit pick must MOVE the figure `
+      + `(got ${onSegmindTopaz.totalUsd} vs ${onFalTopaz.totalUsd})`,
+    );
   } finally { fs.writeFileSync(envFile, original); }
 });
 
@@ -623,37 +640,34 @@ test('estimate: a 2.5@fal run prices the resolution SEEDANCE25_RESOLUTION select
   } finally { fs.writeFileSync(envFile, original); }
 });
 
-// A take on a provider that publishes no rate still SPENT money. The ledger's `estUsd: null` alone
-// is ambiguous — a local assemble records null too, and that one really was free — so an unpriced
-// take is FLAGGED. Getting this wrong is how a run page ends up implying a paid Segmind render cost
-// nothing. The ledger row is written at enqueue, so this asserts it without spending a child's time
-// rendering (childEnv carries no Segmind key, so the child fails fast and reaches no network).
-test('the cost ledger records an unpriced take as spend-with-no-rate, never as free', async () => {
+// Every backend we ship publishes a rate now, INCLUDING both Segmind Seedance models — so a Segmind
+// take must record a real figure and must NOT be flagged. This is the assertion that would have
+// caught the old copy still calling Segmind unpriced. The ledger row is written at enqueue, so this
+// asserts it without spending a child's time rendering (childEnv carries no Segmind key, so the
+// child fails fast and reaches no network).
+test('the cost ledger records a Segmind take at Segmind money, unflagged', async () => {
   const { runId } = (await post('/api/runs', { idea: 'a bell buoy in the dark', backend: 'seedance-2.5@segmind', aspect: '16:9', durationS: null })).json();
   await waitForStatus(runId, 'plan-ready');
 
   const res = await post(`/api/runs/${runId}/render`, { mode: 'full' });
   assert.equal(res.statusCode, 202, res.body);
-  assert.equal(res.json().estUsd, null, 'the API answers honestly rather than quoting a made-up figure');
+  assert.ok(res.json().estUsd > 0, 'Segmind publishes a rate — the API quotes it');
 
   try {
     const { manifest } = (await get(`/api/runs/${runId}`)).json().run;
     const row = manifest.costLedger.at(-1);
     assert.equal(row.action, 'full');
-    assert.equal(row.estUsd, null);
-    assert.equal(row.unpriced, true, 'flagged, so a null here can never be read as "this step was free"');
-    assert.match(row.note, /no published rate|estimate unavailable/i);
-    assert.ok(!/\bfree\b/i.test(row.note), 'the note must never call a paid render free');
-    assert.equal(manifest.takes.at(-1).estUsd, null, 'and the take agrees with its ledger row');
-
-    // the contrast that gives `unpriced` its meaning: a priced backend records a real number
-    const priced = (await post('/api/runs', { idea: 'the same idea on fal', backend: 'seedance-2.5@fal', aspect: '16:9', durationS: null })).json().runId;
-    await waitForStatus(priced, 'plan-ready');
-    await post(`/api/runs/${priced}/render`, { mode: 'full' });
-    try {
-      const pRow = (await get(`/api/runs/${priced}`)).json().run.manifest.costLedger.at(-1);
-      assert.ok(pRow.estUsd > 0, 'fal 2.5 publishes its rate, so the ledger carries a figure');
-      assert.ok(!pRow.unpriced, 'and is not flagged');
-    } finally { await post(`/api/runs/${priced}/cancel`, {}); }
+    assert.ok(row.estUsd > 0);
+    assert.ok(!row.unpriced, 'a priced spend must never carry the "no rate on file" flag');
+    assert.ok(!/no published rate|unavailable/i.test(row.note), `stale unpriced note: ${row.note}`);
+    assert.ok(!/\bfree\b/i.test(row.note), 'and a paid render is never called free');
+    assert.equal(manifest.takes.at(-1).estUsd, row.estUsd, 'and the take agrees with its ledger row');
   } finally { await post(`/api/runs/${runId}/cancel`, {}); }
 });
+
+// NB: the `unpriced` FLAG has no HTTP-level test any more, and that is not an oversight. Every
+// provider readUpscaleProvider can resolve to (fal, segmind) now publishes a rate, so no request
+// reaches the flag — the synthetic 'examplevendor' row cannot be selected through the API on
+// purpose. The path is covered where it can be driven honestly: the estimator's null branch in
+// unit/estimator-providers.test.js, and the ledger's rendering of the flag in the UI's
+// FinalCard/format tests, both against synthetic rows.

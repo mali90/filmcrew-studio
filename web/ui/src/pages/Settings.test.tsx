@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
 import { HttpResponse, http, server } from '../test/msw';
+import { SETUP_COMPLETE } from '../test/fixtures';
 import { ToastProvider } from '../components/ui/Toast';
 import SettingsPage from './Settings';
 
@@ -54,6 +55,7 @@ describe('Settings — keys', () => {
         source: '.env',
         rows: [
           { key: 'FAL_KEY', value: 'fal_••••••cdef', secret: true, set: true },
+          { key: 'SEGMIND_API_KEY', value: 'SG_••••••7890', secret: true, set: true },
           { key: 'ANTHROPIC_API_KEY', value: 'sk-ant-••••wxyz', secret: true, set: true },
         ],
       })),
@@ -67,12 +69,53 @@ describe('Settings — keys', () => {
     // provider/transport seed from setup-status (claude + cli in the fixture)
     await waitFor(() => expect(screen.getByRole('radio', { name: 'CLI' })).toHaveAttribute('aria-checked', 'true'));
     expect(screen.getByLabelText('fal.ai key')).toHaveAttribute('placeholder', 'fal_••••••cdef');
+    expect(screen.getByLabelText('Segmind key')).toHaveAttribute('placeholder', 'SG_••••••7890');
 
     await userEvent.type(screen.getByLabelText('fal.ai key'), 'fal_brand_new');
     await userEvent.click(screen.getByRole('button', { name: 'Save keys' }));
 
-    // untouched: LLM_PROVIDER, LLM_TRANSPORT, ANTHROPIC_API_KEY — none may ride along
+    // untouched: LLM_PROVIDER, LLM_TRANSPORT, ANTHROPIC_API_KEY — none may ride along. The Segmind
+    // field matters most here: it shows a MASK, so posting its empty value would wipe a configured
+    // SEGMIND_API_KEY that the user never touched.
     await waitFor(() => expect(body).toEqual({ updates: { FAL_KEY: 'fal_brand_new' } }));
+  });
+
+  it('validates the Segmind key against the CONFIGURED backend and saves it under SEGMIND_API_KEY', async () => {
+    let validated: unknown = null;
+    let body: unknown = null;
+    server.use(
+      // an install whose default backend renders on Segmind
+      http.get('/api/setup/status', () => HttpResponse.json({
+        ...SETUP_COMPLETE,
+        segmind: { hasKey: false },
+        renderProvider: 'segmind',
+        defaults: { ...SETUP_COMPLETE.defaults, backend: 'seedance-2.0@segmind' },
+      })),
+      http.post('/api/setup/validate-segmind', async ({ request }) => {
+        validated = await request.json();
+        return HttpResponse.json({ ok: true, warning: 'the key works, but the account is out of credits' });
+      }),
+      http.post('/api/settings/env', async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json({ written: ['SEGMIND_API_KEY'] });
+      }),
+    );
+    renderSettings();
+
+    // the blurb names the provider that actually bills this install, not a hardcoded fal.ai
+    expect(await screen.findByText(/Segmind renders them/)).toBeInTheDocument();
+
+    await userEvent.type(screen.getByLabelText('Segmind key'), 'SG_live_123');
+    // Validate is disabled on an empty field, so the enabled one is the field just typed into
+    await userEvent.click(screen.getAllByRole('button', { name: 'Validate' }).find((b) => !(b as HTMLButtonElement).disabled)!);
+
+    // the picked backend rides along — the server probes THAT model at its configured slug
+    await waitFor(() => expect(validated).toEqual({ apiKey: 'SG_live_123', backend: 'seedance-2.0@segmind' }));
+    // a working key with an empty account is valid, and says why it is not celebrating
+    expect(await screen.findByText(/Key valid · the key works, but the account is out of credits/)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Save keys' }));
+    await waitFor(() => expect(body).toEqual({ updates: { SEGMIND_API_KEY: 'SG_live_123' } }));
   });
 
   it('auto-saves provider/transport on change; Save keys posts only the key under the right env var', async () => {

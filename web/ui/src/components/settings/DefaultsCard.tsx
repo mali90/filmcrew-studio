@@ -157,8 +157,8 @@ export function DefaultsCard() {
           that&rsquo;s where full quality comes from, not from rendering large.
         </p>
         <p className="text-caption text-ink-muted">
-          Segmind publishes no per-second rate for its Seedance models, so those runs show &ldquo;price
-          not set&rdquo; instead of a figure — they still cost money.
+          The same model bills differently per provider: Segmind runs Seedance at roughly half
+          fal&rsquo;s per-second rate. Every estimate says which pair it priced.
         </p>
       </div>
 

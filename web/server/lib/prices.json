@@ -1,5 +1,5 @@
 {
-  "_note": "Ballpark per-second USD rates used for the UI's cost ESTIMATES only \u2014 nothing here is billed. Verified against fal.ai's model pages (July 2026); edit freely when fal's prices move. Every figure the UI shows from these is labeled 'estimate'.",
+  "_note": "Ballpark per-second USD rates used for the UI's cost ESTIMATES only \u2014 nothing here is billed. Verified against fal.ai's model pages (July 2026) and segmind.com's (August 2026); edit freely when a vendor's prices move. Every figure the UI shows from these is labeled 'estimate'.",
   "kling": {
     "perSecondUsd": 0.112,
     "audioOffPerSecondUsd": 0.084,
@@ -30,18 +30,40 @@
     "perSecondUsd": 0.12,
     "_source": "fal.ai topaz/upscale/video ballpark per output second"
   },
-  "_unpriced": "Rows shaped {\"perSecondUsd\": null} are a KNOWN UNKNOWN, not a free tier and not a typo: the model renders, it bills, and the vendor simply does not publish a per-second rate. The estimator answers totalUsd:null + an unknownPrice hint for these instead of throwing or borrowing a sibling's rate — an invented figure on a paid button is worse than no figure. Each row is INDEPENDENT (never an $alias of another): filling one in must never silently price the others.",
   "seedance-2.0@segmind": {
-    "perSecondUsd": null,
-    "_todo": "PRICE CHECK REQUIRED — segmind.com/models/seedance-2.0/pricing"
+    "perSecondUsd": {
+      "480p": 0.0703,
+      "720p": 0.1512,
+      "1080p": 0.34,
+      "4k": 1.3721
+    },
+    "defaultResolution": "480p",
+    "probeResolution": "480p",
+    "_source": "segmind.com/models/seedance-2.0/pricing (checked 2026-08-10), 16:9 column — the same 16:9-derived convention as the fal Seedance rows. 9:16 is identical to 16:9; the other ratios differ by under 2% at the low tiers (1:1 $0.0672/$0.1512, 4:3 and 3:4 $0.0691/$0.1522, 21:9 $0.0703/$0.1519) and 1080p/4k are flat across every ratio. Segmind is roughly HALF fal's rate for the SAME model (fal 2.0: $0.135/$0.3024) — that gap is real and re-checkable, not a transcription slip, so please verify against the page before 'fixing' it."
   },
   "seedance-2.5@segmind": {
-    "perSecondUsd": null,
-    "_todo": "PRICE CHECK REQUIRED — segmind.com/models/seedance-2.5/pricing"
+    "perSecondUsd": {
+      "480p": 0.1065,
+      "720p": 0.2389
+    },
+    "defaultResolution": "720p",
+    "probeResolution": "480p",
+    "_source": "segmind.com/models/seedance-2.5/pricing (checked 2026-08-10), 16:9 column. Segmind publishes NO 1080p and NO 4k tier for 2.5 — these two rates are the whole table, so a spec pinning a higher resolution fails loudly here rather than quoting a tier that does not exist (seedance-2.5@fal behaves the same way). 9:16 matches 16:9; other ratios differ by under 3% (1:1 $0.1018/$0.2389, 4:3 and 3:4 $0.1046/$0.2404, 21:9 $0.1065/$0.2401). Turning audio generation on does NOT change the price. Requests carrying VIDEO references bill a ~40%-cheaper video-to-video tier ($0.0637/s at 480p, $0.1429/s at 720p), which this estimate does not model — the same unmodelled discount the fal 2.5 row carries. Segmind is roughly HALF fal's rate for the SAME model (fal 2.5: $0.2205/$0.4730) — verified, not a typo."
   },
   "topaz@segmind": {
+    "perSecondUsd": 0.125,
+    "_source": "segmind.com/models/topaz-video-upscale/pricing (checked 2026-08-10): $0.125 per second, FLAT, billed on the INPUT video's duration — which is exactly what estimateUpscale sums (one Topaz job per sub-HD clip). The page publishes this single rate and NO per-target-resolution breakdown, so 720p/1080p/4k targets are deliberately not priced differently here; a per-resolution map would be invented, not sourced. UPSCALE_TARGET_RESOLUTION therefore changes what you get, not what this estimate says."
+  },
+  "_unpriced": "Rows shaped {\"perSecondUsd\": null} are a KNOWN UNKNOWN, not a free tier and not a typo: the model renders, it bills, and the vendor simply does not publish a per-second rate. The estimator answers totalUsd:null + an unknownPrice hint for these instead of throwing or borrowing a sibling's rate — an invented figure on a paid button is worse than no figure. Each row is INDEPENDENT (never an $alias of another): filling one in must never silently price the others. NO SHIPPED VENDOR ROW IS CURRENTLY UNPRICED — Segmind's three rates landed 2026-08-10. The path is still live and still correct for the next vendor that publishes nothing, so the synthetic rows below keep it exercised; see _fixtures.",
+  "_fixtures": "SYNTHETIC rows for a vendor that does not exist. They exist so the unknown-price path (estimator's null branch, the UI's amber \"Price not set\" note, the ledger's unpriced flag) stays covered WITHOUT depending on a real vendor staying unpriced — the last time that coupling existed, pricing Segmind broke seven test files. Never point a registry backend at 'examplevendor', and never delete these to 'clean up': the coverage goes with them. Marked _fixture so the no-_todo guard in estimator-providers.test.js can tell 'unpriced on purpose, forever' from 'shipped before anyone looked the rate up'.",
+  "seedance-2.0@examplevendor": {
     "perSecondUsd": null,
-    "_todo": "PRICE CHECK REQUIRED — segmind.com/models/topaz-video-upscale/pricing"
+    "_fixture": "Synthetic. Drives estimateRender's unpriced branch. See _fixtures."
+  },
+  "topaz@examplevendor": {
+    "perSecondUsd": null,
+    "_fixture": "Synthetic. Drives estimateUpscale's unpriced branch, and its _todo below keeps the 'where to look it up' half of the hint covered. See _fixtures.",
+    "_todo": "PRICE CHECK REQUIRED — examplevendor.invalid/models/topaz/pricing"
   },
   "_aliases": "Rows shaped {\"$alias\": \"<key>\"} are ONE-HOP redirects, not rate tables. The CLI records the CANONICAL compound backend id (<model>@<provider>) in render.json, and the estimate endpoint prices CLI-created runs off that value — these hops send it to the legacy rate row above instead of throwing. Only ONE hop is followed, so a genuinely unknown id (kling-o3@segmind) still fails loudly.",
   "kling-o3@fal": { "$alias": "kling" },

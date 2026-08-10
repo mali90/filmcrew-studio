@@ -15,21 +15,19 @@ import { Button } from '../ui/Button';
 import { SegmentedControl } from '../ui/SegmentedControl';
 
 // One hint per canonical `<model>@<provider>` id — the price is a property of the PAIR, not of the
-// model: the same Seedance renders on two bills. Copy only; every number below is a rate somebody
-// publishes, and a pair whose rate nobody publishes says exactly that (SEGMIND_HINT) instead of
+// model: the same Seedance renders on two bills, and Segmind's is about half of fal's. Copy only;
+// every number below is a rate the vendor publishes. A pair with no hint quotes nothing rather than
 // borrowing its sibling's figure or pretending the render is free.
 const BACKEND_HINT: Record<string, string> = {
   'kling-o3@fal': 'Kling renders the richest motion at roughly $0.11 per second (~720p — approving can upscale the final to 1080p).',
   'seedance-2.0@fal': 'Seedance lip-syncs to your voice clips and renders at 480p for roughly $0.14 per second — approving can upscale the final to 1080p.',
   'seedance-2.5@fal': 'Seedance 2.5 takes up to four starring characters and renders 720p at roughly $0.47 per second (roughly $0.22 at 480p).',
+  'seedance-2.0@segmind': 'Seedance lip-syncs to your voice clips and renders at 480p for roughly $0.07 per second on Segmind — about half fal’s rate for the same model. Approving can upscale the final to 1080p.',
+  'seedance-2.5@segmind': 'Seedance 2.5 takes up to four starring characters and renders 720p at roughly $0.24 per second on Segmind (roughly $0.11 at 480p) — about half fal’s rate for the same model.',
 };
-// Segmind publishes no per-second rate for the models we drive, so no figure can be quoted honestly.
-const SEGMIND_HINT = 'Segmind publishes no per-second rate for this model, so the price is not on file yet — the render still costs money, and the run page will say so rather than guess a figure.';
 const hintFor = (backend: Backend) =>
   BACKEND_HINT[canonicalBackendFor(backend)]
-  ?? (providerIdFor(backend) === 'segmind'
-    ? SEGMIND_HINT
-    : `${modelLabelFor(backend)} — you’ll see its render price on the run page, before anything spends.`);
+  ?? `${modelLabelFor(backend)} — you’ll see its render price on the run page, before anything spends.`;
 
 // The models on offer, straight from the registry and in its order: a model with no provider entry
 // cannot render, so it is not offered at all. Adding a model or a provider is a registry edit.

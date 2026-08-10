@@ -17,8 +17,8 @@ describe('Button', () => {
 
   // ── "The estimate hasn't loaded" vs "there is no rate" ────────────────────
   // Both arrive as costUsd === null, and confusing them is how a working backend gets locked
-  // behind a spinner that never stops (Segmind publishes no per-second rate for anything we drive,
-  // so its estimate never resolves to a number).
+  // behind a spinner that never stops: a vendor that publishes no rate never resolves to a number,
+  // so only `costUnknown` can tell "never coming" from "not here yet".
   it('a still-loading estimate disables the button and shows the ≈ $… placeholder', () => {
     render(<Button costUsd={null}>Full render</Button>);
     const btn = screen.getByRole('button', { name: /full render/i });

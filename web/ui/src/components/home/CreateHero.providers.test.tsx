@@ -11,8 +11,8 @@
 //   * the posted `backend` is the canonical compound id for the pair on screen
 //   * caps follow the pair: Seedance 2.5 stars up to 4, Segmind renders all six ratios while
 //     fal Seedance 2.0 renders three — and an invalid selection trims on switch, as it already does
-//   * per-model hint copy is HONEST about money: fal 2.5 quotes its real published rate; the Segmind
-//     entries say the rate is not on file yet and quote NO $/s figure at all
+//   * per-PAIR hint copy is HONEST about money: every pair quotes the rate its own vendor publishes,
+//     and Segmind's Seedance is about half fal's — the price follows the pair, not the model
 //
 // TDD (red first): CreateHero has two hardcoded segments and no provider axis.
 import { render, screen, within } from '@testing-library/react';
@@ -234,22 +234,39 @@ describe('CreateHero — honest money copy', () => {
     expect(screen.getByText(/\$0\.47/)).toBeInTheDocument(); // $0.4730/s at 720p, fal's published figure
   });
 
-  it('a Segmind pick says the rate is not on file — and invents no $/s figure', async () => {
+  it('a Segmind pick quotes SEGMIND\'s rate, not fal\'s — switching provider moves the figure', async () => {
     renderHome();
     await pickModel('Seedance 2.5');
-    await userEvent.click(within(providerGroup()).getByRole('radio', { name: 'Segmind' }));
+    const onFal = screen.getByTestId('backend-hint').textContent ?? '';
+    expect(onFal).toMatch(/\$0\.47/);
 
+    await userEvent.click(within(providerGroup()).getByRole('radio', { name: 'Segmind' }));
     const hint = screen.getByTestId('backend-hint');
-    expect(hint).toHaveTextContent(/not on file|not published/i);
-    expect(hint).toHaveTextContent(/costs money|charges|bills/i); // it is NOT free, and says so
-    expect(hint.textContent ?? '').not.toMatch(/\$\s?\d/); // no invented number, anywhere in the copy
+    expect(hint).toHaveTextContent(/\$0\.24/);          // $0.2389/s at 720p, Segmind's published figure
+    expect(hint).not.toHaveTextContent(/not on file/i); // the rate IS on file now
+    expect(hint).not.toHaveTextContent(/\bfree\b/i);    // …and it still is not free
+    expect(hint.textContent).not.toEqual(onFal);
   });
 
-  it('no per-second figure is attached to any Segmind option', async () => {
+  it('every pair quotes a rate — no provider is left saying "not on file"', async () => {
+    renderHome();
+    for (const model of ['Seedance 2.0', 'Seedance 2.5']) {
+      await pickModel(model);
+      for (const provider of ['fal', 'Segmind']) {
+        await userEvent.click(within(providerGroup()).getByRole('radio', { name: provider }));
+        const hint = screen.getByTestId('backend-hint');
+        expect(hint.textContent ?? '', `${model} on ${provider}`).toMatch(/\$\d/);
+        expect(hint, `${model} on ${provider}`).not.toHaveTextContent(/not on file/i);
+      }
+    }
+  });
+
+  it('the provider RADIOS stay figure-free — money lives in the hint, in one place', async () => {
     renderHome();
     await pickModel('Seedance 2.0');
-    const segmind = within(providerGroup()).getByRole('radio', { name: 'Segmind' });
-    expect(segmind.textContent ?? '').not.toMatch(/\$\s?\d/);
+    for (const name of ['fal', 'Segmind']) {
+      expect(within(providerGroup()).getByRole('radio', { name }).textContent ?? '').not.toMatch(/\$\s?\d/);
+    }
   });
 });
 

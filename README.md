@@ -66,7 +66,7 @@ Your browser opens to **http://127.0.0.1:5177**, where a first-run wizard takes 
 From there: type an idea → the agents plan it (uses your LLM, no render spend) → you see the **price on every render button** before anything spends → review the cut clip by clip → request changes (they go back through the agents) → approve, with an optional Topaz upscale to 1080p. Your finished `.mp4` lands in **`out/`**.
 
 > [!IMPORTANT]
-> Rendering is **paid, pay-as-you-go** on fal.ai or Segmind. The studio shows an estimate on every money button and renders economically by default (Kling ~720p / Seedance 2.0 480p — the approve-time upscale delivers 1080p). Where a rate isn't on file — Segmind doesn't publish one — the button says **"Price not set"** and warns instead of blocking; the render still costs money. Long videos split into several render jobs, and those plans offer a **probe** — render just the first job to check the direction before paying for the rest. Details and current prices: [docs/COST.md](docs/COST.md).
+> Rendering is **paid, pay-as-you-go** on fal.ai or Segmind. The studio shows an estimate on every money button and renders economically by default (Kling ~720p / Seedance 2.0 480p — the approve-time upscale delivers 1080p). Segmind runs the same Seedance models for about half fal's per-second rate. Where a rate isn't on file at all, the button says **"Price not set"** and warns instead of blocking; the render still costs money. Long videos split into several render jobs, and those plans offer a **probe** — render just the first job to check the direction before paying for the rest. Details and current prices: [docs/COST.md](docs/COST.md).
 
 ### Starting and stopping, day to day
 
@@ -146,7 +146,7 @@ A worked example lives in [`examples/ocean-lighthouse/`](examples/ocean-lighthou
 
 Rendering is **paid, pay-as-you-go** at your render provider — every render spends money. These figures are a **snapshot as of July/August 2026 and may change** — always check the provider's pricing for your endpoint. Full detail (hard limits, the probe workflow, the Seedance token formula): [docs/COST.md](docs/COST.md).
 
-| Model / step | Output | Price (July 2026) | Typical 15s job |
+| Model / step | Output | Price (fal Jul 2026 · Segmind Aug 2026) | Typical 15s job |
 |---|---|---|---:|
 | **Kling o3 — Standard** · default | ~720p | $0.112/s | ≈ $1.68 |
 | **Kling o3 — Pro** · `FAL_KLING_ENDPOINT` | 1080p | $0.14/s | ≈ $2.10 |
@@ -157,11 +157,13 @@ Rendering is **paid, pay-as-you-go** at your render provider — every render sp
 | **Seedance 2.5** · 720p (default) | 720p | $0.473/s | ≈ $7.10 |
 | **Topaz upscale** · `--upscale` | → 1080p | $0.12/s · one job per sub-1080p clip | ≈ $1.80 |
 | **Voice mint** · `mint-voice` | one voice / character | ≈ $0.007 once | — |
-| **Anything on Segmind** | — | **rate not published — not on file** | — |
+| **Seedance 2.0 on Segmind** · 480p (default) | 480p | $0.0703/s | ≈ $1.05 |
+| **Seedance 2.5 on Segmind** · 720p (default) | 720p | $0.2389/s | ≈ $3.58 |
+| **Topaz upscale on Segmind** · `--upscale` | → target | $0.125/s flat · on the input duration | ≈ $1.88 |
 
-> **Snapshot — see [docs/COST.md](docs/COST.md) for current detail.** The default for the fal backends is *render small + Topaz upscale on approve*, so the finished master is 1080p while you pay the economical tier's per-second rate.
+> **Snapshot — see [docs/COST.md](docs/COST.md) for current detail.** The default for the fal backends is *render small + Topaz upscale on approve*, so the finished master is 1080p while you pay the economical tier's per-second rate. Rows without a provider are fal's.
 
-> **Segmind rates are not in this repo's price table.** Segmind does not publish a public per-second rate for the two Seedance models or its Topaz upscale, and this project will not invent one. For those backends the estimator shows **"Price not set"** and the render button warns rather than blocks — **the render still costs real money**. Check the model's own page before a long run; details in [docs/PROVIDERS.md](docs/PROVIDERS.md).
+> **Segmind runs the same Seedance models at about half fal's rate** (2.0 also does 720p at $0.1512/s, 1080p at $0.34/s, 4k at $1.3721/s; 2.5 does 480p at $0.1065/s and publishes no 1080p or 4k tier). **These renders still cost real money** — Segmind bills in credits, and the balance it reports after each job is what actually left your account. Details in [docs/PROVIDERS.md](docs/PROVIDERS.md).
 
 ## Docs
 
