@@ -85,8 +85,11 @@ describe('ReviewStage', () => {
     );
 
     renderReview(<Stage run={run} />);
-    expect(screen.getByText('Probe take — first job only, low cost.')).toBeInTheDocument();
-    expect(screen.getByText(/Finishing is free — assembly already happened\./)).toBeInTheDocument();
+    // U5: the lead names the one job the probe rendered; the trailing sentence says what the paid
+    // button buys. Nothing in this banner may read "free" — it sits beside a $-tagged button.
+    const banner = screen.getByText('Probe take — only K1 rendered.').closest('div')!;
+    expect(within(banner).getByText(/Full render replaces this probe with all 2 clips, as a new take\./)).toBeInTheDocument();
+    expect(banner.textContent).not.toMatch(/free/i);
 
     // the estimate arrives and prices the button
     await screen.findByLabelText('estimated cost $4.16');
@@ -175,5 +178,29 @@ describe('ReviewStage', () => {
   it('a run that was never delivered shows no notice', () => {
     renderReview(<Stage run={makeRun('review')} />);
     expect(screen.queryByTestId('reopened-notice')).not.toBeInTheDocument();
+  });
+
+  // U14 — when the plan moved past the latest cut (same derivation as ChangeRequestPanel's
+  // planChanged), the stage says the video below is the OLD cut and points at the rail.
+  it('notes in the banner slot when the plan changed after the latest cut', () => {
+    const run = makeRun('review');
+    // take t1 is from 10:00; a revision at 11:00 outran the cut
+    run.manifest!.revisions = [
+      { id: 'r2', feedback: 'the keeper should look older', scope: 'K2', owners: [4], createdAt: '2026-07-04T11:00:00.000Z' },
+    ];
+    renderReview(<Stage run={run} />);
+    const notice = screen.getByTestId('plan-outran-cut-notice');
+    expect(notice.textContent).toMatch(/The plan changed after this cut \(r2\) — the video below is unchanged\./);
+    expect(notice.textContent).toMatch(/Re-render options are in the rail\./);
+  });
+
+  it('shows no plan-changed notice when a take is newer than the last revision', () => {
+    const run = makeRun('review');
+    // revision at 09:00 predates take t1 (10:00) — the cut already carries this plan
+    run.manifest!.revisions = [
+      { id: 'r1', feedback: 'wider hook shot', scope: 'whole', owners: [1], createdAt: '2026-07-04T09:00:00.000Z' },
+    ];
+    renderReview(<Stage run={run} />);
+    expect(screen.queryByTestId('plan-outran-cut-notice')).not.toBeInTheDocument();
   });
 });

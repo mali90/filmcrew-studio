@@ -33,7 +33,14 @@ export function ReviewStage({ run, cutId, setCutId }: {
     ? run.latestRender?.masterUrl ?? undefined
     : selected?.master ? outMediaUrl(selected.master) : undefined;
 
-  const isProbe = run.manifest?.takes.at(-1)?.mode === 'probe';
+  const takes = run.manifest?.takes ?? [];
+  const isProbe = takes.at(-1)?.mode === 'probe';
+  // The stage's pointer at the rail's re-render block (spec D30/U14): same derivation as
+  // ChangeRequestPanel's planChanged, so stage and rail never disagree about whether the plan
+  // moved past the latest cut.
+  const lastRevision = (run.manifest?.revisions ?? []).at(-1);
+  const lastTake = takes.at(-1);
+  const planChanged = !!lastRevision && (!lastTake || lastRevision.createdAt > lastTake.createdAt);
   // A run that came back here from the deliver card looks identical to one that never left — so the
   // banner slot says why the user is here and what is still on disk (spec D25). It is a standing
   // fact about the run's state, not an event, so it is written on the page and never toasted
@@ -86,7 +93,7 @@ export function ReviewStage({ run, cutId, setCutId }: {
 
       {isProbe && (
         <div className="mb-5 flex flex-wrap items-center gap-3 rounded-r2 border border-line bg-surface-1 px-4 py-3">
-          <p className="text-dense text-ink">Probe take — first job only, low cost.</p>
+          <p className="text-dense text-ink">Probe take — only {jobIds[0]} rendered.</p>
           <PaidButton
             variant="secondary"
             size="sm"
@@ -97,7 +104,22 @@ export function ReviewStage({ run, cutId, setCutId }: {
           >
             Full render
           </PaidButton>
-          <span className="text-caption text-ink-muted">Finishing is free — assembly already happened.</span>
+          {/* U5: "approving is free" lives in ApproveBar beside the genuinely free action — a
+              "free" here would sit right next to a $-tagged button and read as its caption. The
+              count is the PLAN's job list: a probe by definition rendered only the first job, so
+              latestRender.jobs may hold a single entry. */}
+          <span className="text-caption text-ink-muted">
+            Full render replaces this probe with all {jobIds.length} clips, as a new take.
+          </span>
+        </div>
+      )}
+
+      {planChanged && lastRevision && (
+        <div className="mb-5 rounded-r2 border border-line bg-surface-1 px-4 py-3" data-testid="plan-outran-cut-notice">
+          <p className="text-dense text-ink">
+            The plan changed after this cut ({lastRevision.id}) — the video below is unchanged.
+            Re-render options are in the rail.
+          </p>
         </div>
       )}
 
