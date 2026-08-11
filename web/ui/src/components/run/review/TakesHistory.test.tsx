@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react';
+import { fireEvent, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { makeRun } from '../../../test/fixtures';
 import { renderReview } from './test-helpers';
@@ -42,6 +42,51 @@ describe('TakesHistory', () => {
     renderReview(<TakesHistory run={run} />);
     expect(screen.getByText('No takes yet.')).toBeInTheDocument();
     expect(screen.queryByRole('listitem')).not.toBeInTheDocument();
+  });
+
+  // U6 — the cumulative spend stays visible at the stage that offers more paid actions.
+  it('the header carries the running spend when the ledger has lines', () => {
+    const run = makeRun('review');
+    run.manifest!.costLedger = [
+      { ts: '2026-07-04T10:00:00.000Z', action: 'render', estUsd: 1.46, note: 'full render' },
+    ];
+    renderReview(<TakesHistory run={run} />);
+    expect(screen.getByText('≈$1.46 so far')).toBeInTheDocument();
+  });
+
+  it('no spend line while the ledger is empty', () => {
+    renderReview(<TakesHistory run={makeRun('review')} />);
+    expect(screen.queryByText(/so far/)).not.toBeInTheDocument();
+  });
+
+  // U13 — beyond 8 rows the list folds to the newest 8; the lineage stays one quiet click away.
+  it('collapses a long history to the newest 8 rows behind a Show all toggle', () => {
+    const run = makeRun('review');
+    run.manifest!.cuts = [];
+    run.manifest!.takes = Array.from({ length: 10 }, (_, i) => ({
+      id: `t${i + 1}`,
+      mode: 'full' as const,
+      revision: null,
+      createdAt: `2026-07-04T10:${String(i).padStart(2, '0')}:00.000Z`,
+      estUsd: 1,
+    }));
+    renderReview(<TakesHistory run={run} />);
+
+    expect(screen.getAllByRole('listitem')).toHaveLength(8);
+    expect(screen.queryByText(/t1 · full/)).not.toBeInTheDocument(); // the OLDEST rows fold away
+    expect(screen.getByText(/t10 · full/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show all (10)' }));
+    expect(screen.getAllByRole('listitem')).toHaveLength(10);
+    expect(screen.getByText(/t1 · full/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show newest 8' }));
+    expect(screen.getAllByRole('listitem')).toHaveLength(8);
+  });
+
+  it('a history of 8 rows or fewer shows no toggle', () => {
+    renderReview(<TakesHistory run={makeRun('review')} />);
+    expect(screen.queryByRole('button', { name: /Show all/ })).not.toBeInTheDocument();
   });
 
   // ── Deliveries, reopens and prompt edits (WS2-P6, spec D27) ───────────────
