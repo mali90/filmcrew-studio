@@ -413,14 +413,17 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     return `${slugify(spec?.project?.title)}-${short}${suffix ? `-${suffix}` : ''}`;
   }
 
-  function enqueueAssemble(runId, fromDir, { upscale = false, suffix } = {}) {
+  function enqueueAssemble(runId, fromDir, { upscale = false, suffix, upscaleProvider = null } = {}) {
     const dir = dirFor(runId);
     const spec = readJson(path.join(dir, 'spec.json'));
     return mgr.enqueue({
       runId, lane: upscale ? 'spend' : 'free', kind: upscale ? 'upscale' : 'assemble',
       script: CLI(root, 'assemble.js'),
       args: ['--from', fromDir, '--out-name', outNameFor(runId, spec, suffix ?? (upscale ? 'final' : null)), ...(upscale ? ['--upscale'] : [])],
-      env: env(runId), cwd: root,
+      // An explicit reviewer pick rides as UPSCALE_PROVIDER for THIS child only — an env var
+      // already present is never overwritten by the child's dotenv, so the pick cannot be
+      // out-resolved by .env or 'auto'. No pick injects nothing: the child derives exactly as before.
+      env: { ...env(runId), ...(upscale && upscaleProvider ? { UPSCALE_PROVIDER: upscaleProvider } : {}) }, cwd: root,
     });
   }
 
@@ -842,13 +845,18 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     return { queued: enqueueAssemble(runId, takeDir) };
   }
 
-  function approve(runId, { upscale = false, cut } = {}) {
+  function approve(runId, { upscale = false, cut, provider = null } = {}) {
     const dir = dirFor(runId);
     const run = scanRun(dir, { isAlive });
     // Never approve while paid work runs: finalizing an older cut would mark the run complete and
     // hide the re-render/upscale the reviewer is still paying for (this covers the plain path too,
     // not just the upscale enqueue below).
     assertNoSpendInFlight(runId);
+    // The upscale-provider pick is validated whenever present — junk on a free approve is still a
+    // caller bug worth a 400, never a silent fallback onto whichever vendor the env resolves.
+    if (provider != null && provider !== 'fal' && provider !== 'segmind') {
+      throw Object.assign(new Error(`"${provider}" is not an upscale provider`), { statusCode: 400, hint: 'provider is fal or segmind' });
+    }
     // The user finalizes the cut they previewed. `cut` is optional: omitted ⇒ latest (today's
     // behavior, byte-for-byte). Each cut's take dir holds that cut's own immutable composed
     // render.json, so upscaling `renders/<cut.take>/` reproduces exactly that cut; a plain
@@ -888,16 +896,18 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
       // time a rate lands in prices.json.
       // A provider with no row AT ALL throws in there; that is still "no rate we can quote", and an
       // approve already past its checks must not die over a ledger note.
-      const upscaleProvider = readUpscaleProvider(envRoot ?? root, m.backend, childEnv);
+      // An explicit reviewer pick (validated above) beats the env derivation — it is the vendor the
+      // finalize child is pinned to below, so the line records (and prices) who actually bills.
+      const upscaleProvider = provider ?? readUpscaleProvider(envRoot ?? root, m.backend, childEnv);
       let unpricedUpscale = true;
       try { unpricedUpscale = Boolean(estimateUpscale([], { provider: upscaleProvider }).unknownPrice); } catch { /* unpriced */ }
       m.costLedger.push(unpricedUpscale
-        ? { ts: now().toISOString(), action: 'upscale', estUsd: null, unpriced: true, note: 'estimate unavailable — no published rate for this provider' }
-        : { ts: now().toISOString(), action: 'upscale', estUsd: null, note: 'topaz per-clip — see estimate' });
+        ? { ts: now().toISOString(), action: 'upscale', estUsd: null, unpriced: true, provider: upscaleProvider, note: 'estimate unavailable — no published rate for this provider' }
+        : { ts: now().toISOString(), action: 'upscale', estUsd: null, provider: upscaleProvider, note: 'topaz per-clip — see estimate' });
       m.lastError = null;
       return m;
     });
-    return { final: null, queued: enqueueAssemble(runId, fromDir, { upscale: true, suffix: 'final' }), spec: !!spec };
+    return { final: null, queued: enqueueAssemble(runId, fromDir, { upscale: true, suffix: 'final', upscaleProvider: provider }), spec: !!spec };
   }
 
   function cancel(runId) {

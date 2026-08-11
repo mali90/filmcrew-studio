@@ -18,6 +18,9 @@ export type Aspect = '9:16' | '16:9' | '1:1' | '4:3' | '3:4' | '21:9';
  *  (resolutionsFor(backend): Kling is 720p+, Seedance 2.5 tops out at 720p). */
 export type Resolution = '480p' | '720p' | '1080p' | '4k';
 export type RunStatus = 'planning' | 'plan-ready' | 'rendering' | 'attention' | 'review' | 'complete';
+/** The two vendors that run the approve-time Topaz upscale. Only ever these two literal ids on the
+ *  wire — 'auto' is a config value, never a payload one (the server 400s anything else). */
+export type UpscaleProvider = 'fal' | 'segmind';
 export type Phase = 'plan' | 'render' | 'review' | 'deliver';
 export type ActionKind = 'plan' | 'revise' | 'render' | 'probe' | 'render-job' | 'assemble' | 'upscale' | 'mint-voice';
 
@@ -64,7 +67,9 @@ export interface Manifest {
   cuts: { id: string; take: string; master: string | null; shortSide?: number | null; stitcher?: 'seamless' | 'concat'; joints?: number; matched?: number; createdAt: string }[];
   // `unpriced` marks a line that SPENT money at a rate nobody publishes (Segmind, Topaz per-clip):
   // estUsd is null there because the figure is unknown, not because the step was free.
-  costLedger: { ts: string; action: string; estUsd: number | null; unpriced?: boolean; note: string }[];
+  // `provider` (upscale lines only) records which vendor the Topaz job billed — the reviewer's
+  // explicit pick, or the same derivation the estimate priced when nothing was picked.
+  costLedger: { ts: string; action: string; estUsd: number | null; unpriced?: boolean; provider?: UpscaleProvider; note: string }[];
   approved: { cut: string | null; final: string; upscaled: boolean; stitcher?: 'seamless' | 'concat'; joints?: number; matched?: number; at: string } | null;
   // Delivery lifecycle (WS2-P6), all three ADDITIVE — absent on every run delivered before it
   // existed, and absence means "never reopened, no history", never an error.
@@ -216,6 +221,27 @@ export interface BoundaryPlan {
   endMode: 'native' | 'soft' | 'none' | 'unsupported';
 }
 export interface RerenderJobBody { jobId: string; cascade?: boolean; feedback?: string; take?: number; boundaries?: BoundaryMode }
+/** POST /api/runs/:id/approve — finalize (free) or upscale-and-finalize (paid). */
+export interface ApproveBody {
+  upscale: boolean;
+  /** Which cut to finalize; omitted = the latest render (the stage's implicit target). */
+  cut?: string;
+  /** Which vendor runs the Topaz upscale — the ApproveBar's pick. Only meaningful with
+   *  `upscale: true`; omitted = the server derives it exactly as the estimate did (env/keys).
+   *  Anything but 'fal'/'segmind' is a 400 before any money moves. */
+  provider?: UpscaleProvider;
+}
+/** GET /api/runs/:id/estimate query params (api.estimate). */
+export interface EstimateParams {
+  mode: 'full' | 'probe' | 'job' | 'upscale';
+  jobId?: string;
+  cascade?: boolean;
+  /** mode=upscale only: price this cut's clips (omitted = every job in the current spec). */
+  cut?: string;
+  /** mode=upscale only: quote THIS vendor's Topaz rate (and its delivered target) instead of the
+   *  env-derived one — the ApproveBar re-quotes per pick through this. */
+  provider?: UpscaleProvider;
+}
 export interface RerenderJobResult {
   takeId: string;
   estUsd: number | null;
@@ -232,7 +258,8 @@ export interface Estimate {
   label: 'estimate';
   unknownPrice?: { provider?: string | null; hint: string };
   /** mode=upscale only: the short side the upscale would DELIVER (Segmind's explicit target, or
-   *  ~1080 for fal's factor plan) — the review UI's "already HD" gate judges against this. */
+   *  ~1080 for fal's factor plan) — the review UI's "already HD" gate judges against this. Follows
+   *  the `provider` query param when one is given, so the gate tracks the PICKED vendor. */
   targetShortSide?: number;
 }
 // ── Prompt preview (WS2-P3) ──

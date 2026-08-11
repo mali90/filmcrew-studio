@@ -3,6 +3,22 @@
 ## Unreleased
 
 ### Added
+- **You now pick who runs the approve-time Topaz upscale — fal.ai or Segmind — with both real
+  prices on the table.** Turning the upscale toggle on in the approve bar opens a small provider
+  control, defaulting to fal.ai (its per-output-second rate usually lands under Segmind's flat
+  $0.125 per input second — usually, which is exactly why "trust the default" is not the offer).
+  Each option carries its own live figure, quoted from that vendor's published Topaz rate, and
+  switching re-quotes everything that hangs off the estimate: the paid button's price, the target
+  the card promises, and the "already HD" gate — all follow the *picked* provider's delivered
+  short side, so a Segmind pick honors `UPSCALE_TARGET_RESOLUTION` while fal keeps lifting toward
+  ~1080p, and neither can promise a target the other would deliver. A provider whose key is not on
+  file renders disabled with the reason in plain words instead of failing after the click; when
+  only one vendor has a key, that one is the default and the approval can never die on a missing
+  key. The pick rides the approve payload (`provider: fal|segmind`, anything else is a 400 before
+  any money moves), is pinned into that one finalize child as an explicit `UPSCALE_PROVIDER` —
+  never written to `.env`, so it cannot leak into the next run — and the cost ledger's upscale
+  line records the vendor that actually billed. Approving without the toggle sends no provider at
+  all: the free finalize names no vendor because it pays none.
 - **The resolution you pick now actually governs the render — end to end, and per run.** It used
   to be written to `KLING_RESOLUTION` no matter which backend you chose, so a Seedance default
   (Seedance reads `SEEDANCE_RESOLUTION` / `SEEDANCE25_RESOLUTION`) silently ignored the wizard's

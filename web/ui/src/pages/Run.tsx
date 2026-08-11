@@ -57,9 +57,14 @@ function RunFacts({ run }: { run: RunDetail }) {
 /** The deliver interstitial (U7): reads the same cached estimate ApproveBar fetched, so the target
  *  it names is the provider's real one — never a hardcoded "1080p" over a 720p/4K plan. */
 function UpscaleInterstitial({ run }: { run: RunDetail }) {
+  // The vendor THIS upscale is billing: approve just wrote it on the ledger line. Quoting the
+  // env-derived default here instead could name the wrong target the moment the pick diverges
+  // (Segmind honors UPSCALE_TARGET_RESOLUTION; fal lifts toward ~1080p). When the pick is on
+  // record the query key matches the estimate ApproveBar already cached for that provider.
+  const ledgerProvider = [...(run.manifest?.costLedger ?? [])].reverse().find((l) => l.action === 'upscale')?.provider ?? null;
   const estimate = useQuery({
-    queryKey: ['estimate', run.id, 'upscale', null],
-    queryFn: () => api.estimate(run.id, { mode: 'upscale' }),
+    queryKey: ['estimate', run.id, 'upscale', null, ledgerProvider],
+    queryFn: () => api.estimate(run.id, { mode: 'upscale', provider: ledgerProvider ?? undefined }),
   });
   const targetShort = estimate.data?.targetShortSide ?? 1080;
   const targetLabel = targetShort >= 2160 ? '4K' : `${targetShort}p`;

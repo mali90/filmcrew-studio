@@ -1,24 +1,43 @@
 // The rail's bottom card: an optional Topaz upscale toggle (priced) and the approve action.
 // Approving without upscale is free — assembly already happened; approve only finalizes.
 //
+// Topaz runs on either vendor now, and the margin between them is thin (fal's per-output-second
+// rate usually lands under Segmind's flat $0.125/input-second — usually) — so the toggle opens a
+// provider pick showing BOTH real figures rather than asking anyone to trust the default.
+//
 // On a REOPENED run the same action delivers a second time, so it says so: "Replace final" is a
 // truthful promise only because replacing costs nothing and destroys nothing — the file the user
 // already has stays on disk, named in the caption (spec D26).
 import { useId, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import type { RunDetail } from '../../../../../shared/api-types';
+import type { RunDetail, UpscaleProvider } from '../../../../../shared/api-types';
 import { api, ApiClientError } from '../../../api/client';
 import { Button } from '../../ui/Button';
+import { SegmentedControl } from '../../ui/SegmentedControl';
 import { useToast } from '../../ui/Toast';
 import { usd } from '../../../lib/format';
 import { PaidButton } from './PaidButton';
 import { UnknownPriceNote } from '../../ui/UnknownPriceNote';
 import { reopenedFinal } from './lib';
 
+const PROVIDER_NAMES: Record<UpscaleProvider, string> = { fal: 'fal.ai', segmind: 'Segmind' };
+const PROVIDER_KEY_NAMES: Record<UpscaleProvider, string> = { fal: 'FAL_KEY', segmind: 'SEGMIND_API_KEY' };
+
 export function ApproveBar({ run, cutId = null }: { run: RunDetail; cutId?: string | null }) {
   const { toast } = useToast();
   const [upscale, setUpscale] = useState(false);
+  // null = no explicit pick yet — the DEFAULT (fal, unless only Segmind has a key) applies
+  const [provider, setProvider] = useState<UpscaleProvider | null>(null);
   const checkboxId = useId();
+
+  // Which vendors this install can actually reach — the same setup-status the app gate already
+  // fetched (shared queryKey ⇒ cache hit, no extra call). A keyless option renders disabled with
+  // the reason, and is never submitted: approval must not fail on a missing key after the click.
+  const setup = useQuery({ queryKey: ['setup-status'], queryFn: api.setupStatus, staleTime: 5_000 });
+  const keys = setup.data ? { fal: setup.data.fal.hasKey, segmind: setup.data.segmind.hasKey } : null;
+  const hasKey = (p: UpscaleProvider) => keys?.[p] ?? true; // keys unknown ⇒ disable nothing yet
+  const defaultProvider: UpscaleProvider = keys && !keys.fal && keys.segmind ? 'segmind' : 'fal';
+  const pickedProvider: UpscaleProvider = provider && hasKey(provider) ? provider : defaultProvider;
 
   // the cut being finalized: the reviewer's selection, else the latest (manifest cuts are oldest-first)
   const cuts = run.manifest?.cuts ?? [];
@@ -41,11 +60,17 @@ export function ApproveBar({ run, cutId = null }: { run: RunDetail; cutId?: stri
   // Fetched regardless of the current size: the estimate also says what short side the upscale
   // would DELIVER (Segmind takes an explicit target; fal lifts toward ~1080p), and the
   // "already HD" gate below must judge against THAT — a 4k target keeps offering the upscale on a
-  // 1080p cut, a 720p target never advertises 1080.
-  const upscaleEstimate = useQuery({
-    queryKey: ['estimate', run.id, 'upscale', submitCut ?? null],
-    queryFn: () => api.estimate(run.id, { mode: 'upscale', cut: submitCut }),
+  // 1080p cut, a 720p target never advertises 1080. BOTH providers are quoted (the picker shows
+  // the two real figures side by side); the gate, label and paid button follow the PICKED one.
+  const falEstimate = useQuery({
+    queryKey: ['estimate', run.id, 'upscale', submitCut ?? null, 'fal'],
+    queryFn: () => api.estimate(run.id, { mode: 'upscale', cut: submitCut, provider: 'fal' }),
   });
+  const segmindEstimate = useQuery({
+    queryKey: ['estimate', run.id, 'upscale', submitCut ?? null, 'segmind'],
+    queryFn: () => api.estimate(run.id, { mode: 'upscale', cut: submitCut, provider: 'segmind' }),
+  });
+  const upscaleEstimate = pickedProvider === 'segmind' ? segmindEstimate : falEstimate;
   const targetShort = upscaleEstimate.data?.targetShortSide ?? 1080;
   const targetLabel = targetShort >= 2160 ? '4K' : `${targetShort}p`;
   const alreadyHD = shortSide != null && shortSide >= targetShort;
@@ -59,7 +84,8 @@ export function ApproveBar({ run, cutId = null }: { run: RunDetail; cutId?: stri
   const reopened = reopenedFinal(run.manifest);
 
   const approve = useMutation({
-    mutationFn: () => api.approve(run.id, effectiveUpscale, submitCut),
+    // the provider rides only with a real upscale — a free finalize names no vendor
+    mutationFn: () => api.approve(run.id, effectiveUpscale, submitCut, effectiveUpscale ? pickedProvider : undefined),
     onSuccess: () => toast({
       kind: 'success',
       text: effectiveUpscale
@@ -69,8 +95,8 @@ export function ApproveBar({ run, cutId = null }: { run: RunDetail; cutId?: stri
     onError: (e) => toast({ kind: 'error', text: e instanceof ApiClientError ? `${e.message} — ${e.hint}` : e.message }),
   });
 
-  // Topaz runs on whichever provider this run rendered on, and the two bill differently — so the
-  // toggle may be priceable, unknown (a provider with no published rate), or (already HD) irrelevant.
+  // Topaz runs on the PICKED provider, and the two bill differently — so the toggle may be
+  // priceable, unknown (a provider with no published rate), or (already HD) irrelevant.
   const unknownPrice = upscaleEstimate.data?.unknownPrice ?? null;
 
   const label = `${reopened ? 'Replace final' : 'Approve'}${effectiveUpscale ? ' & upscale' : ''}`;
@@ -101,6 +127,31 @@ export function ApproveBar({ run, cutId = null }: { run: RunDetail; cutId?: stri
           </span>
         </label>
       </div>
+
+      {/* Who runs it — shown while the toggle is on (kept up even if the current pick's target
+          gates the cut as already-HD, so there is always a way to switch back off that pick).
+          Both vendors' real figures sit in the options: the margin is thin and the default is
+          not to be trusted blind. A keyless option is disabled with the reason, in plain words. */}
+      {upscale && (
+        <div className="mt-2 pl-[26px]">
+          <SegmentedControl
+            label="Upscale provider"
+            value={pickedProvider}
+            onChange={setProvider}
+            segments={([['fal', falEstimate], ['segmind', segmindEstimate]] as const).map(([p, est]) => ({
+              value: p,
+              label: hasKey(p) && est.data?.totalUsd != null ? `${PROVIDER_NAMES[p]} · ${usd(est.data.totalUsd)}` : PROVIDER_NAMES[p],
+              hint: hasKey(p) ? `Topaz runs on ${PROVIDER_NAMES[p]}` : `No ${PROVIDER_KEY_NAMES[p]} on file`,
+              disabled: !hasKey(p),
+            }))}
+          />
+          {keys && (['fal', 'segmind'] as UpscaleProvider[]).filter((p) => !keys[p]).map((p) => (
+            <p key={p} className="mt-1 text-caption text-ink-muted">
+              {PROVIDER_NAMES[p]} is unavailable — no {PROVIDER_KEY_NAMES[p]} on file (add it in Settings → Keys).
+            </p>
+          ))}
+        </div>
+      )}
 
       <div className="mt-3">
         {effectiveUpscale ? (

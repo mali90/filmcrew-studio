@@ -373,9 +373,17 @@ export function registerRunRoutes(app) {
     if (mode === 'upscale') {
       const cut = req.query.cut;
       // Topaz runs on either provider now — price the one this run's approve would actually bill,
-      // and say what short side it will DELIVER (the UI's "already HD" gate rides on it).
-      const upscaleOpts = { provider: readUpscaleProvider(app.ctx.envRoot, run.backend, app.ctx.childEnv) };
-      const targetShortSide = readUpscaleTargetShortSide(app.ctx.envRoot, run.backend, app.ctx.childEnv);
+      // and say what short side it will DELIVER (the UI's "already HD" gate rides on it). An
+      // explicit ?provider= (the ApproveBar's pick) overrides the env derivation for BOTH answers:
+      // quote and gate must follow the same vendor, or the button prices one target and promises
+      // another. Junk is a 400 — silently deriving would re-quote the default under the pick's name.
+      const picked = req.query.provider != null ? String(req.query.provider) : null;
+      if (picked !== null && picked !== 'fal' && picked !== 'segmind') {
+        throw Object.assign(new Error(`"${picked}" is not an upscale provider`), { statusCode: 400, hint: 'provider is fal or segmind' });
+      }
+      const provider = picked ?? readUpscaleProvider(app.ctx.envRoot, run.backend, app.ctx.childEnv);
+      const upscaleOpts = { provider };
+      const targetShortSide = readUpscaleTargetShortSide(app.ctx.envRoot, run.backend, app.ctx.childEnv, provider);
       // no cut ⇒ the latest render (approve's default): price every job in the current spec
       if (!cut) {
         const clips = (run.spec.kling?.jobs ?? []).map((j) => ({ jobId: j.job_id, seconds: jobSeconds(run.spec, j.job_id) }));

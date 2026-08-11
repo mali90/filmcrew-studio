@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { estimateRender, estimateUpscale, jobSeconds, readProbeResolution, readRenderResolution, readSeedanceResolution, readUpscaleProvider } from '../../lib/estimator.js';
+import { estimateRender, estimateUpscale, jobSeconds, readProbeResolution, readRenderResolution, readSeedanceResolution, readUpscaleProvider, readUpscaleTargetShortSide } from '../../lib/estimator.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
 const golden = () => JSON.parse(fs.readFileSync(path.join(ROOT, 'examples/ocean-lighthouse/spec.json'), 'utf8'));
@@ -249,6 +249,23 @@ test('readUpscaleProvider: explicit wins, auto upscales where the run rendered, 
     fs.writeFileSync(path.join(dir, '.env'), '# nothing configured\n');
     assert.equal(readUpscaleProvider(dir, 'seedance-2.5@segmind'), 'fal', 'keyless fails with the familiar FAL_KEY message');
     assert.equal(readUpscaleProvider(dir, 'seedance-2.5@segmind', { SEGMIND_API_KEY: 'y' }), 'segmind', 'the child env counts too');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// The ApproveBar's pick arrives as an EXPLICIT provider, and it must beat whatever the env would
+// have derived — otherwise the gate/label judge the configured vendor while the pinned child runs
+// the picked one, and the button promises a target the upscale will not deliver.
+test('readUpscaleTargetShortSide: an explicit provider beats the env derivation', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-upt-'));
+  try {
+    fs.writeFileSync(path.join(dir, '.env'), 'UPSCALE_PROVIDER=fal\nUPSCALE_TARGET_RESOLUTION=4k\nFAL_KEY=x\nSEGMIND_API_KEY=y\n');
+    assert.equal(readUpscaleTargetShortSide(dir, 'kling-o3@fal'), 1080, 'env says fal — fal lifts toward ~1080p');
+    assert.equal(readUpscaleTargetShortSide(dir, 'kling-o3@fal', undefined, 'segmind'), 2160, 'the pick reads SEGMIND\'s target over the env provider');
+    assert.equal(readUpscaleTargetShortSide(dir, 'kling-o3@fal', undefined, 'fal'), 1080, 'an explicit fal pick stays ~1080p whatever the target knob says');
+
+    fs.writeFileSync(path.join(dir, '.env'), 'UPSCALE_PROVIDER=segmind\nUPSCALE_TARGET_RESOLUTION=720p\nSEGMIND_API_KEY=y\n');
+    assert.equal(readUpscaleTargetShortSide(dir, 'kling-o3@fal'), 720, 'env segmind honors the 720p target');
+    assert.equal(readUpscaleTargetShortSide(dir, 'kling-o3@fal', undefined, 'fal'), 1080, 'picking fal beats UPSCALE_PROVIDER=segmind');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
