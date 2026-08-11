@@ -151,9 +151,15 @@ export function JobCards({ run }: { run: RunDetail }) {
         return <JobCard key={job.jobId} run={run} job={job} state={state} now={now} />;
       })}
       {rendering && (
-        <Button variant="quiet" size="sm" loading={cancelling} onClick={() => void cancel()}>
-          Cancel render
-        </Button>
+        <div>
+          <Button variant="quiet" size="sm" loading={cancelling} onClick={() => void cancel()}>
+            Cancel render
+          </Button>
+          {/* what cancelling keeps, and the money already committed (U12) */}
+          <p className="mt-1 text-caption text-ink-muted">
+            Finished clips stay on disk. The clip in flight may still bill — the provider charges when it renders.
+          </p>
+        </div>
       )}
     </section>
   );

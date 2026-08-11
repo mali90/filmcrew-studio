@@ -73,6 +73,8 @@ describe('JobCards', () => {
       return HttpResponse.json({ cancelled: 'active' });
     }));
     renderWithProviders(<JobCards run={makeRun('rendering')} />);
+    // U12 — what cancelling keeps, and the money already committed, stated under the button
+    expect(screen.getByText('Finished clips stay on disk. The clip in flight may still bill — the provider charges when it renders.')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Cancel render' }));
     await vi.waitFor(() => expect(cancelled).toBe('web-20260704100000-ab12'));
   });
