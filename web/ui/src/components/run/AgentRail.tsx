@@ -108,10 +108,12 @@ export function AgentRail({ run, live, collapsed = false }: {
   const [open, setOpen] = useState(!collapsed);
   const { toast } = useToast();
   // retrying a failed PLAN re-runs the engine; a spec-in-hand failure re-enters via a revision.
-  // Failures surface — a retry button that silently does nothing is worse than none.
+  // Failures surface — a retry button that silently does nothing is worse than none. The feedback
+  // line lands in TakesHistory as a revision quote, so it must read system-authored, not as words
+  // the user typed.
   const retryAgent = async () => {
     try {
-      if (run.planned) await api.revise(run.id, { feedback: 'retry from this agent' });
+      if (run.planned) await api.revise(run.id, { feedback: 'Retry: pick up from the failed step.' });
       else await api.replan(run.id);
     } catch (e) {
       toast({ kind: 'error', text: e instanceof Error ? e.message : 'The retry could not start.' });

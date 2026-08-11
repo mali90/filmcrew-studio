@@ -42,7 +42,8 @@ describe('PlanReview', () => {
 
     await userEvent.click(await screen.findByRole('button', { name: /^Probe/ }));
     const dialog = await screen.findByRole('dialog', { name: 'Before your first paid action' });
-    expect(dialog).toHaveTextContent('This calls fal.ai');
+    // U3: the dialog names the RUN's provider (registry label), never a hardcoded "fal.ai"
+    expect(dialog).toHaveTextContent('This calls fal · ≈ $4.16 · estimates only — fal bills per rendered second.');
     expect(body).toBeUndefined(); // nothing charged before the confirm
     await userEvent.click(within(dialog).getByRole('button', { name: /^Start probe/ }));
     await vi.waitFor(() => expect(body).toEqual({ mode: 'probe' }));
@@ -97,5 +98,41 @@ describe('PlanReview', () => {
     await userEvent.click(within(dialog).getByRole('button', { name: 'Discard run' }));
     await screen.findByText('home page');
     expect(deleted).toBe('web-20260704100000-ab12');
+  });
+});
+
+// U3/U4/U17: the money sentence names the RUN's provider and says what a probe buys, and the
+// summary names the model in human words — all read in the moment before the first spend.
+describe('PlanReview — provider naming and probe explanation', () => {
+  it('a multi-job plan explains what the probe renders, merged with the billing caption', async () => {
+    renderRunPage(makeRun('plan-ready'));
+    await screen.findByRole('region', { name: 'The plan is ready' });
+    expect(await screen.findByText(
+      'A probe renders only K1 — a cheap look before the full spend. Estimates — fal bills per rendered second.',
+    )).toBeInTheDocument();
+  });
+
+  it('a single-job plan keeps the plain billing caption — there is no probe to explain', async () => {
+    const run = structuredClone(makeRun('plan-ready')); // never mutate the shared fixture spec
+    run.spec!.kling.jobs = run.spec!.kling.jobs.slice(0, 1);
+    renderRunPage(run);
+    await screen.findByRole('region', { name: 'The plan is ready' });
+    expect(await screen.findByText('estimates — fal bills per rendered second')).toBeInTheDocument();
+    expect(screen.queryByText(/A probe renders only/)).not.toBeInTheDocument();
+  });
+
+  it('a Segmind-backed run bills to Segmind in the caption — never a hardcoded fal', async () => {
+    const run = structuredClone(makeRun('plan-ready'));
+    run.backend = 'seedance-2.5@segmind';
+    renderRunPage(run);
+    await screen.findByRole('region', { name: 'The plan is ready' });
+    expect(await screen.findByText(/Estimates — Segmind bills per rendered second/)).toBeInTheDocument();
+    expect(screen.queryByText(/fal bills/)).not.toBeInTheDocument();
+  });
+
+  it('the summary line names the model in human words, not the raw backend id', async () => {
+    renderRunPage(makeRun('plan-ready'));
+    await screen.findByRole('region', { name: 'The plan is ready' });
+    expect(screen.getByText(/Kling 3\.0 Omni/)).toBeInTheDocument();
   });
 });

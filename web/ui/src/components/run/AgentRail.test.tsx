@@ -92,6 +92,25 @@ describe('AgentRail — live states', () => {
     await vi.waitFor(() => expect(replanned).toBe(true));
   });
 
+  it('Retry on a PLANNED run re-enters via a revision whose feedback reads system-authored, not as a user quote', async () => {
+    let body: Record<string, unknown> | undefined;
+    server.use(http.post('/api/runs/:id/revise', async ({ request }) => {
+      body = (await request.json()) as Record<string, unknown>;
+      return HttpResponse.json({ revisionId: 'rev-1' });
+    }));
+    const run = makeRun('planning', { planned: true, spec: SPEC });
+    renderRunPage(run);
+    await screen.findByRole('region', { name: 'Production plan' });
+
+    emit({ type: 'snapshot', run });
+    emit({ type: 'agent', idx: 3, state: 'started' });
+    emit({ type: 'error', kind: 'plan', message: 'the model crashed' });
+
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    // TakesHistory renders this feedback as a revision quote — it must never look user-typed
+    await vi.waitFor(() => expect(body).toEqual({ feedback: 'Retry: pick up from the failed step.' }));
+  });
+
   it('a retry that the server rejects surfaces the error instead of silently doing nothing', async () => {
     server.use(http.post('/api/runs/:id/plan', () =>
       HttpResponse.json({ error: 'planning is already running for this run' }, { status: 409 })));
