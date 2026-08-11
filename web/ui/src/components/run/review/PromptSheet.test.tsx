@@ -74,6 +74,8 @@ describe('PromptSheet', () => {
     await openFromStrip('K2');
 
     const panel = await screen.findByTestId('prompt-sheet');
+    // U15: the heading says who is doing the sending, in active voice.
+    expect(within(panel).getByRole('heading', { name: 'What we send for K2' })).toBeInTheDocument();
     expect(within(panel).getByTestId('prompt-body-K2-0')).toHaveTextContent('At first light the lamp goes dark');
     // D20: what is sent with every prompt for this job, and cannot be edited away.
     expect(panel).toHaveTextContent('Sent with every K2 prompt — not editable');
@@ -81,6 +83,31 @@ describe('PromptSheet', () => {
     // Opening the sheet still only READS: editing is offered, never entered on your behalf.
     expect(within(panel).queryByRole('textbox')).not.toBeInTheDocument();
     expect(within(panel).getByRole('button', { name: /edit prompt/i })).toBeInTheDocument();
+  });
+
+  it('collapses a character\'s reference set into one counted line (U11)', async () => {
+    servePrompts({
+      K2: promptView('K2', {
+        refs: [
+          { ref: '@Image1', character: 'marie' },
+          { ref: '@Image2', character: 'marie' },
+          { ref: '@Image3', character: 'marie' },
+          { ref: '@Image4', character: 'jack', role: 'antagonist' },
+          { ref: '@Audio1', role: 'narrator voice' },
+        ],
+      }),
+    });
+    renderRunPage(makeRun('review'));
+    await screen.findByRole('region', { name: 'Review stage' });
+    await openFromStrip('K2');
+
+    const panel = await screen.findByTestId('prompt-sheet');
+    // The set reads as one fact — a range with a count — not three lines of the same name.
+    expect(panel).toHaveTextContent('@Image1–@Image3 — marie (3 refs)');
+    expect(panel).not.toHaveTextContent('@Image2 = marie');
+    // Lone refs keep their own line, with or without a character to name.
+    expect(panel).toHaveTextContent('@Image4 = jack (antagonist)');
+    expect(panel).toHaveTextContent('@Audio1 = narrator voice');
   });
 
   it('the version picker lists Current plan plus one entry per take that kept a prompts.json', async () => {
@@ -199,6 +226,8 @@ describe('PromptSheet', () => {
 
     const panel = await screen.findByTestId('prompt-sheet');
     expect(panel).toHaveAttribute('aria-label', 'Prompts for this plan');
+    // U15: plan-wide heading, same active voice as the single-job one.
+    expect(within(panel).getByRole('heading', { name: 'What we send, segment by segment' })).toBeInTheDocument();
     expect(await within(panel).findByRole('article', { name: 'Prompt for K1' })).toBeInTheDocument();
     expect(within(panel).getByRole('article', { name: 'Prompt for K2' })).toBeInTheDocument();
   });

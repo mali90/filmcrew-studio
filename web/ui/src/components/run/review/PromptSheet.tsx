@@ -16,7 +16,7 @@ import { createContext, useContext, useMemo, useState, type PropsWithChildren, t
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { AlertTriangle, Copy, FileText, Lock, PenLine, X } from 'lucide-react';
-import type { PromptSegment, PromptView, PromptsResponse, RunDetail } from '../../../../../shared/api-types';
+import type { PromptRef, PromptSegment, PromptView, PromptsResponse, RunDetail } from '../../../../../shared/api-types';
 import { api } from '../../../api/client';
 import { Button } from '../../ui/Button';
 import { SegmentedControl } from '../../ui/SegmentedControl';
@@ -157,6 +157,20 @@ function ByteMeter({ bytes, maxBytes, pinBytes, testId }: {
   );
 }
 
+/** A character's reference SET is the fact worth a glance (spec D20 / U11), not one line per file —
+ *  so consecutive refs naming the same character collapse into a single counted range. Only
+ *  consecutive runs collapse: a range label like `@Image1–@Image3` would lie about any ref
+ *  another character holds between them. */
+function groupRefs(refs: PromptRef[]): { character: string | null; refs: PromptRef[] }[] {
+  const groups: { character: string | null; refs: PromptRef[] }[] = [];
+  for (const r of refs) {
+    const last = groups.at(-1);
+    if (last && last.character != null && last.character === r.character) last.refs.push(r);
+    else groups.push({ character: r.character ?? null, refs: [r] });
+  }
+  return groups;
+}
+
 /** The reference legend and the rest of what rides along with every prompt for this job (spec D20). */
 function LockedPins({ view }: { view: PromptView }) {
   if (!view.refs.length && view.pinBytes == null) return null;
@@ -170,12 +184,19 @@ function LockedPins({ view }: { view: PromptView }) {
       </p>
       {!!view.refs.length && (
         <ul className="mt-1.5 space-y-0.5">
-          {view.refs.map((r) => (
-            <li key={r.ref}>
-              {r.ref} = {r.character ?? r.role ?? 'a reference'}
-              {r.character && r.role ? ` (${r.role})` : ''}
-            </li>
-          ))}
+          {groupRefs(view.refs).map((g) => {
+            const [first, last] = [g.refs[0], g.refs.at(-1)!];
+            return g.refs.length > 1 ? (
+              <li key={first.ref}>
+                {first.ref}–{last.ref} — {g.character} ({g.refs.length} refs)
+              </li>
+            ) : (
+              <li key={first.ref}>
+                {first.ref} = {first.character ?? first.role ?? 'a reference'}
+                {first.character && first.role ? ` (${first.role})` : ''}
+              </li>
+            );
+          })}
         </ul>
       )}
       {view.pinBytes != null && view.pinBytes > 0 && (
@@ -458,7 +479,7 @@ function SheetPanel({ run, target, onClose }: { run: RunDetail; target: PromptTa
     >
       <div className="flex flex-wrap items-center gap-2">
         <h3 className="text-heading text-ink">
-          {target === null ? 'What each segment will be sent' : `What ${target} will be sent`}
+          {target === null ? 'What we send, segment by segment' : `What we send for ${target}`}
         </h3>
         <span className="flex-1" />
         {takes.length === 0 ? (
