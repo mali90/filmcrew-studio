@@ -37,6 +37,9 @@ export function PhaseStrip({ run, agents, activeKind }: {
   const jobsDone = jobs.filter((j) => j.clipExists).length;
 
   const stateOf = (i: number): NodeState => {
+    // plan-ready: the machine finished — the pause is the USER's money decision, so the Plan node
+    // must read done, not pulse "active · 8/8" as if something were still working (U10)
+    if (run.status === 'plan-ready' && i === 0) return 'done';
     if (i < currentIdx) return 'done';
     if (i === currentIdx) return run.status === 'attention' ? 'failed' : 'active';
     return 'waiting';
@@ -59,7 +62,10 @@ export function PhaseStrip({ run, agents, activeKind }: {
       <div className="mx-auto flex h-full max-w-[1280px] items-center">
         {PHASES.map((p, i) => {
           const state = stateOf(i);
-          const sub = state === 'active' ? subFor(p.key) : null;
+          // at plan-ready the Render node (still a waiting ring — nothing renders yet) answers the
+          // load-bearing question "who is the flow waiting on": the user (U10)
+          const sub = state === 'active' ? subFor(p.key)
+            : run.status === 'plan-ready' && p.key === 'render' ? 'waiting on you' : null;
           const node = (
             <>
               <span
