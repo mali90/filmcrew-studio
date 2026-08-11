@@ -35,6 +35,14 @@ export const RENDER_MODELS = {
     family: 'kling',
     castLimit: 1, // one starred cast member — Kling takes a single elements set per job
     aspects: ['16:9', '9:16', '1:1'],
+    // The resolution knob is a MODEL fact, like aspects: which tiers it renders, which one its
+    // config block defaults to, and which .env variable that block reads (config.js). The env name
+    // lives HERE because every surface that writes a resolution default (wizard, Settings) and every
+    // reader that prices one (estimator, run-service) must agree on the knob — the wizard writing
+    // KLING_RESOLUTION for a Seedance default was exactly the silent divergence this field removes.
+    resolutions: ['720p', '1080p', '4k'],
+    defaultResolution: '1080p',
+    resolutionEnv: 'KLING_RESOLUTION',
     providers: {
       fal: {
         endpointKey: 'klingEndpoint',
@@ -60,6 +68,11 @@ export const RENDER_MODELS = {
     family: 'seedance',
     castLimit: 2,
     aspects: ['16:9', '9:16', '1:1'],
+    // Model-level resolution facts (see the kling-o3 note). Both provider entries restate the same
+    // ladder — the model renders the same tiers on either queue, so neither may drift alone.
+    resolutions: ['480p', '720p', '1080p', '4k'],
+    defaultResolution: '480p',
+    resolutionEnv: 'SEEDANCE_RESOLUTION',
     providers: {
       fal: {
         endpointKey: 'seedanceEndpoint',
@@ -119,6 +132,10 @@ export const RENDER_MODELS = {
     family: 'seedance',
     castLimit: 4,
     aspects: ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'],
+    // 480p|720p ONLY, and its own knob: 2.5 bills and renders differently from 2.0 (config.seedance25).
+    resolutions: ['480p', '720p'],
+    defaultResolution: '720p',
+    resolutionEnv: 'SEEDANCE25_RESOLUTION',
     providers: {
       fal: {
         endpointKey: 'seedance25Endpoint',
@@ -275,6 +292,20 @@ export const castLimitFor = (value) => fieldFor(value, 'castLimit');
 
 /** The selectable aspect ratios (a copy). Numeric only — 'adaptive'/'auto' stay unexposed. */
 export const aspectsFor = (value) => [...fieldFor(value, 'aspects')];
+
+/** The render resolutions this model offers (a copy), lowest tier first. */
+export const resolutionsFor = (value) => [...fieldFor(value, 'resolutions')];
+
+/** The model's own default resolution — what its config knob falls back to when the .env is silent. */
+export const defaultResolutionFor = (value) => fieldFor(value, 'defaultResolution');
+
+/**
+ * The .env variable this model's render resolution is read from (config.js). Per MODEL, never per
+ * provider: the same Seedance reads the same knob on fal and on Segmind. Every surface that writes
+ * or prices a resolution default resolves the knob through here, so none can write one the render
+ * child will not read.
+ */
+export const resolutionEnvFor = (value) => fieldFor(value, 'resolutionEnv');
 
 /**
  * How this model cites a reference in a prompt: '@Image1' (compact, today's shipping style),
