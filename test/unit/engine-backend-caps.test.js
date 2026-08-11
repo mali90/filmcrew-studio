@@ -92,8 +92,10 @@ test('buildCtx judges the EFFECTIVE resolution against the model\'s own ladder, 
     () => buildCtx({ brief: 'x', backend: 'seedance-2.5@fal' }),
     /Unknown resolution "1080p" \(the SEEDANCE25_RESOLUTION config default\) — Seedance 2\.5 renders: 480p, 720p/,
   );
-  // each model reads ITS knob: the bad 2.5 value must not leak into kling or 2.0 plans
-  assert.equal((await buildCtx({ brief: 'x', backend: 'kling' })).resolution, '1080p');
+  // each model reads ITS knob: the bad 2.5 value must not leak into kling or 2.0 plans. Kling has
+  // no ladder at all — its resolution is null (endpoint-fixed output) and a stray KLING_RESOLUTION
+  // in .env is tolerated as the no-op it always was, never a plan-time throw.
+  assert.equal((await buildCtx({ brief: 'x', backend: 'kling' })).resolution, null);
   assert.equal((await buildCtx({ brief: 'x', backend: 'seedance-2.0@fal' })).resolution, '480p');
 });
 
@@ -126,14 +128,17 @@ test('contextBlock hard caps come from capsFor — Kling unchanged, Seedance now
 
 test('contextBlock: the resolution enum and the Defaults line are the MODEL\'s, never a Kling constant', () => {
   // the enum once hardcoded 'kling.resolution ∈ {4k, 1080p, 720p}' — false for 2.5 (480p/720p only)
+  // and false for Kling itself, whose endpoint takes no resolution parameter at all: the planner is
+  // now told to OMIT the field rather than fed a menu of tiers nothing sends.
   const kling = contextBlock(baseCtx({ backend: 'kling-o3@fal', caps: capsFor('kling-o3@fal') }));
-  assert.ok(kling.includes('kling.resolution ∈ {720p, 1080p, 4k}'));
+  assert.ok(kling.includes('kling.resolution — OMIT this field'));
+  assert.ok(!kling.includes('kling.resolution ∈'));
   const sd20 = contextBlock(baseCtx({ backend: 'seedance-2.0@fal', caps: capsFor('seedance-2.0@fal') }));
   assert.ok(sd20.includes('kling.resolution ∈ {480p, 720p, 1080p, 4k}'));
   // and the Defaults line advertises the knob the render will READ (2.0's 480p, not KLING's 1080p);
   // a hand-assembled ctx without `resolution` derives it from the caps' own knob
   assert.ok(sd20.includes('resolution=480p,'), 'a Seedance plan is never told the Kling default');
-  assert.ok(kling.includes('resolution=1080p,'));
+  assert.ok(kling.includes('resolution=endpoint-native (not selectable),'));
   assert.ok(contextBlock(baseCtx({ backend: 'seedance', resolution: '720p' })).includes('resolution=720p,'), 'an explicit ctx.resolution (the per-run pick) wins');
 });
 

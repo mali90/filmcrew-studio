@@ -174,6 +174,27 @@ async function seamSourceFor(takeDir, jobId) {
   return { take: path.basename(takeDir), job: jobId, clip: rec?.clip ?? null };
 }
 
+/**
+ * Where a closing pin is HEADED: `--last-frame-from` points at the neighbouring clip this segment
+ * must join (`<…>/renders/<tN>/<job>/clip.mp4`, or a frame beside it), and the seam record needs
+ * that destination by name — a `to: null` on an applied end pin is what made every end-pinned
+ * re-render read as a broken chain, so the seamless stitcher hard-cut the very joint the paid
+ * dialog promised to preserve. A path outside a take dir (a hand-picked still) genuinely points
+ * nowhere and stays null.
+ */
+async function seamDestFor(input) {
+  const src = resolvePath(input);
+  const m = /(?:^|[\\/])renders[\\/](t\d+)[\\/]([^\\/]+)[\\/][^\\/]+$/.exec(src);
+  if (!m) return null;
+  const dest = await seamSourceFor(path.dirname(path.dirname(src)), m[2]);
+  // The record's own clip path wins; the file beside the frame is the fallback truth.
+  if (!dest.clip) {
+    const sibling = path.join(path.dirname(src), 'clip.mp4');
+    dest.clip = fs.existsSync(sibling) ? sibling : (/\.mp4$/i.test(src) ? src : null);
+  }
+  return dest;
+}
+
 /** First free `<dir>/<base>.mp4`, then `<base>-2.mp4`, `<base>-3.mp4`, … — masters are never overwritten. */
 export function uniqueOutPath(dir, base) {
   for (let n = 1; ; n++) {
@@ -249,6 +270,12 @@ export async function renderSpec(spec, { runDir, probe = false, upscale = false,
       const p = results.find((x) => x.jobId === prev.jobId);
       if (p?.seamOut) p.seamOut.to = to;
       stampSeamOut(runDir, prev.jobId, { to });
+    }
+    // The run-bracketing close pin's destination, by the same honesty rule as renderJob's: only an
+    // APPLIED pin records where it points.
+    if (endPin && lastFrameFrom && r.seamOut && !['none', 'unsupported'].includes(r.seamOut.mode)) {
+      const to = await seamDestFor(lastFrameFrom);
+      if (to) { r.seamOut.to = to; stampSeamOut(runDir, job.job_id, { to }); }
     }
     startFrame = undefined;
     if (chain && r.clip) {
@@ -357,6 +384,13 @@ export async function renderJob(spec, jobId, { runDir, backend, take = 0, feedba
     if (r.seamOut) { r.seamOut.frame = frame ?? r.seamOut.frame; r.seamOut.frameSource = frameSource; }
     stampSeamOut(runDir, job.job_id, frame ? { frame, frameSource } : { frameSource });
     if (!frame) log.warn(`could not extract ${jobId}'s last frame — downstream jobs will chain from the PREVIOUS take's seam.`);
+  }
+  // An APPLIED end pin knows its destination — the clip --last-frame-from named. Recorded only when
+  // the pin survived (a budget-dropped soft pin records mode 'none', and a destination for a frame
+  // nothing consumed would be a false continuation claim from this side of the joint).
+  if (lastFrameFrom && r.seamOut && !['none', 'unsupported'].includes(r.seamOut.mode)) {
+    const to = await seamDestFor(lastFrameFrom);
+    if (to) { r.seamOut.to = to; stampSeamOut(runDir, job.job_id, { to }); }
   }
 
   if (staleDownstream.length) {

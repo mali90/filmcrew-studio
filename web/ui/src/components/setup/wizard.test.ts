@@ -8,11 +8,12 @@ import { buildUpdates, initialWizardState, type WizardState } from './wizard';
 const at = (over: Partial<WizardState>): WizardState => ({ ...initialWizardState, ...over });
 
 describe('buildUpdates — the resolution rides the chosen model’s own knob', () => {
-  it('kling → KLING_RESOLUTION and nothing else', () => {
-    const updates = buildUpdates(at({ backend: 'kling', resolution: '720p' }));
-    expect(updates.KLING_RESOLUTION).toBe('720p');
+  it('kling → NO resolution write at all (no ladder: the endpoint takes no resolution parameter)', () => {
+    const updates = buildUpdates(at({ backend: 'kling', resolution: null }));
+    expect(updates).not.toHaveProperty('KLING_RESOLUTION');
     expect(updates).not.toHaveProperty('SEEDANCE_RESOLUTION');
     expect(updates).not.toHaveProperty('SEEDANCE25_RESOLUTION');
+    expect(updates).not.toHaveProperty('undefined'); // `[undefined]: …` is the literal bug this guards
   });
 
   it('Seedance 2.0 → SEEDANCE_RESOLUTION; the kling knob is untouched', () => {

@@ -236,6 +236,24 @@
   install commands.
 
 ### Fixed
+- **Kling no longer advertises resolution tiers it cannot render.** fal's Kling o3 endpoint takes
+  no resolution parameter — the old `KLING_RESOLUTION` knob was parsed, displayed and even priced,
+  but never sent. The pickers now hide the control for Kling (the registry declares an empty
+  ladder), a Kling run created with a resolution is refused up front, and the delivered size shown
+  everywhere is measured off the master instead of promised up front. Legacy `.env` values and old
+  specs stay valid as the no-ops they always were.
+- **An end-pinned segment re-render now records where its closing frame points**, so the continuity
+  rule sees the joint as intact and the seamless stitcher colour-matches it instead of hard-cutting
+  the very join the re-render dialog promised to preserve.
+- **A manual cut that reaches back to an older take refreshes the run's clip lineage**, so a later
+  "match the current joins" re-render pins against the neighbours actually in the cut, not the
+  newest take's seams.
+- **The prompt preview drops the same too-short voice clips the renderer drops** (under the model's
+  per-clip minimum), so the preview's @Audio references always match the wire prompt.
+- **The starred-cast top-up no longer holds a reference slot back for the seam frame** — seam pins
+  yield to cast references at render (a pin is a nicety, identity is not), so reserving the slot
+  only starved a starred character of one view without saving the pin.
+
 - **Paying to fix one clip no longer tears down the review room.** Clicking *Re-render K2* used to
   flip the whole page back to the render-phase job list: the video you were just watching vanished,
   and three job cards appeared — two of them "Done" for clips you never touched. A segment re-render

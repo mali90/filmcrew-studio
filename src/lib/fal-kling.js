@@ -142,7 +142,10 @@ export async function renderKlingJobFal({ job, spec, runDir, seed, lowRes = fals
     job_id: job.job_id,
     schema: 2,
     backend, transport: 'fal', endpoint,
-    aspect_ratio: klingCfg.aspectRatio, resolution: klingCfg.resolution,
+    // No resolution recorded: the endpoint takes none (fixed native output), so a sidecar claiming
+    // a tier would be the manifest lying about what was bought — the master's measured shortSide is
+    // the delivered truth.
+    aspect_ratio: klingCfg.aspectRatio,
     duration_s: totalDuration, total_duration_s: totalDuration,
     generate_audio: !!klingCfg.generateAudio,
     // fal's Kling endpoint takes no seed input, so the number is only ever a record of what a take

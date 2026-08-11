@@ -123,7 +123,9 @@ function validateJobs(spec, P, elementIds, caps, enforceModelAspects = false) {
   // IGNORES this field (its own knob wins at render time, and old Seedance specs legitimately carry
   // a KLING default here), so it — like the backend-less superset — gets the registry-wide union:
   // shape check only, never a hardcoded "4k|1080p|720p" that rejects a planner writing 480p.
-  const resolutions = caps.family === 'kling' && isArr(caps.resolutions) ? caps.resolutions : SUPERSET_CAPS.resolutions;
+  // An EMPTY kling ladder (no selectable tier — the endpoint renders its own output) falls back to
+  // the registry union too: legacy specs carry the old decorative default and must keep validating.
+  const resolutions = caps.family === 'kling' && isArr(caps.resolutions) && caps.resolutions.length ? caps.resolutions : SUPERSET_CAPS.resolutions;
   if (k.resolution !== undefined && !oneOf(k.resolution, resolutions)) P.push(`kling.resolution "${k.resolution}" not in ${resolutions.join('|')}`);
   if (k.generate_audio !== undefined && typeof k.generate_audio !== 'boolean') P.push('kling.generate_audio must be boolean');
   // Caps gate ON TOP of the structural superset, applied only when the backend is known (explicit

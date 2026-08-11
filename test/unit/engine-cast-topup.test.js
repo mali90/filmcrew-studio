@@ -53,8 +53,8 @@ test('un-starred elements survive untouched and un-starred inventory is never at
   assert.deepEqual(spec.kling.elements.filter((e) => e.id.startsWith('prop-')), [prop], 'the un-starred pick is untouched; prop-lamp stays on disk');
 });
 
-// ── even split + seam slot on chained jobs ──────────────────────────────────
-test('two starred casts split the budget evenly and the chained seam slot stays free', () => {
+// ── even split across starred casts ─────────────────────────────────────────
+test('two starred casts split the full budget evenly (no seam reservation — pins yield to cast)', () => {
   const inv = [...refsFor('keeper', 7), ...refsFor('gull', 7)];
   const spec = {
     spec_version: '1.0',
@@ -76,15 +76,15 @@ test('two starred casts split the budget evenly and the chained seam slot stays 
   assert.ok(spec.kling.jobs[1].elements.length <= caps.maxImages - 1, 'chained job leaves the seam slot free');
 });
 
-test('an authored first_frame reserves the seam slot even on the first job', () => {
+test('an authored first_frame reserves nothing — cast fills the budget and the pin drops instead', () => {
   const inv = refsFor('keeper', 9);
   const spec = {
     spec_version: '1.0',
     kling: { elements: [el('keeper-01', 'Keeper')], jobs: [{ job_id: 'J1', shots: ['S1'], first_frame: 'elements/first-frame/open.png', elements: ['keeper-01'] }] },
   };
   topUpStarredElements(spec, ctxFor('seedance-2.0@fal', ['keeper'], inv));
-  assert.equal(spec.kling.elements.length, 8, '9-image cap minus the authored opening frame');
-  assert.equal(spec.kling.jobs[0].elements.length, 8);
+  assert.equal(spec.kling.elements.length, 9, 'the full 9-image cap — the frame pin yields at render, not here');
+  assert.equal(spec.kling.jobs[0].elements.length, 9);
 });
 
 // ── model caps: maxImages / maxCombinedRefs / Kling's per-element ceiling ───

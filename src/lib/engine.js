@@ -71,7 +71,9 @@ function familyOf(value) {
  */
 function configuredResolution(caps) {
   if (caps.family === 'seedance') return knobsFor(caps, config)?.resolution || config.seedance.resolution;
-  return config.kling.resolution;
+  // An empty ladder means the model has NO selectable resolution (Kling's endpoint renders its own
+  // fixed output) — a legacy KLING_RESOLUTION in .env is tolerated as the no-op it always was.
+  return caps.resolutions?.length ? config.kling.resolution : null;
 }
 
 /** A Seedance render with NO cast AND NO reference image available is guaranteed text-to-video (the
@@ -96,7 +98,7 @@ export function contextBlock(ctx) {
   return [
     '## Project context',
     `- Brief: ${ctx.brief}`,
-    `- Defaults: model=${k.model}, aspect_ratio=${ctx.aspectRatio ?? k.aspectRatio}, resolution=${resolution}, ` +
+    `- Defaults: model=${k.model}, aspect_ratio=${ctx.aspectRatio ?? k.aspectRatio}, resolution=${resolution ?? 'endpoint-native (not selectable)'}, ` +
       `multi_shot=${k.multiShot}, native_audio=${k.nativeAudio}, target_duration≈${ctx.durationTargetS}s`,
     `- Render backend: ${caps.id}`,
     // Every number here is the RENDERING MODEL's own (registry caps), with the shared fallbacks for
@@ -110,11 +112,9 @@ export function contextBlock(ctx) {
       (caps.maxRefsPerElement != null ? `, ≤${1 + caps.maxRefsPerElement} images per character (1 frontal + ${caps.maxRefsPerElement} references)` : ''),
     ...(caps.family === 'seedance'
       ? [`- Seedance packing rule: every job must total ${caps.minSeconds}–${caps.maxSeconds}s (a job under ${caps.minSeconds}s fails validation — merge short shots); the caps above are this model's own.`,
-         // The budget must mirror what validateJobs will enforce, which depends on seam chaining:
-         // with chaining off, only an authored first_frame consumes a slot.
-         config.kling.chainFrames
-           ? `- Reference budget: 1 of the ${caps.maxImages} image slots is reserved for the opening/seam frame on every job after the first (and on any job with an authored first_frame) — give those jobs at most ${caps.maxImages - 1} element refs.`
-           : `- Reference budget: a job with an authored first_frame gives 1 of its ${caps.maxImages} image slots to it — plan at most ${caps.maxImages - 1} element refs there (seam chaining is off; other jobs keep all ${caps.maxImages}).`]
+         // Mirrors the render-time policy (seam-rule.js SEAM_PRIORITY): pins yield to cast refs,
+         // so the planner may fill every slot with element refs — never under-fill to protect a seam.
+         `- Reference budget: element refs may use all ${caps.maxImages} image slots. The opening/seam frame${config.kling.chainFrames ? ' (chained jobs and any authored first_frame)' : ' (an authored first_frame)'} rides a slot only when one is FREE — when the budget is full the seam pin is dropped, not a cast reference, and that joint becomes a plain cut.`]
       : []),
     // Guaranteed text-to-video (Seedance, no cast, AND no reference image the Casting agent could
     // attach): steer the shot prose with the Seedance 2.0 guidelines from the start. Absent for
@@ -130,7 +130,9 @@ export function contextBlock(ctx) {
     // the planner "4k, 1080p, 720p" for Seedance 2.5, whose whole ladder is 480p/720p.
     '- Valid enums: shot_size ∈ {extreme_close_up, close_up, medium_close_up, medium, medium_wide, wide, extreme_wide}; ' +
       `aspect_ratio ∈ {${caps.aspects.join(', ')}}; kling.model_name ∈ {kling-v3-omni, kling-video-o1}; ` +
-      `kling.resolution ∈ {${caps.resolutions.join(', ')}}`,
+      (caps.resolutions.length
+        ? `kling.resolution ∈ {${caps.resolutions.join(', ')}}`
+        : 'kling.resolution — OMIT this field (the endpoint renders its own fixed output; no tier is selectable)'),
     '',
     '## Available elements (the Casting agent must pick `image` paths from THIS list)',
     ctx.inventoryText,
@@ -319,7 +321,7 @@ export async function buildCtx({ brief, backend, aspectRatio, durationTargetS, c
   // knob (a per-run pick rides that same env variable), and a tier the model does not render —
   // SEEDANCE25_RESOLUTION=1080p, say — must cost nothing instead of a full planning pass.
   const resolution = configuredResolution(caps);
-  if (!caps.resolutions.includes(resolution)) {
+  if (caps.resolutions.length && !caps.resolutions.includes(resolution)) {
     throw new Error(`Unknown resolution "${resolution}" (the ${caps.resolutionEnv} config default) — ${caps.label} renders: ${caps.resolutions.join(', ')}.`);
   }
   const inv = buildInventory();
@@ -387,13 +389,13 @@ export function topUpStarredElements(spec, ctx) {
   const inv = ctx.inventory ?? buildInventory();
   const els = Array.isArray(k.elements) ? k.elements : [];
   const jobs = Array.isArray(k.jobs) ? k.jobs : [];
-  // The seam slot mirrors contextBlock's Reference budget line: a model that demotes the opening
-  // frame to an image ref loses one slot on chained follow-up jobs and on an authored first_frame.
-  const seamSlot = (idx, job) => (demotesOpeningFrame(caps) && (Boolean(job?.first_frame) || (config.kling.chainFrames && idx > 0)) ? 1 : 0);
   const hardCap = Math.min(Number(caps.maxImages) || 0,
     Number.isFinite(Number(caps.maxCombinedRefs)) ? Number(caps.maxCombinedRefs) : Infinity);
-  // Jobs that omit job.elements inherit the WHOLE roster, so the roster fits the tightest job.
-  const rosterBudget = Math.max(0, hardCap - (jobs.some((j, i) => seamSlot(i, j) > 0) ? 1 : 0));
+  // Cast refs get the WHOLE budget — no seam-slot reservation. SEAM_PRIORITY (seam-rule.js) drops
+  // boundary/seam pins before a cast reference ever goes: a pin is a nicety, identity is not.
+  // Reserving a slot here would starve a starred character of one view to protect a pin the
+  // renderer would sacrifice anyway the moment the budget bites.
+  const rosterBudget = hardCap;
   const perElementCap = caps.maxRefsPerElement != null ? 1 + caps.maxRefsPerElement : Infinity;
   const share = Math.min(Math.floor(rosterBudget / cast.length), perElementCap);
   const added = [];
@@ -421,7 +423,7 @@ export function topUpStarredElements(spec, ctx) {
       jobs.forEach((job, idx) => {
         if (!Array.isArray(job?.elements) || !job.elements.length) return; // inherits the roster
         if (!job.elements.some((id) => { const e = els.find((x) => x.id === id); return e && owns(e); })) return;
-        if (job.elements.length < Math.max(0, hardCap - seamSlot(idx, job))) job.elements.push(r.id);
+        if (job.elements.length < hardCap) job.elements.push(r.id);
       });
     }
   }

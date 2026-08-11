@@ -203,15 +203,16 @@ test('readRenderResolution: 2.5 reads its own knob and its own default; everythi
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('readRenderResolution: kling reads ITS knob (registry resolutionEnv), never the Seedance ones', () => {
+test('readRenderResolution: kling has no ladder — null, never a Seedance env read', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-resk-'));
   try {
-    assert.equal(readRenderResolution(dir, 'kling-o3@fal'), '1080p', 'no .env: the kling config default');
+    // Kling's endpoint takes no resolution parameter: the registry declares an empty ladder, and
+    // the estimator answers null even when legacy KLING_RESOLUTION values sit in .env or the child
+    // env — kling is priced flat, and a knob nothing sends must never masquerade as a tier.
+    assert.equal(readRenderResolution(dir, 'kling-o3@fal'), null, 'no ladder: null, not a config default');
     fs.writeFileSync(path.join(dir, '.env'), 'KLING_RESOLUTION=720p\nSEEDANCE_RESOLUTION=4k\n');
-    assert.equal(readRenderResolution(dir, 'kling'), '720p', 'legacy id resolves through the registry');
-    assert.equal(readRenderResolution(dir, 'kling-o3@fal'), '720p');
-    // and the per-run pick path: the injected knob (run-service resolutionOverride) beats .env
-    assert.equal(readRenderResolution(dir, 'kling-o3@fal', { KLING_RESOLUTION: '4k' }), '4k');
+    assert.equal(readRenderResolution(dir, 'kling'), null, 'legacy id, legacy .env value: still null');
+    assert.equal(readRenderResolution(dir, 'kling-o3@fal', { KLING_RESOLUTION: '4k' }), null);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 

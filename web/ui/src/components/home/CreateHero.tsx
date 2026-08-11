@@ -70,10 +70,13 @@ export const resolutionsForBackend = (backend: string): Resolution[] => resoluti
 /** Keeps a tier the model renders; an invalid pick trims to `fallback` (the saved default for that
  *  model, when the defaults query has answered) or the model's own registry default — never to a
  *  tier the POST would 400 on. */
-export const trimResolution = (resolution: string, backend: string, fallback?: string): Resolution => {
+export const trimResolution = (resolution: string | null, backend: string, fallback?: string): Resolution | null => {
   const offered = resolutionsForBackend(backend);
+  // An empty ladder is a model with NO selectable tier (Kling renders the endpoint's own output) —
+  // null, and the control hides rather than offering a pick the POST would refuse.
+  if (!offered.length) return null;
   if (offered.includes(resolution as Resolution)) return resolution as Resolution;
-  return offered.includes(fallback as Resolution) ? (fallback as Resolution) : defaultResolutionFor(backend);
+  return offered.includes(fallback as Resolution) ? (fallback as Resolution) : defaultResolutionFor(backend) ?? null;
 };
 
 const initials = (name: string) =>
@@ -91,7 +94,7 @@ export function CreateHero({ idea, onIdeaChange, ideaRef }: {
   // views of it, and it is what the POST carries, so nothing downstream ever sees a pair.
   const [backend, setBackend] = useState<Backend>(DEFAULT_BACKEND);
   const [aspect, setAspect] = useState<Aspect>('9:16');
-  const [resolution, setResolution] = useState<Resolution>(defaultResolutionFor(DEFAULT_BACKEND));
+  const [resolution, setResolution] = useState<Resolution | null>(defaultResolutionFor(DEFAULT_BACKEND) ?? null);
   const [durationMode, setDurationMode] = useState<'auto' | 'custom'>('auto');
   const [customS, setCustomS] = useState(12);
   const [trimNote, setTrimNote] = useState<string | null>(null); // what a model switch had to drop
@@ -112,7 +115,7 @@ export function CreateHero({ idea, onIdeaChange, ideaRef }: {
   const defaults = useQuery({ queryKey: ['defaults'], queryFn: api.defaults });
   // The saved default tier for a backend's MODEL (its own .env knob, per GET /settings/defaults),
   // trimmed to the ladder; before the query answers it is the model's registry default.
-  const savedResolutionFor = (b: string): Resolution =>
+  const savedResolutionFor = (b: string): Resolution | null =>
     trimResolution(defaults.data?.resolutions?.[modelIdFor(b)] ?? '', b);
   useEffect(() => {
     const d = defaults.data;
@@ -173,7 +176,12 @@ export function CreateHero({ idea, onIdeaChange, ideaRef }: {
         ? `${label} stars up to ${cap} character${cap > 1 ? 's' : ''} — unstarred ${dropped.map(nameOf).join(' & ')}.`
         : '',
       nextAspect !== aspect ? `${label} does not render ${aspect} — switched the aspect to ${nextAspect}.` : '',
-      nextResolution !== resolution ? `${label} does not render ${resolution} — switched the resolution to ${nextResolution}.` : '',
+      // Three honest shapes: tier→tier (a trim), tier→none (the model has no tiers), none→tier
+      // (seeded silently — nothing was lost, so nothing to announce).
+      nextResolution !== resolution && nextResolution && resolution
+        ? `${label} does not render ${resolution} — switched the resolution to ${nextResolution}.`
+        : '',
+      nextResolution === null && resolution ? `${label} renders at the endpoint's own output — the ${resolution} pick no longer applies.` : '',
     ].filter(Boolean);
     if (dropped.length) setCastSlugs(keptCast);
     if (nextAspect !== aspect) setAspect(nextAspect);
@@ -214,9 +222,10 @@ export function CreateHero({ idea, onIdeaChange, ideaRef }: {
       idea: trimmed,
       backend,
       aspect,
-      // always sent: the control shows a selected tier, and pinning it on the run keeps the render
-      // (and its price) at what the user SAW even if the .env default moves later
-      resolution,
+      // sent whenever the control shows a tier: pinning it on the run keeps the render (and its
+      // price) at what the user SAW even if the .env default moves later. A no-ladder model (Kling)
+      // sends none — there is nothing to pin.
+      ...(resolution ? { resolution } : {}),
       durationS: durationMode === 'custom' && Number.isFinite(customS) ? clampDuration(customS) : null,
       ...(castSlugs.length ? { cast: castSlugs } : {}),
       // derived from the LIVE list, not raw envSlug state — an environment deleted while Home is
@@ -403,15 +412,17 @@ export function CreateHero({ idea, onIdeaChange, ideaRef }: {
             </div>
           </div>
 
-          <div className="flex flex-col gap-1.5">
-            <span className="text-caption font-medium text-ink-muted">Resolution</span>
-            <SegmentedControl
-              label="Resolution"
-              value={resolution}
-              onChange={(r) => { touched.current = true; setTrimNote(null); setResolution(r); }}
-              segments={offeredResolutions.map((r) => ({ value: r, label: r }))}
-            />
-          </div>
+          {offeredResolutions.length > 0 && (
+            <div className="flex flex-col gap-1.5">
+              <span className="text-caption font-medium text-ink-muted">Resolution</span>
+              <SegmentedControl
+                label="Resolution"
+                value={resolution ?? offeredResolutions[0]!}
+                onChange={(r) => { touched.current = true; setTrimNote(null); setResolution(r); }}
+                segments={offeredResolutions.map((r) => ({ value: r, label: r }))}
+              />
+            </div>
+          )}
 
           <div className="flex flex-col gap-1.5">
             <span className="text-caption font-medium text-ink-muted">Duration</span>

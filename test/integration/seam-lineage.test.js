@@ -179,12 +179,16 @@ test('the Kling sidecar is normalized to the Seedance superset (one reader for b
     const kSide = sidecar(k.dir, 'K2');
     const sSide = sidecar(s.dir, 'K2');
 
-    const shared = ['job_id', 'schema', 'backend', 'endpoint', 'aspect_ratio', 'resolution', 'duration_s',
+    const shared = ['job_id', 'schema', 'backend', 'endpoint', 'aspect_ratio', 'duration_s',
       'generate_audio', 'seed', 'seed_unused', 'nonce', 'image_refs', 'seam_in', 'seam_out'];
     for (const key of shared) {
       assert.ok(key in kSide, `the Kling sidecar must carry "${key}" (schema:2 superset)`);
       assert.ok(key in sSide, `the Seedance sidecar must carry "${key}"`);
     }
+    // `resolution` is recorded only where it is SENT: the Seedance payload carries one, Kling's
+    // endpoint takes none — a sidecar claiming a tier for Kling would be the record lying.
+    assert.ok('resolution' in sSide, 'Seedance records the tier it transmitted');
+    assert.ok(!('resolution' in kSide), 'Kling records no tier — nothing was sent');
     assert.equal(kSide.schema, 2);
     assert.equal(kSide.backend, 'kling-o3@fal');
     assert.equal(kSide.transport, 'fal', 'Kling keeps its own extra keys — existing readers must not break');

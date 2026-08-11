@@ -152,14 +152,16 @@ function writeOverrides(runDir, mutate) {
  * @returns {Promise<{caps:object, jobs:object[], viewFor:(jobId:string)=>object}>}
  */
 async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, voicesDir }) {
-  const [models, compose, promptSettings, castGroups, text] = await Promise.all([
+  const [models, compose, promptSettings, castGroups, text, seedanceArgs] = await Promise.all([
     import(path.join(root, 'src/lib/render-models.js')),
     import(path.join(root, 'src/lib/prompt-compose.js')),
     import(path.join(root, 'src/lib/prompt-settings.js')),
     import(path.join(root, 'src/lib/cast-groups.js')),
     import(path.join(root, 'src/lib/text.js')),
+    import(path.join(root, 'src/lib/seedance-args.js')),
   ]);
   const { capsFor, normalizeBackend, refLabel } = models;
+  const { fitAudioRef } = seedanceArgs;
   const { composeKlingStoryboard, composeSeedanceJobPrompt, applyOverride, pinBytesOf, promptFingerprint, chooseSeamMode, planSeamRefs, appliedSeamModes } = compose;
   const { klingPromptSettings, seedancePromptSettings } = promptSettings;
   const { characterGroups, jobSpeakers } = castGroups;
@@ -176,6 +178,17 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
   // Wherever the render CHILD will look for voices: its own VOICES_DIR (childEnv when the caller
   // isolated the cast roots, else the .env), falling back to the dir this server serves.
   const voiceClipFor = voiceClipLookup(get('VOICES_DIR') || voicesDir || path.join(root, 'voices'), root, slug);
+  // Renderer parity needs each clip's DURATION: fitAudioRef drops a clip under the model's
+  // per-clip minimum before the paid submit, and a preview counting a doomed @AudioN would differ
+  // from the wire prompt (the exactness this whole module exists for). Probed once here — the view
+  // functions stay sync — and an unprobeable clip stays IN, exactly as the renderer sends it as-is.
+  const { probeClip } = await import(path.join(root, 'src/lib/assemble.js'));
+  const voiceDurS = new Map();
+  for (const sp of new Set((spec?.audio?.voice?.lines ?? []).map((l) => l?.speaker).filter(Boolean))) {
+    const clip = voiceClipFor(sp);
+    if (!clip) continue;
+    try { voiceDurS.set(slug(sp), (await probeClip(clip)).duration); } catch { /* unprobeable — kept */ }
+  }
   const jobs = spec?.kling?.jobs ?? [];
   const overrides = readOverrides(runDir);
   // A Kling render with no elements at all is text-to-video: no reference to seed a frame from, so
@@ -285,9 +298,16 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
     const audioOn = !!settings.audioOn;
     // Voice references (@AudioN) ride the same gate as the renderer's: something to attach them to,
     // audio on, and a voiceMode that keeps the clip.
-    const voiced = (castCount > 0 || hasSeamIn) && audioOn && defaults.seedance.voiceMode !== 'native'
+    const candidates = (castCount > 0 || hasSeamIn) && audioOn && defaults.seedance.voiceMode !== 'native'
       ? jobSpeakers(job, spec).filter((sp) => voiceClipFor(sp)).slice(0, caps.maxAudioRefs)
       : [];
+    // The renderer's own drop rule, same inputs: window sized by the PRE-drop candidate count, a
+    // clip under the per-clip minimum never reaches the wire — so it never reaches the preview.
+    const fitCaps = { ...caps, audioBudgetS: caps.audioBudgetS ?? 15 };
+    const voiced = candidates.filter((sp) => {
+      const dur = voiceDurS.get(slug(sp));
+      return dur == null || fitAudioRef(dur, fitCaps, { refCount: candidates.length || 1 }) !== 'drop';
+    });
     const audioLabels = new Map(voiced.map((sp, i) => [slug(sp), refLabel(caps, 'Audio', i + 1)]));
     const audioRefFor = (sp) => audioLabels.get(slug(sp ?? '')) ?? null;
 

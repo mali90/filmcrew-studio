@@ -198,7 +198,10 @@ export function registerRunRoutes(app) {
     // cannot render is refused before any spawn; null means the model's configured default.
     if (resolution !== null && !(typeof resolution === 'string' && caps.resolutions.includes(resolution))) {
       throw Object.assign(new Error(`unknown resolution "${resolution}" for ${caps.label}`), {
-        statusCode: 400, hint: `${caps.label} renders ${caps.resolutions.join(', ')}`,
+        statusCode: 400,
+        hint: caps.resolutions.length
+          ? `${caps.label} renders ${caps.resolutions.join(', ')}`
+          : `${caps.label} has no selectable resolution — the endpoint renders its own fixed output; omit the field`,
       });
     }
     if (durationS !== null && (!Number.isInteger(durationS) || durationS < 3 || durationS > 120)) {

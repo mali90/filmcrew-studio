@@ -67,11 +67,18 @@ test('every RENDER_MODELS entry is well formed and every provider key is a decla
     assert.ok(Number.isInteger(m.castLimit) && m.castLimit >= 1, `${id}.castLimit is a positive integer`);
     assert.ok(Array.isArray(m.aspects) && m.aspects.length > 0, `${id}.aspects non-empty`);
     for (const a of m.aspects) assert.match(a, ASPECT_RE, `${id}.aspects entry "${a}" is numeric (no adaptive/auto)`);
-    // Resolution facts are MODEL-level (the knob is per model, never per provider): the ladder,
-    // its default, and the .env variable config.js reads it from.
-    assert.ok(Array.isArray(m.resolutions) && m.resolutions.length > 0, `${id}.resolutions non-empty`);
-    assert.ok(m.resolutions.includes(m.defaultResolution), `${id}.defaultResolution is on its own ladder`);
-    assert.match(m.resolutionEnv ?? '', /^[A-Z][A-Z0-9]*_RESOLUTION$/, `${id}.resolutionEnv names a .env knob`);
+    // Resolution facts are MODEL-level (the knob is per model, never per provider). An EMPTY ladder
+    // is a declared fact too — the model has no selectable tier (Kling's endpoint renders its own
+    // fixed output) — and such a model must declare NO default and NO env knob: half-declared facts
+    // are how a decorative KLING_RESOLUTION got displayed and priced without ever being sent.
+    assert.ok(Array.isArray(m.resolutions), `${id}.resolutions is an array`);
+    if (m.resolutions.length > 0) {
+      assert.ok(m.resolutions.includes(m.defaultResolution), `${id}.defaultResolution is on its own ladder`);
+      assert.match(m.resolutionEnv ?? '', /^[A-Z][A-Z0-9]*_RESOLUTION$/, `${id}.resolutionEnv names a .env knob`);
+    } else {
+      assert.equal(m.defaultResolution, undefined, `${id}: no ladder ⇒ no default`);
+      assert.equal(m.resolutionEnv, undefined, `${id}: no ladder ⇒ no knob`);
+    }
     assert.equal(typeof m.providers, 'object', `${id}.providers`);
     for (const [pid, entry] of Object.entries(m.providers ?? {})) {
       assert.ok(PROVIDERS[pid], `${id}.providers.${pid} is a declared provider`);
@@ -209,9 +216,11 @@ test('demotesOpeningFrame stays FALSE only where a native slot coexists with ref
 // the wizard writing KLING_RESOLUTION for a Seedance default backend was exactly the silent
 // divergence `resolutionEnv` exists to prevent.
 test('resolution ladder, default and env knob per model — for bare model ids AND backend ids', () => {
-  assert.deepEqual(resolutionsFor('kling-o3'), ['720p', '1080p', '4k']);
-  assert.equal(defaultResolutionFor('kling-o3'), '1080p');
-  assert.equal(resolutionEnvFor('kling-o3'), 'KLING_RESOLUTION');
+  // Kling has NO selectable tier: fal's o3 endpoint takes no resolution parameter at all, so the
+  // registry declares an empty ladder and every surface hides the control instead of selling one.
+  assert.deepEqual(resolutionsFor('kling-o3'), []);
+  assert.equal(defaultResolutionFor('kling-o3'), undefined);
+  assert.equal(resolutionEnvFor('kling-o3'), undefined);
   assert.deepEqual(resolutionsFor('seedance-2.0'), ['480p', '720p', '1080p', '4k']);
   assert.equal(defaultResolutionFor('seedance-2.0'), '480p');
   assert.equal(resolutionEnvFor('seedance-2.0'), 'SEEDANCE_RESOLUTION');

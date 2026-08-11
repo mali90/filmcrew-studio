@@ -112,7 +112,8 @@ describe('DefaultsCard — per-model resolution', () => {
     http.get('/api/settings/defaults', () =>
       HttpResponse.json({
         backend, aspect: '16:9', resolution: '720p',
-        resolutions: { 'kling-o3': '4k', 'seedance-2.0': '480p', 'seedance-2.5': '720p' },
+        // kling-o3 is null on the wire now — the server reports no tier for a ladder-less model
+        resolutions: { 'kling-o3': null, 'seedance-2.0': '480p', 'seedance-2.5': '720p' },
         seedanceResolution: '480p',
       }));
   const resolutionGroup = () => screen.getByRole('radiogroup', { name: 'Default resolution' });
@@ -143,8 +144,12 @@ describe('DefaultsCard — per-model resolution', () => {
     renderCard();
     await waitFor(() =>
       expect(screen.getByRole('radio', { name: /Seedance 2\.5 fal/ })).toHaveAttribute('aria-checked', 'true'));
+    // 2.0's own saved tier (480p), not 720p carried over from the 2.5 view
+    await userEvent.click(screen.getByRole('radio', { name: /Seedance 2\.0 fal/ }));
+    expect(within(resolutionGroup()).getByRole('radio', { name: '480p' })).toHaveAttribute('aria-checked', 'true');
+    // Kling has no ladder at all: no tier buttons, and the card says why instead of showing blanks
     await userEvent.click(screen.getByRole('radio', { name: /Kling/ }));
-    // the kling knob's own saved value (4k here), not 720p carried over from the 2.5 view
-    expect(within(resolutionGroup()).getByRole('radio', { name: '4k' })).toHaveAttribute('aria-checked', 'true');
+    expect(within(resolutionGroup()).queryAllByRole('radio')).toHaveLength(0);
+    expect(screen.getByText(/renders at the endpoint’s own output/)).toBeInTheDocument();
   });
 });

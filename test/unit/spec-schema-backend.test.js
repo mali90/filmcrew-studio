@@ -310,12 +310,12 @@ test('kling.resolution: the kling ladder where it drives the render, the registr
     spec.kling.resolution = res;
     return validateSpec(spec, backend === undefined ? {} : { backend });
   };
-  // kling's own ladder — 480p is not on it
+  // kling now declares NO ladder (the endpoint takes no resolution parameter), so its specs get the
+  // registry union too — pure legacy tolerance for the old decorative field, which nothing sends.
   assert.equal(at('720p', 'kling-o3@fal').ok, true);
   assert.equal(at('4k', 'kling').ok, true);
-  const v = at('480p', 'kling-o3@fal');
-  assert.equal(v.ok, false);
-  assert.match(v.errors.join('\n'), /kling\.resolution "480p" not in 720p\|1080p\|4k/);
+  assert.equal(at('480p', 'kling-o3@fal').ok, true, 'union shape-check — the field never reaches the render');
+  assert.equal(at('900p', 'kling-o3@fal').ok, false, 'garbage still rejected by the union');
   // Seedance: new plans write 480p (the caps-driven engine enum), old 2.5 plans carry 1080p — both
   // must keep validating, because neither value reaches the render
   assert.equal(at('480p', 'seedance-2.5@fal').ok, true);

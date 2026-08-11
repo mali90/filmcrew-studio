@@ -28,7 +28,8 @@ export interface WizardState {
   segmindCheck: KeyCheck;
   backend: Backend;
   aspect: Aspect;
-  resolution: Resolution;
+  /** null = the chosen backend has no selectable tier (Kling renders the endpoint's own output). */
+  resolution: Resolution | null;
 }
 
 export const initialWizardState: WizardState = {
@@ -45,7 +46,7 @@ export const initialWizardState: WizardState = {
   segmindCheck: { state: 'idle' },
   backend: 'kling',
   aspect: '9:16',
-  resolution: defaultResolutionFor('kling'), // the default backend's own tier — trimmed on backend switch
+  resolution: defaultResolutionFor('kling') ?? null, // the default backend's own tier (null = none selectable) — trimmed on backend switch
 };
 
 export type WizardAction =
@@ -108,7 +109,9 @@ export function buildUpdates(s: WizardState): Record<string, string> {
     // SEEDANCE25_RESOLUTION, from the registry). Writing KLING_RESOLUTION unconditionally was the
     // silent bug: a Seedance default backend ignored the wizard's pick entirely and rendered at its
     // own .env default. Other models' knobs are left alone — a rerun must not blank them.
-    [resolutionEnvFor(s.backend)]: s.resolution,
+    // No knob, no write: a model without a ladder (Kling) has no resolution variable at all, and
+    // `[undefined]: …` would literally write a key named "undefined" into .env.
+    ...(resolutionEnvFor(s.backend) && s.resolution ? { [resolutionEnvFor(s.backend)]: s.resolution } : {}),
   };
   if (s.transport === 'api') {
     const keyEnv = PROVIDERS.find((p) => p.id === s.provider)?.keyEnv;

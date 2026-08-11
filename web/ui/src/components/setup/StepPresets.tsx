@@ -59,12 +59,21 @@ export function StepPresets({ state, dispatch }: { state: WizardState; dispatch:
       </div>
 
 
+      {resolutionsFor(state.backend).length === 0 ? (
+        <div className="mt-6">
+          <span className="text-caption font-medium text-ink-muted">Resolution</span>
+          <p className="mt-1.5 text-caption text-ink-faint">
+            {modelLabelFor(state.backend)} renders at the endpoint’s own output — there is no tier to
+            pick. Approving the finished video can still upscale it to 1080p.
+          </p>
+        </div>
+      ) : (
       <div className="mt-6">
         <span className="text-caption font-medium text-ink-muted">Resolution</span>
         <div className="mt-1.5">
           <SegmentedControl
             label="Default resolution"
-            value={state.resolution}
+            value={state.resolution ?? resolutionsFor(state.backend)[0]!}
             onChange={(resolution) => dispatch({ type: 'patch', patch: { resolution } })}
             segments={resolutionsFor(state.backend).map((r) => ({ value: r, label: r }))}
           />
@@ -75,6 +84,7 @@ export function StepPresets({ state, dispatch }: { state: WizardState; dispatch:
             : `${modelLabelFor(state.backend)}’s own tiers, billed at one flat per-second rate. Approving a finished video can upscale it to 1080p.`}
         </p>
       </div>
+      )}
 
       <div className="mt-8 flex justify-end">
         <Button variant="primary" size="lg" onClick={() => dispatch({ type: 'next' })}>Continue</Button>

@@ -210,6 +210,18 @@ test('every ladder tier of every backend is creatable, and the pick lands on the
   };
   for (const id of BACKEND_IDS) {
     const caps = capsFor(id);
+    // A ladder-less model (Kling: the endpoint takes no resolution parameter) is the inverse
+    // contract — ANY pick is refused before a spawn, and a pickless create still works.
+    if (!caps.resolutions.length) {
+      const refused = await create({ backend: id, aspect: caps.aspects[0], resolution: '1080p' });
+      assert.equal(refused.statusCode, 400, `${id}: a tier pick on a ladder-less model must 400`);
+      assert.match(JSON.parse(refused.body).hint ?? '', /no selectable resolution/, `${id} hint says why`);
+      const beforeDirs = new Set(fs.readdirSync(dirs.runs));
+      const ok = await create({ backend: id, aspect: caps.aspects[0] });
+      assert.equal(ok.statusCode, 201, `${id}: ${ok.body}`);
+      assert.equal(manifestOfNew(beforeDirs).resolution, null, `${id}: nothing to persist`);
+      continue;
+    }
     const beforeDirs = new Set(fs.readdirSync(dirs.runs));
     const res = await create({ backend: id, aspect: caps.aspects[0], resolution: caps.resolutions.at(-1) });
     assert.equal(res.statusCode, 201, `${id}: ${res.body}`);

@@ -112,9 +112,10 @@ export const SETUP_COMPLETE = {
   defaults: {
     backend: 'kling' as const,
     aspect: '9:16' as const,
-    resolution: '1080p',
-    // per-model saved tiers (GET /settings/defaults shape) — the create hero's picker seeds from these
-    resolutions: { 'kling-o3': '1080p', 'seedance-2.0': '480p', 'seedance-2.5': '720p' },
+    // kling (the fixture's default backend) has no ladder: the server reports null for it, exactly
+    // as GET /settings/defaults now answers — a tier here would resurrect the decorative knob
+    resolution: null,
+    resolutions: { 'kling-o3': null, 'seedance-2.0': '480p', 'seedance-2.5': '720p' },
     seedanceResolution: '480p',
   },
   complete: true,

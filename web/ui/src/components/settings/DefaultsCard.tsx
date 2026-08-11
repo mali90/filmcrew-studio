@@ -172,6 +172,11 @@ export function DefaultsCard() {
 
         <div>
           <span className="mb-1 block text-label text-ink-secondary">Resolution</span>
+          {resolutionsOf(backend).length === 0 && (
+            <p className="text-caption text-ink-muted">
+              {`${modelLabelFor(backend)} renders at the endpoint’s own output — there is no tier to pick. Approving a finished video can still upscale it.`}
+            </p>
+          )}
           <div role="radiogroup" aria-label="Default resolution" className="flex flex-wrap gap-1.5">
             {resolutionsOf(backend).map((value) => (
               <button
@@ -192,7 +197,9 @@ export function DefaultsCard() {
             ))}
           </div>
           <p className="mt-1 text-caption text-ink-muted">
-            {`${modelLabelFor(backend)}’s own tiers, saved to its own setting — each model keeps its own default.`}
+            {resolutionsOf(backend).length === 0
+              ? ''
+              : `${modelLabelFor(backend)}’s own tiers, saved to its own setting — each model keeps its own default.`}
           </p>
         </div>
 

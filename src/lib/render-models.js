@@ -35,14 +35,13 @@ export const RENDER_MODELS = {
     family: 'kling',
     castLimit: 1, // one starred cast member — Kling takes a single elements set per job
     aspects: ['16:9', '9:16', '1:1'],
-    // The resolution knob is a MODEL fact, like aspects: which tiers it renders, which one its
-    // config block defaults to, and which .env variable that block reads (config.js). The env name
-    // lives HERE because every surface that writes a resolution default (wizard, Settings) and every
-    // reader that prices one (estimator, run-service) must agree on the knob — the wizard writing
-    // KLING_RESOLUTION for a Seedance default was exactly the silent divergence this field removes.
-    resolutions: ['720p', '1080p', '4k'],
-    defaultResolution: '1080p',
-    resolutionEnv: 'KLING_RESOLUTION',
+    // NO selectable resolution: fal's Kling o3 endpoint schema takes prompt/frames/refs/duration/
+    // aspect_ratio and nothing else — no resolution parameter exists, output size is the endpoint's
+    // own (verified against the fal API tab, Aug 2026). An empty ladder makes every surface hide the
+    // control and the API reject a pick, instead of selling a tier the render cannot honor (the old
+    // KLING_RESOLUTION knob was exactly that: parsed, displayed, priced — never sent). The delivered
+    // size is still shown truthfully everywhere it matters, measured off the master (shortSide).
+    resolutions: [],
     providers: {
       fal: {
         endpointKey: 'klingEndpoint',

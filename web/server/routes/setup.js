@@ -50,7 +50,9 @@ export function registerSetupRoutes(app) {
       const { defaultResolutionFor, normalizeBackend, resolutionEnvFor } = await import(path.join(root, 'src/lib/render-models.js'));
       const { model, provider: rp } = normalizeBackend(backend);
       renderProvider = rp;
-      resolution = get(resolutionEnvFor(model)) || defaultResolutionFor(model);
+      // A ladder-less model (Kling) has no knob and no tier — null, not another model's env read.
+      const resEnv = resolutionEnvFor(model);
+      resolution = resEnv ? (get(resEnv) || defaultResolutionFor(model)) : null;
     } catch { /* unknown backend — doctor's own check names it; the fal gate stays as the fallback */ }
     const renderKeySet = renderProvider === 'segmind' ? segmindKeySet : falKeySet;
     return {
@@ -166,10 +168,14 @@ export function registerSetupRoutes(app) {
     // The saved tier of the knob EACH MODEL actually reads (or the model's own default) — never a
     // blanket KLING_RESOLUTION read: with a Seedance default backend that knob is not what the
     // render uses, and showing its value here is exactly the lie this endpoint used to tell.
-    const effectiveFor = (model) => get(resolutionEnvFor(model)) || defaultResolutionFor(model);
+    const effectiveFor = (model) => {
+      const resEnv = resolutionEnvFor(model);
+      // Ladder-less model (Kling): no knob exists — null, never a sibling's env read.
+      return resEnv ? (get(resEnv) || defaultResolutionFor(model)) : null;
+    };
     const backend = get('RENDER_BACKEND') || 'kling';
     let resolution;
-    try { resolution = effectiveFor(normalizeBackend(backend).model); } catch { resolution = get('KLING_RESOLUTION') || '1080p'; }
+    try { resolution = effectiveFor(normalizeBackend(backend).model); } catch { resolution = null; }
     return {
       backend,
       aspect: get('KLING_ASPECT') || '9:16',

@@ -40,7 +40,7 @@ function renderHome() {
 }
 
 describe('CreateHero resolution trim on model switch', () => {
-  it('trims an off-ladder tier to the new model’s default, says so, and posts the visible pick', async () => {
+  it('hides the control for a ladder-less model, trims across ladders, and posts the visible pick', async () => {
     let body: Record<string, unknown> | undefined;
     server.use(http.post('/api/runs', async ({ request }) => {
       body = (await request.json()) as Record<string, unknown>;
@@ -48,29 +48,33 @@ describe('CreateHero resolution trim on model switch', () => {
     }));
     renderHome();
 
-    const group = screen.getByRole('radiogroup', { name: 'Resolution' });
-    // the default backend (Kling) hydrates its saved tier from /settings/defaults
-    expect(within(group).getByRole('radio', { name: '1080p' })).toHaveAttribute('aria-checked', 'true');
+    // the default backend (Kling) has NO ladder — no Resolution control at all
+    expect(screen.queryByRole('radiogroup', { name: 'Resolution' })).not.toBeInTheDocument();
 
-    // Seedance 2.5's ladder has no 1080p: the pick trims to ITS saved default (720p) and says so
+    // a laddered model brings the control up at ITS saved tier (the fixture's 480p), silently —
+    // nothing was lost crossing none→tier, so nothing is announced
+    await userEvent.click(screen.getByRole('radio', { name: 'Seedance 2.0' }));
+    const group = screen.getByRole('radiogroup', { name: 'Resolution' });
+    expect(within(group).getByRole('radio', { name: '480p' })).toHaveAttribute('aria-checked', 'true');
+
+    // 4k is on 2.0's ladder but not 2.5's: the pick trims to 2.5's saved default (720p) and says so
+    await userEvent.click(within(group).getByRole('radio', { name: '4k' }));
     await userEvent.click(screen.getByRole('radio', { name: 'Seedance 2.5' }));
-    expect(within(group).queryByRole('radio', { name: '1080p' })).not.toBeInTheDocument();
+    expect(within(group).queryByRole('radio', { name: '4k' })).not.toBeInTheDocument();
     expect(within(group).getByRole('radio', { name: '720p' })).toHaveAttribute('aria-checked', 'true');
     const note = await screen.findByRole('status');
-    expect(note).toHaveTextContent('1080p');
+    expect(note).toHaveTextContent('4k');
     expect(note).toHaveTextContent('Seedance 2.5');
 
-    // pick 480p, switch back to Kling: 480p is off Kling's ladder → back to its saved 1080p
-    await userEvent.click(within(group).getByRole('radio', { name: '480p' }));
+    // back to Kling: the control disappears and the note says the pick no longer applies
     await userEvent.click(screen.getByRole('radio', { name: 'Kling' }));
-    expect(within(group).queryByRole('radio', { name: '480p' })).not.toBeInTheDocument();
-    expect(within(group).getByRole('radio', { name: '1080p' })).toHaveAttribute('aria-checked', 'true');
-    expect(await screen.findByRole('status')).toHaveTextContent('480p');
+    expect(screen.queryByRole('radiogroup', { name: 'Resolution' })).not.toBeInTheDocument();
+    expect(await screen.findByRole('status')).toHaveTextContent('no longer applies');
 
-    // what is posted is what is on screen — the server would 400 anything the trim let through
+    // and the POST carries nothing to pin — the server would 400 any tier for Kling
     await userEvent.type(screen.getByLabelText('Your idea, in one line'), 'a tall tale{Enter}');
     await screen.findByText('run page web-res-trim-1');
-    expect(body?.resolution).toBe('1080p');
+    expect(body).not.toHaveProperty('resolution');
   });
 
   it('an explicit tier pick rides the POST (the run pins what the user saw)', async () => {
@@ -81,11 +85,12 @@ describe('CreateHero resolution trim on model switch', () => {
     }));
     renderHome();
 
+    await userEvent.click(screen.getByRole('radio', { name: 'Seedance 2.0' }));
     const group = screen.getByRole('radiogroup', { name: 'Resolution' });
     await userEvent.click(within(group).getByRole('radio', { name: '4k' }));
     await userEvent.type(screen.getByLabelText('Your idea, in one line'), 'a wide vista{Enter}');
     await screen.findByText('run page web-res-pick-1');
     expect(body?.resolution).toBe('4k');
-    expect(body?.backend).toBe('kling-o3@fal');
+    expect(body?.backend).toBe('seedance-2.0@fal');
   });
 });

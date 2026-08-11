@@ -388,6 +388,17 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     // cleared, not spread. The per-JOINT truth now lives in each job's seamIn/seamOut above —
     // `chained` stays only so readers written before those fields keep behaving exactly as they did.
     fs.writeFileSync(path.join(takeDir, 'render.json'), JSON.stringify({ ...existing, project: spec.project?.title, composed: true, chained: false, jobs }, null, 2) + '\n');
+    // The manifest mirror follows the SELECTED clips too: `boundaries:'auto'` on a later re-render
+    // mirrors m.clipLineage, and a manual cut reaching back to an older take would otherwise leave
+    // it describing the NEWEST take's seams — auto would then pin the wrong boundary against the
+    // wrong neighbour. Same shape as mergeLineage writes; a jobless clip replaces nothing.
+    updateManifest(dir, (mm) => {
+      mm.clipLineage = mm.clipLineage ?? {};
+      for (const rec of jobs) {
+        if (!rec.clip) continue;
+        mm.clipLineage[rec.jobId] = { take: rec.take, seamIn: rec.seamIn ?? null, seamOut: rec.seamOut ?? null };
+      }
+    });
   }
 
   // Take numbers are NEVER reused: lowest-free once resurrected a deleted t2 AFTER t3 existed,

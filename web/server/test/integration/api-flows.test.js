@@ -287,7 +287,7 @@ test('defaults: resolution rides the target model\'s own knob; reads report the 
     const d = (await get('/api/settings/defaults')).json();
     assert.equal(d.resolution, '480p');
     assert.equal(d.resolutions['seedance-2.5'], '480p');
-    assert.equal(d.resolutions['kling-o3'], '1080p', 'other models answer their own knob/default');
+    assert.equal(d.resolutions['kling-o3'], null, 'a ladder-less model answers null — no knob exists to report');
     assert.equal((await get('/api/setup/status')).json().defaults.resolution, '480p');
 
     // a tier the target model cannot render is a 400 naming its ladder — nothing written

@@ -57,8 +57,9 @@ describe('Home — create hero', () => {
     await userEvent.click(screen.getByRole('button', { name: /plan it/i }));
     await screen.findByText('run page web-20260704-xy99');
     // the picker works in canonical `<model>@<provider>` pairs, so that is what the POST carries;
-    // `resolution` always rides along — the run pins the tier the user SAW (the saved default here)
-    expect(body).toEqual({ idea: 'a tiny robot gardener', backend: 'kling-o3@fal', aspect: '9:16', resolution: '1080p', durationS: null });
+    // no `resolution` for Kling — it has no ladder (the endpoint renders its own output), so the
+    // control hides and the POST carries nothing to pin
+    expect(body).toEqual({ idea: 'a tiny robot gardener', backend: 'kling-o3@fal', aspect: '9:16', durationS: null });
   });
 
   it('Custom duration flows the number into durationS (Enter in the idea submits)', async () => {

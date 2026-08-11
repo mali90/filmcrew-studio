@@ -325,7 +325,7 @@ Uncomment (remove the leading `#`) and set any of these to change a default:
 | Setting | Default | What it does |
 |---|---|---|
 | `KLING_MODEL` | `kling-v3-omni` | `kling-v3-omni` or `kling-video-o1`. |
-| `KLING_RESOLUTION` | `1080p` | `720p`, `1080p`, or `4k` (higher = more cost). |
+| `KLING_RESOLUTION` | — | **Ignored.** fal's Kling o3 endpoint takes no resolution parameter — output size is the endpoint's own, and the delivered master's measured size is what the UI reports. The variable is tolerated in old `.env` files as the no-op it always was. |
 | `KLING_ASPECT` | `9:16` | The default aspect ratio for a run. Six numeric ratios exist — `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `21:9` — but a run may only use one the chosen backend renders (see the matrix above; `kling-o3@fal` and `seedance-2.0@fal` render three, the rest render all six). `adaptive`/`auto` are deliberately not offered: the stitcher needs a deterministic ratio. |
 | `KLING_MULTI_SHOT` | `true` | one generation holds up to 6 shots vs one shot per generation. |
 | `KLING_GENERATE_AUDIO` | `true` | Kling's native synced sound (dialogue/SFX/ambience). |

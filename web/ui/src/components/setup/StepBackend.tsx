@@ -87,7 +87,7 @@ export function StepBackend({ state, dispatch }: { state: WizardState; dispatch:
                 patch: {
                   backend: b.id,
                   ...(b.id !== state.backend ? { segmindCheck: { state: 'idle' as const } } : {}),
-                  ...(resolutionsFor(b.id).includes(state.resolution) ? {} : { resolution: defaultResolutionFor(b.id) }),
+                  ...(state.resolution && resolutionsFor(b.id).includes(state.resolution) ? {} : { resolution: defaultResolutionFor(b.id) ?? null }),
                 },
               })}
               className={clsx(

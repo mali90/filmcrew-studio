@@ -159,6 +159,9 @@ function readEnvVar(envRoot, key, fallbackEnv) {
 export function readRenderResolution(envRoot, backend, childEnv) {
   let caps = null;
   try { caps = capsFor(normalizeBackend(backend).id); } catch { /* unknown/absent backend */ }
+  // A model with NO selectable ladder (Kling: the endpoint renders its own output) has no knob to
+  // read and nothing resolution-priced — null, never a sibling model's env var.
+  if (caps && !caps.resolutions?.length) return null;
   const key = caps?.resolutionEnv ?? 'SEEDANCE_RESOLUTION';
   return readEnvVar(envRoot, key, childEnv) || caps?.defaultResolution || '480p';
 }

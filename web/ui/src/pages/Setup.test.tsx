@@ -164,7 +164,8 @@ describe('Setup wizard — save step', () => {
         FAL_KEY: 'fal-key-1',
         RENDER_BACKEND: '',
         KLING_ASPECT: '9:16',
-        KLING_RESOLUTION: '1080p',
+        // no KLING_RESOLUTION: kling has no ladder — the wizard writes a knob only for models
+        // whose endpoint actually reads one
       },
     });
   });
