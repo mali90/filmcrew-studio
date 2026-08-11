@@ -613,6 +613,54 @@ test('estimate: a Segmind-backed run answers 200 priced at Segmind\'s own rate',
   } finally { fs.writeFileSync(envFile, original); }
 });
 
+// ── Per-run resolution: the pick governs the ESTIMATE, the RENDER child and every later spawn ───
+// The wizard once wrote only KLING_RESOLUTION, so a Seedance-backed run silently rendered (and was
+// priced) at the .env default whatever was picked. The pick is stored on the manifest and
+// re-injected as the MODEL's own knob into every child env — dotenv never overwrites an existing
+// variable — so it must survive a later .env edit AND a revise.
+test('a run created at a non-default resolution estimates, renders and (post-revise) re-estimates AT that resolution', async () => {
+  const { runId } = (await post('/api/runs', { idea: 'a fox on a frozen lake', backend: 'seedance-2.0@fal', aspect: '16:9', resolution: '720p', durationS: null })).json();
+  await waitForStatus(runId, 'plan-ready');
+
+  // 2.0@fal bills $0.3024/s at 720p — the env default (480p, $0.135/s) must not leak in
+  const est = (await get(`/api/runs/${runId}/estimate?mode=full`)).json();
+  const seconds = est.perJob.reduce((a, j) => a + j.seconds, 0);
+  assert.equal(est.totalUsd, Math.round(seconds * 0.3024 * 100) / 100, 'the estimate prices the pick, not the default');
+
+  // …even when .env pins the OTHER tier after the run was created
+  const envFile = path.join(envRoot, '.env');
+  const original = fs.readFileSync(envFile, 'utf8');
+  try {
+    fs.writeFileSync(envFile, `${original}SEEDANCE_RESOLUTION=480p\n`);
+    assert.equal((await get(`/api/runs/${runId}/estimate?mode=full`)).json().totalUsd, est.totalUsd, 'the per-run pick outranks a later .env edit');
+  } finally { fs.writeFileSync(envFile, original); }
+
+  // the RENDER: the child submits resolution=720p (the mock records every body), the ledger agrees
+  const before = fal.requests.length;
+  const r = await post(`/api/runs/${runId}/render`, { mode: 'full' });
+  assert.equal(r.statusCode, 202, r.body);
+  assert.equal(r.json().estUsd, est.totalUsd, 'the paid button quotes the same money the ledger records');
+  await waitForStatus(runId, ['review', 'attention']); // attention = assemble-only trouble; the submit already happened
+  const submits = fal.requests.slice(before).filter((q) => q.method === 'POST' && q.path === '/seedance-submit');
+  assert.ok(submits.length, 'the render reached the endpoint');
+  for (const s of submits) assert.equal(JSON.parse(s.body).resolution, '720p', 'the render child used the picked tier');
+  const run = (await get(`/api/runs/${runId}`)).json().run;
+  assert.equal(run.manifest.costLedger.at(-1).estUsd, est.totalUsd);
+
+  // the pick survives a revise (re-injected on that child too): the next estimate still prices 720p
+  await post(`/api/runs/${runId}/revise`, { feedback: 'slower pans' });
+  const t0 = Date.now();
+  for (;;) {
+    const m = (await get(`/api/runs/${runId}`)).json().run.manifest;
+    if (m.revisions.length === 1) break;
+    if (Date.now() - t0 > 90000) throw new Error('timeout waiting for the revision');
+    await sleep(150);
+  }
+  const est2 = (await get(`/api/runs/${runId}/estimate?mode=full`)).json();
+  const seconds2 = est2.perJob.reduce((a, j) => a + j.seconds, 0);
+  assert.equal(est2.totalUsd, Math.round(seconds2 * 0.3024 * 100) / 100, 'still the picked tier after revise');
+});
+
 // Seedance 2.5 is billed by pixel-seconds and has its OWN resolution knob. Reading the 2.0 knob
 // (or the 2.0 default) would quote 480p money for a 720p render — the estimate must follow the
 // env root the render child will actually read.

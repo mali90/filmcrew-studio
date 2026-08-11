@@ -203,6 +203,18 @@ test('readRenderResolution: 2.5 reads its own knob and its own default; everythi
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('readRenderResolution: kling reads ITS knob (registry resolutionEnv), never the Seedance ones', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-resk-'));
+  try {
+    assert.equal(readRenderResolution(dir, 'kling-o3@fal'), '1080p', 'no .env: the kling config default');
+    fs.writeFileSync(path.join(dir, '.env'), 'KLING_RESOLUTION=720p\nSEEDANCE_RESOLUTION=4k\n');
+    assert.equal(readRenderResolution(dir, 'kling'), '720p', 'legacy id resolves through the registry');
+    assert.equal(readRenderResolution(dir, 'kling-o3@fal'), '720p');
+    // and the per-run pick path: the injected knob (run-service resolutionOverride) beats .env
+    assert.equal(readRenderResolution(dir, 'kling-o3@fal', { KLING_RESOLUTION: '4k' }), '4k');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('readRenderResolution/readProbeResolution: an injected childEnv var beats .env — dotenv never overwrites it in the render child', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-res-child-'));
   try {

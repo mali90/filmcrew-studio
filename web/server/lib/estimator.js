@@ -12,7 +12,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 // The registry is the ONE static import this server takes from the host src/ tree — zero imports,
 // no env, so it can never drag config.js in. See the canary in test/integration/runs-caps.test.js.
-import { normalizeBackend } from '../../../src/lib/render-models.js';
+import { capsFor, normalizeBackend } from '../../../src/lib/render-models.js';
 
 const PRICES = JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'prices.json'), 'utf8'));
 const DEFAULT_SHOT_SECONDS = 5; // mirrors config.kling.defaultShotSeconds
@@ -152,13 +152,15 @@ function readEnvVar(envRoot, key, fallbackEnv) {
   return '';
 }
 
-/** The render resolution the CHILD will use, per MODEL: Seedance 2.5 has its own knob and its own
- *  default (720p — 480p is only its probe tier), everything else rides SEEDANCE_RESOLUTION (480p,
- *  the cheap path; approve's Topaz upscale lifts the master to 1080p). Seedance is billed by
- *  pixel-seconds, so reading the wrong knob quietly misprices the button. */
+/** The render resolution the CHILD will use, per MODEL — the registry names the knob each model
+ *  reads (caps.resolutionEnv: KLING_RESOLUTION / SEEDANCE_RESOLUTION / SEEDANCE25_RESOLUTION) and
+ *  its default. Seedance is billed by pixel-seconds, so reading the wrong knob quietly misprices
+ *  the button; an unknown/absent backend keeps the legacy Seedance answer. */
 export function readRenderResolution(envRoot, backend, childEnv) {
-  const is25 = typeof backend === 'string' && backend.includes('seedance-2.5');
-  return readEnvVar(envRoot, is25 ? 'SEEDANCE25_RESOLUTION' : 'SEEDANCE_RESOLUTION', childEnv) || (is25 ? '720p' : '480p');
+  let caps = null;
+  try { caps = capsFor(normalizeBackend(backend).id); } catch { /* unknown/absent backend */ }
+  const key = caps?.resolutionEnv ?? 'SEEDANCE_RESOLUTION';
+  return readEnvVar(envRoot, key, childEnv) || caps?.defaultResolution || '480p';
 }
 
 /** The short side the approve-time upscale will actually DELIVER: Segmind takes an explicit

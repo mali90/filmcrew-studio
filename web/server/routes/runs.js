@@ -170,7 +170,7 @@ export function registerRunRoutes(app) {
   app.get('/api/runs', async () => ({ runs: svc.list().map((r) => serializeRun(r)) }));
 
   app.post('/api/runs', async (req, reply) => {
-    const { idea, backend = 'kling', aspect = '9:16', durationS = null, cast = [], environment = null } = req.body ?? {};
+    const { idea, backend = 'kling', aspect = '9:16', resolution = null, durationS = null, cast = [], environment = null } = req.body ?? {};
     if (!idea || !String(idea).trim()) throw Object.assign(new Error('idea is required'), { statusCode: 400, hint: 'one line is enough — the engine does the rest' });
     // Backend, aspect and cast are all model-derived and all rejected HERE — synchronously, before
     // svc.createRun spawns the engine child — so a bad request leaves no run directory behind.
@@ -192,6 +192,13 @@ export function registerRunRoutes(app) {
     if (!caps.aspects.includes(aspect)) {
       throw Object.assign(new Error(`unknown aspect "${aspect}" for ${caps.label}`), {
         statusCode: 400, hint: `${caps.label} renders ${caps.aspects.join(', ')}`,
+      });
+    }
+    // resolutions are per-model too (2.5 tops out at 720p; Kling starts there) — a tier the model
+    // cannot render is refused before any spawn; null means the model's configured default.
+    if (resolution !== null && !(typeof resolution === 'string' && caps.resolutions.includes(resolution))) {
+      throw Object.assign(new Error(`unknown resolution "${resolution}" for ${caps.label}`), {
+        statusCode: 400, hint: `${caps.label} renders ${caps.resolutions.join(', ')}`,
       });
     }
     if (durationS !== null && (!Number.isInteger(durationS) || durationS < 3 || durationS > 120)) {
@@ -233,7 +240,7 @@ export function registerRunRoutes(app) {
         throw Object.assign(new Error(`unknown environment "${environment}"`), { statusCode: 400, hint: 'create the environment on the Cast page first' });
       }
     }
-    const r = svc.createRun({ idea: String(idea).trim(), backend: storedBackend, aspect, durationS, cast: cast.map((c) => c.trim()), environment: environmentSlug });
+    const r = svc.createRun({ idea: String(idea).trim(), backend: storedBackend, aspect, resolution, durationS, cast: cast.map((c) => c.trim()), environment: environmentSlug });
     return reply.code(201).send(r);
   });
 
@@ -395,9 +402,11 @@ export function registerRunRoutes(app) {
       mode,
       jobId: req.query.jobId,
       cascade: req.query.cascade === '1' || req.query.cascade === 'true',
-      // Seedance is billed by pixel-seconds — price the resolution the render child will use, and
-      // that knob is per model (2.5 reads SEEDANCE25_RESOLUTION and defaults to 720p, not 480p)
-      resolution: readRenderResolution(app.ctx.envRoot, run.backend, app.ctx.childEnv),
+      // Seedance is billed by pixel-seconds — price the resolution the render child will use: the
+      // run's own pick when one was made at create time (run-service injects it into every child
+      // spawn as the model's knob), else the knob that model reads from .env (per model — 2.5 reads
+      // SEEDANCE25_RESOLUTION and defaults to 720p, not 480p)
+      resolution: run.manifest?.resolution || readRenderResolution(app.ctx.envRoot, run.backend, app.ctx.childEnv),
       probeResolution: readProbeResolution(app.ctx.envRoot, run.backend, app.ctx.childEnv),
     });
   });

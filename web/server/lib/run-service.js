@@ -47,9 +47,11 @@ const ledgerLine = (est) => ({
 
 export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr, bus, isAlive = defaultIsAlive, now = () => new Date() }) {
   // Seedance price scales with resolution, and the knob is per model (2.5 has its own) — so the
-  // ledger records what THIS run's backend will actually be billed for.
-  const estOpts = (backend) => ({
-    resolution: readRenderResolution(envRoot ?? root, backend, childEnv),
+  // ledger records what THIS run's backend will actually be billed for. A per-run pick (stored on
+  // the manifest, injected into every child spawn as that same knob) outranks the .env value here
+  // exactly as it does in the render child; probes keep riding the separate probe knob either way.
+  const estOpts = (backend, resolution) => ({
+    resolution: resolution || readRenderResolution(envRoot ?? root, backend, childEnv),
     probeResolution: readProbeResolution(envRoot ?? root, backend, childEnv),
   });
   const ringLogs = new Map();   // runId → ring log
@@ -73,7 +75,21 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     return ringLogs.get(runId);
   };
   const dirFor = (runId) => safeChild(runsDir, runId);
-  const env = () => ({ ...childEnv, RUNS_DIR: runsDir, OUT_DIR: outDir });
+  const env = (runId) => ({ ...childEnv, ...resolutionOverride(runId), RUNS_DIR: runsDir, OUT_DIR: outDir });
+
+  /**
+   * The per-run resolution pick, as the .env knob THIS run's model actually reads
+   * (caps.resolutionEnv — KLING_RESOLUTION / SEEDANCE_RESOLUTION / SEEDANCE25_RESOLUTION). Applied
+   * to EVERY child spawn: dotenv never overwrites an existing variable, so the pick governs the
+   * plan context, the render, every revise and every re-render without touching the user's .env.
+   * Empty when the run never picked one — the configured default governs, exactly as before.
+   */
+  function resolutionOverride(runId) {
+    const m = readManifest(dirFor(runId));
+    if (!m?.resolution) return {};
+    const key = capsOf(m.backend)?.resolutionEnv;
+    return key ? { [key]: m.resolution } : {};
+  }
 
   /** Queued/active manager jobs for one run — memory truth the disk scan can't see. */
   const liveJobsFor = (runId) => {
@@ -404,7 +420,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
       runId, lane: upscale ? 'spend' : 'free', kind: upscale ? 'upscale' : 'assemble',
       script: CLI(root, 'assemble.js'),
       args: ['--from', fromDir, '--out-name', outNameFor(runId, spec, suffix ?? (upscale ? 'final' : null)), ...(upscale ? ['--upscale'] : [])],
-      env: env(), cwd: root,
+      env: env(runId), cwd: root,
     });
   }
 
@@ -425,7 +441,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
         ...(take ? ['--take', String(take)] : []),
         ...(promptOverrides ? ['--prompt-overrides', promptOverrides] : []),
       ],
-      env: env(), cwd: root,
+      env: env(runId), cwd: root,
     });
   }
 
@@ -514,12 +530,14 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
 
   // ── Public API (what the routes call) ────────────────────────────────────
 
-  function createRun({ idea, backend, aspect, durationS, cast = [], environment = null }) {
+  function createRun({ idea, backend, aspect, resolution = null, durationS, cast = [], environment = null }) {
     const stamp = now().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
     const runId = `web-${stamp}-${Math.random().toString(36).slice(2, 6)}`;
     const dir = dirFor(runId);
     fs.mkdirSync(dir, { recursive: true });
-    writeManifest(dir, newManifest({ idea, backend, aspect, durationS, cast, environment }, now().toISOString()));
+    // `resolution` (a per-run pick, or null = the configured default) is persisted BEFORE the
+    // enqueue below: env(runId) reads it back off the manifest to build the plan child's knob.
+    writeManifest(dir, newManifest({ idea, backend, aspect, resolution, durationS, cast, environment }, now().toISOString()));
     const queued = mgr.enqueue({
       runId, lane: 'plan', kind: 'plan',
       script: CLI(root, 'engine.js'),
@@ -527,7 +545,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
         ...(durationS ? ['--duration', String(durationS)] : []),
         ...(cast.length ? ['--cast', cast.join(',')] : []),
         ...(environment ? ['--environment', environment] : [])],
-      env: env(), cwd: root,
+      env: env(runId), cwd: root,
     });
     return { runId, queued };
   }
@@ -553,7 +571,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
         ...(m.durationS ? ['--duration', String(m.durationS)] : []),
         ...(m.cast?.length ? ['--cast', m.cast.join(',')] : []),
         ...(m.environment ? ['--environment', m.environment] : [])],
-      env: env(), cwd: root,
+      env: env(runId), cwd: root,
     });
     emitStatus(runId);
     return { queued };
@@ -659,8 +677,9 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     const takeDir = nextTakeDir(dir);
     const takeId = path.basename(takeDir);
     fs.mkdirSync(takeDir, { recursive: true }); // reserve the tN NOW — a queued sibling must not resolve to the same take
-    const backend = readManifest(dir)?.backend ?? 'kling';
-    const est = estimateRender(spec, { backend, mode, ...estOpts(backend) });
+    const m0 = readManifest(dir);
+    const backend = m0?.backend ?? 'kling';
+    const est = estimateRender(spec, { backend, mode, ...estOpts(backend, m0?.resolution) });
     const specJobs = (spec.kling?.jobs ?? []).map((j) => j.job_id);
     // a probe renders only the FIRST job, so only its edit can be in play
     const overrides = reserved(takeDir, () => snapshotPromptOverrides(dir, takeDir, mode === 'probe' ? specJobs.slice(0, 1) : specJobs));
@@ -675,7 +694,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
       script: CLI(root, 'render.js'),
       args: ['--spec', path.join(dir, 'spec.json'), '--out', takeDir, '--out-name', outNameFor(runId, spec, takeId),
         ...(mode === 'probe' ? ['--probe'] : []), ...overrides.args],
-      env: env(), cwd: root,
+      env: env(runId), cwd: root,
     });
     emitStatus(runId); // the page flips to 'rendering' NOW — queued work must never look like nothing happened
     return { takeId, queued, estUsd: est.totalUsd };
@@ -695,7 +714,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
       runId, lane: 'plan', kind: 'revise',
       script: CLI(root, 'revise.js'),
       args: ['--from', dir, '--feedback', feedback, '--out', revDir, ...(scope && scope !== 'whole' ? ['--scope', scope] : [])],
-      env: env(), cwd: root,
+      env: env(runId), cwd: root,
     });
     emitStatus(runId); // page flips to 'planning' NOW, even when queued behind another revision
     return { revisionId: path.basename(revDir), queued };
@@ -726,7 +745,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     const downstream = jobs.slice(jobs.indexOf(jobId) + 1);
     const cascadeJobs = cascade ? downstream : [];
     const backend = m?.backend ?? 'kling';
-    const est = estimateRender(spec, { backend, mode: 'job', jobId, cascade, ...estOpts(backend) });
+    const est = estimateRender(spec, { backend, mode: 'job', jobId, cascade, ...estOpts(backend, m?.resolution) });
 
     // WS2-P5 — which boundaries this take pins, decided by the pure rule over the cut as it stands.
     // The take is one chain: its OPENING pin belongs to the first job rendered, its CLOSING pin to
