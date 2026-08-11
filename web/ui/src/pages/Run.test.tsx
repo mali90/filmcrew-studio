@@ -19,7 +19,8 @@ describe('Run page — phase morphing', () => {
     expect(await screen.findByRole('region', { name: 'The plan is ready' })).toBeInTheDocument();
     expect(screen.getByText('All 8 agents have finished — the plan was approved on pass 1.')).toBeInTheDocument();
     expect(await screen.findAllByText('≈ $4.16')).toHaveLength(2);
-    expect(screen.getByText('estimates — fal bills per second')).toBeInTheDocument();
+    // U3/U4: multi-job plan → the merged probe-explaining caption, provider-true (fixture is kling@fal)
+    expect(screen.getByText('A probe renders only K1 — a cheap look before the full spend. Estimates — fal bills per rendered second.')).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Production spec' })).toBeInTheDocument();
   });
 

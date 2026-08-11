@@ -234,6 +234,21 @@
   any starred character with fewer element entries than its available references gets the rest
   attached mechanically, within the same caps the validator and renderers enforce, with one log
   line saying what was added.
+- **The money copy on the plan screen now tells the truth about who bills you and what a probe
+  buys.** The estimate caption and the first-spend dialog said "fal bills per rendered second" on
+  every run — including runs that render on Segmind, where that sentence named the wrong company at
+  the exact moment you decide to spend. Both now name the run's own provider. On a multi-job plan
+  the same caption finally explains the cheapest de-risking tool in the flow — *"A probe renders
+  only K1 — a cheap look before the full spend"* — instead of leaving "Probe ≈$0.49" to explain
+  itself. And the probe banner in review no longer says "free" next to a paid button: it says what
+  the full render actually does (replaces the probe with all clips, as a new take); the free action
+  — approving — keeps that word where it is true. Smaller honesty fixes ride along: the plan
+  summary names the model in words ("Seedance 2.5", not a raw backend id), the prompt sheet counts
+  a starred character's reference set as one line (`@Image1–@Image3 — marie (3 refs)`) and titles
+  itself in active voice ("What we send, segment by segment"), the review stage says when the plan
+  has changed after the cut on screen, and a failed agent's *Retry* writes a system-authored line
+  into history instead of a quote you never typed.
+- **The prompt preview's byte budget is now pinned to the renderer's own defaults, for installs
   with no `.env` at all.** The server may not import `config.js` (that would let a request
   reconfigure the running process), so it re-declares the prompt-shaping defaults by hand. Every
   test that compared preview against wire wrote an explicit `.env` first, so both sides read the
