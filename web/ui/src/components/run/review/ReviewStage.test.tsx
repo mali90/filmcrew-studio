@@ -180,6 +180,35 @@ describe('ReviewStage', () => {
     expect(screen.queryByTestId('reopened-notice')).not.toBeInTheDocument();
   });
 
+  // U1 — the page keeps this stage mounted while a segment re-renders, so the stage itself must
+  // keep playing (masterUrl is null mid-flight) and say what is happening in the banner slot.
+  it('keeps playing the current cut and shows the in-flight banner while a segment re-renders', () => {
+    const run = makeRun('review');
+    run.status = 'rendering';
+    run.manifest!.activeJob = { kind: 'render-job', pid: 7, startedAt: new Date(Date.now() - 42000).toISOString() };
+    // a distinct basename proves the fallback: latestRender.masterUrl is gone, the cut's file is not
+    run.manifest!.cuts = [{ id: 'c1', take: 't1', master: '/abs/out/ocean v1.mp4', createdAt: '2026-07-04T09:05:00.000Z' }];
+    run.latestRender!.masterUrl = null;
+    run.latestRender!.jobs = [
+      { jobId: 'K1', clip: '/abs/clip1.mp4', clipExists: true, clipUrl: '/api/media/runs/x/renders/t2/K1/clip.mp4', error: null },
+      { jobId: 'K2', clip: null, clipExists: false, clipUrl: null, error: null },
+    ];
+    renderReview(<Stage run={run} />);
+
+    const notice = screen.getByTestId('rerender-inflight-notice');
+    expect(notice.textContent).toContain(
+      "Re-rendering K2 — you're watching the current cut; the new clip takes its place here when it lands.",
+    );
+    expect(notice.textContent).toMatch(/\d+:\d{2}/); // ticking elapsed from activeJob.startedAt
+    // the stage falls back to the cut's own file while the latest master is rebuilt
+    expect(screen.getByTestId('master-video')).toHaveAttribute('src', '/api/media/out/ocean%20v1.mp4');
+  });
+
+  it('shows no in-flight banner when nothing is rendering', () => {
+    renderReview(<Stage run={makeRun('review')} />);
+    expect(screen.queryByTestId('rerender-inflight-notice')).not.toBeInTheDocument();
+  });
+
   // U14 — when the plan moved past the latest cut (same derivation as ChangeRequestPanel's
   // planChanged), the stage says the video below is the OLD cut and points at the rail.
   it('notes in the banner slot when the plan changed after the latest cut', () => {

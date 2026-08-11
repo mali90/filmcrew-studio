@@ -180,11 +180,15 @@ export function ClipStrip({ run, jobs, takeCountFor, promptStateFor, onSeek }: {
           <span className="font-mono text-caption text-ink-secondary">{selectedJob.jobId}</span>
           <PromptButton target={selectedJob.jobId} ariaLabel={`Prompt for ${selectedJob.jobId}`} />
           {/* Opens the paid dialog; the price and the one-time confirm live on ITS PaidButton, so
-              nothing here spends and the strip stays free of money buttons it cannot price. */}
+              nothing here spends and the strip stays free of money buttons it cannot price.
+              While a render is in flight only the prompt stays actionable — one render at a time,
+              and the reason rides on the disabled button itself (U1). */}
           <Button
             variant="ghost"
             size="sm"
             icon={<Film size={13} aria-hidden />}
+            disabled={run.status === 'rendering'}
+            title={run.status === 'rendering' ? 'One render at a time — wait for the current one to finish.' : undefined}
             onClick={() => setRerendering(selectedJob.jobId)}
           >
             Re-render {selectedJob.jobId}

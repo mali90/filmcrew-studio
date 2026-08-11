@@ -1,14 +1,14 @@
 // The stage band: the current cut plays center-stage on the darkened strip, with a cut switcher
 // when there is more than one stitched master, a continuity strip that seeks the master per job and
 // draws how the clips join, and a probe banner when the latest take only rendered the first job.
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { ChevronDown } from 'lucide-react';
 import type { RunDetail } from '../../../../../shared/api-types';
 import { api, ApiClientError } from '../../../api/client';
 import { useToast } from '../../ui/Toast';
-import { timeAgo } from '../../../lib/format';
+import { elapsed, timeAgo } from '../../../lib/format';
 import { jobSeconds, outMediaUrl, reopenedFinal } from './lib';
 import { ClipStrip } from './ClipStrip';
 import { PaidButton } from './PaidButton';
@@ -29,8 +29,11 @@ export function ReviewStage({ run, cutId, setCutId }: {
   const isLatest = !selected || selected.id === latestCut?.id;
 
   // The latest cut is served by latestRender.masterUrl; older cuts are reached by basename in out/.
+  // Mid segment re-render the latest master is being rebuilt (masterUrl null) — fall back to the
+  // selected cut's own file so the stage keeps playing instead of going dark (U1). Approve
+  // targeting is untouched: ApproveBar is not mounted while a render is in flight.
   const src = isLatest
-    ? run.latestRender?.masterUrl ?? undefined
+    ? run.latestRender?.masterUrl ?? (selected?.master ? outMediaUrl(selected.master) : undefined)
     : selected?.master ? outMediaUrl(selected.master) : undefined;
 
   const takes = run.manifest?.takes ?? [];
@@ -58,6 +61,20 @@ export function ReviewStage({ run, cutId, setCutId }: {
   });
 
   const jobs = run.latestRender?.jobs ?? [];
+
+  // A segment re-render in flight (U1): the page keeps this stage mounted for job-mode renders, so
+  // the banner slot says which segment is being replaced and that the video below is still the
+  // CURRENT cut. The working segment is the one whose clip has neither landed nor failed.
+  const activeJob = run.manifest?.activeJob;
+  const rerenderInFlight = activeJob?.kind === 'render-job';
+  const workingJobId = rerenderInFlight ? jobs.find((j) => !j.clipExists && !j.error)?.jobId : undefined;
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!rerenderInFlight) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [rerenderInFlight]);
+
   // every take that PRODUCED A CLIP of this job counts — the full render's clip is a take too
   // (counting only job-mode takes once said "2 takes" for a job with three clips on disk)
   const jobIds = (run.spec?.kling?.jobs ?? []).map((j) => j.job_id);
@@ -82,6 +99,20 @@ export function ReviewStage({ run, cutId, setCutId }: {
 
   return (
     <section className="relative -mx-6 rounded-r3 bg-stage px-6 py-8" aria-label="Review stage">
+      {rerenderInFlight && (
+        <div
+          className="mb-5 flex flex-wrap items-baseline justify-between gap-3 rounded-r2 border border-line bg-surface-1 px-4 py-3"
+          data-testid="rerender-inflight-notice"
+        >
+          <p className="text-dense text-ink">
+            Re-rendering {workingJobId} — you're watching the current cut; the new clip takes its place here when it lands.
+          </p>
+          {activeJob?.startedAt && (
+            <span className="tnum text-caption text-ink-muted">{elapsed(now - new Date(activeJob.startedAt).getTime())}</span>
+          )}
+        </div>
+      )}
+
       {reopened && (
         <div className="mb-5 rounded-r2 border border-line bg-surface-1 px-4 py-3" data-testid="reopened-notice">
           <p className="text-dense text-ink">

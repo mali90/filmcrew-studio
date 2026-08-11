@@ -158,6 +158,22 @@ describe('ClipStrip', () => {
     expect(await screen.findByRole('dialog', { name: 'Re-render K2' })).toBeInTheDocument();
   });
 
+  // U1 — one render at a time: while a render is in flight the strip keeps the prompt readable but
+  // refuses to queue a second spend, and the disabled button itself says why.
+  it('disables Re-render while the run is rendering, with the one-at-a-time reason', () => {
+    const run = threeSegmentRun({ status: 'rendering', continuity: null });
+    run.latestRender!.jobs = [clip('K1'), { ...clip('K2'), clip: null, clipExists: false, clipUrl: null }, clip('K3')];
+    renderReview(
+      <ClipStrip run={run} jobs={run.latestRender!.jobs} takeCountFor={() => 1} onSeek={vi.fn()} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Play from K1' }));
+    const rerender = screen.getByRole('button', { name: 'Re-render K1' });
+    expect(rerender).toBeDisabled();
+    expect(rerender).toHaveAttribute('title', 'One render at a time — wait for the current one to finish.');
+    // the free affordance stays live
+    expect(screen.getByRole('button', { name: 'Prompt for K1' })).toBeEnabled();
+  });
+
   // No legend: the strip explains itself with the drawing and one sentence (Don't #9).
   it('carries no legend', () => {
     const { container } = renderStrip(threeSegmentRun({ continuity: [entry('K2', 1), entry('K3', 2)] }));
