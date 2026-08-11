@@ -24,7 +24,6 @@ import { ALL_BACKENDS, BACKEND_IDS, capsFor } from './render-models.js';
  */
 export const ASPECTS = ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'];
 const KLING_MODELS = ['kling-v3-omni', 'kling-video-o1'];
-const KLING_RES = ['4k', '1080p', '720p'];
 const SHOT_SIZES = ['extreme_close_up', 'close_up', 'medium_close_up', 'medium', 'medium_wide', 'wide', 'extreme_wide'];
 const QC_STATUS = ['pending', 'pass', 'fail'];
 const MAX_STORYBOARDS = 6;   // fallback: no shipping endpoint takes more than 6 storyboard segments
@@ -119,7 +118,13 @@ function validateJobs(spec, P, elementIds, caps, enforceModelAspects = false) {
   if (!k || typeof k !== 'object') { P.push('kling: missing'); return; }
   if (!oneOf(k.model_name, KLING_MODELS)) P.push(`kling.model_name "${k.model_name}" not in ${KLING_MODELS.join('|')}`);
   if (k.aspect_ratio !== undefined && !oneOf(k.aspect_ratio, ASPECTS)) P.push(`kling.aspect_ratio "${k.aspect_ratio}" not in ${ASPECTS.join('|')}`);
-  if (k.resolution !== undefined && !oneOf(k.resolution, KLING_RES)) P.push(`kling.resolution "${k.resolution}" not in ${KLING_RES.join('|')}`);
+  // The resolution enum is the model's own ladder where the field actually drives the render (the
+  // kling family reads spec.kling.resolution first — klingPromptSettings). The Seedance family
+  // IGNORES this field (its own knob wins at render time, and old Seedance specs legitimately carry
+  // a KLING default here), so it — like the backend-less superset — gets the registry-wide union:
+  // shape check only, never a hardcoded "4k|1080p|720p" that rejects a planner writing 480p.
+  const resolutions = caps.family === 'kling' && isArr(caps.resolutions) ? caps.resolutions : SUPERSET_CAPS.resolutions;
+  if (k.resolution !== undefined && !oneOf(k.resolution, resolutions)) P.push(`kling.resolution "${k.resolution}" not in ${resolutions.join('|')}`);
   if (k.generate_audio !== undefined && typeof k.generate_audio !== 'boolean') P.push('kling.generate_audio must be boolean');
   // Caps gate ON TOP of the structural superset, applied only when the backend is known (explicit
   // or persisted): the widened ASPECTS accepts any registered model's ratio, so a kling-block ratio
@@ -216,6 +221,9 @@ const SUPERSET_CAPS = (() => {
     maxSegments: widest('maxSegments', MAX_STORYBOARDS, Math.max),
     maxSegmentChars: widest('maxSegmentChars', MAX_SEG_CHARS, Math.max),
     aspects: [...ASPECTS],
+    // Every tier ANY registered model renders — the structural resolution enum for backend-less
+    // specs and for the Seedance family, whose renderers ignore kling.resolution (see validateJobs).
+    resolutions: [...new Set(entries.flatMap((c) => c.resolutions ?? []))],
   };
 })();
 

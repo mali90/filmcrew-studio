@@ -13,6 +13,7 @@ import { ensureDir, writeJson, slug } from './util.js';
 import { complete, extractJson } from './llm.js';
 import { validateSpec } from './spec-schema.js';
 import { RENDER_MODELS, capsFor, castLimitFor, normalizeBackend, demotesOpeningFrame } from './render-models.js';
+import { knobsFor } from './prompt-settings.js';
 import { buildInventory, inventoryText, characterRefs, refBelongsTo } from './elements.js';
 import { voicesInventoryText } from './voices.js';
 import { SEEDANCE_TTV_GUIDANCE } from './seedance.js';
@@ -61,6 +62,18 @@ function familyOf(value) {
   try { return capsFor(value).family; } catch { return null; }
 }
 
+/**
+ * The effective render resolution for a backend's model — read from the SAME knob the render child
+ * reads: the model's own config block (`caps.knobsKey`, falling back to the shared Seedance block)
+ * for the Seedance family, config.kling for Kling. A per-run pick arrives through that same env
+ * variable (run-service injects `caps.resolutionEnv` into every child spawn), so the planner's
+ * context and the render can never disagree on it.
+ */
+function configuredResolution(caps) {
+  if (caps.family === 'seedance') return knobsFor(caps, config)?.resolution || config.seedance.resolution;
+  return config.kling.resolution;
+}
+
 /** A Seedance render with NO cast AND NO reference image available is guaranteed text-to-video (the
  *  Casting agent has nothing to attach) — the only case where injecting the text-to-video prompt style
  *  + identity override is safe. A no-cast render whose folder holds a relevant image becomes
@@ -77,10 +90,13 @@ export function contextBlock(ctx) {
   // only hold a backend name) gets them derived from the backend it names, so the Job Planner is
   // never told Kling's numbers for a Seedance plan.
   const caps = ctx.caps ?? capsFor(ctx.backend);
+  // The RENDERING MODEL's own knob (per-run picks ride it too) — quoting config.kling.resolution
+  // for a Seedance plan advertised a resolution that render was never going to use.
+  const resolution = ctx.resolution ?? configuredResolution(caps);
   return [
     '## Project context',
     `- Brief: ${ctx.brief}`,
-    `- Defaults: model=${k.model}, aspect_ratio=${ctx.aspectRatio ?? k.aspectRatio}, resolution=${k.resolution}, ` +
+    `- Defaults: model=${k.model}, aspect_ratio=${ctx.aspectRatio ?? k.aspectRatio}, resolution=${resolution}, ` +
       `multi_shot=${k.multiShot}, native_audio=${k.nativeAudio}, target_duration≈${ctx.durationTargetS}s`,
     `- Render backend: ${caps.id}`,
     // Every number here is the RENDERING MODEL's own (registry caps), with the shared fallbacks for
@@ -110,11 +126,11 @@ export function contextBlock(ctx) {
          SEEDANCE_TTV_GUIDANCE,
          '- IDENTITY: overriding the scene-director\'s usual "never describe the subject\'s appearance" rule — since no reference image pins identity here, DO describe each subject\'s look concretely (build, clothing, colours, distinctive features) and keep it consistent across every shot.']
       : []),
-    // aspect_ratio is the MODEL's list (identical to the historic three for both shipping models),
-    // so a model with wider ratios never has them talked out of the plan by a hardcoded enum.
+    // aspect_ratio and resolution are the MODEL's own lists — a hardcoded enum here once offered
+    // the planner "4k, 1080p, 720p" for Seedance 2.5, whose whole ladder is 480p/720p.
     '- Valid enums: shot_size ∈ {extreme_close_up, close_up, medium_close_up, medium, medium_wide, wide, extreme_wide}; ' +
       `aspect_ratio ∈ {${caps.aspects.join(', ')}}; kling.model_name ∈ {kling-v3-omni, kling-video-o1}; ` +
-      'kling.resolution ∈ {4k, 1080p, 720p}',
+      `kling.resolution ∈ {${caps.resolutions.join(', ')}}`,
     '',
     '## Available elements (the Casting agent must pick `image` paths from THIS list)',
     ctx.inventoryText,
@@ -299,6 +315,13 @@ export async function buildCtx({ brief, backend, aspectRatio, durationTargetS, c
     const over = cast.length - castLimit;
     throw new Error(`${caps.label} supports at most ${castLimit} starred character${castLimit === 1 ? '' : 's'} — you selected ${cast.length} (${cast.join(', ')}). Drop ${over === 1 ? 'one' : over}, or switch to a model with a higher cast limit.`);
   }
+  // Judge the EFFECTIVE resolution the same way as the ratio above: it comes off the model's own
+  // knob (a per-run pick rides that same env variable), and a tier the model does not render —
+  // SEEDANCE25_RESOLUTION=1080p, say — must cost nothing instead of a full planning pass.
+  const resolution = configuredResolution(caps);
+  if (!caps.resolutions.includes(resolution)) {
+    throw new Error(`Unknown resolution "${resolution}" (the ${caps.resolutionEnv} config default) — ${caps.label} renders: ${caps.resolutions.join(', ')}.`);
+  }
   const inv = buildInventory();
   // The environment carries NO reference image, so it is loaded AFTER (and independently of) the
   // text-to-video decision — enriching a t2v prompt must never flip the render mode. `environment`
@@ -309,6 +332,7 @@ export async function buildCtx({ brief, backend, aspectRatio, durationTargetS, c
     backend: be, // the CANONICAL `<model>@<provider>` id — what gets stamped onto the spec
     caps, // the rendering model's own caps: contextBlock's hard-caps lines read them
     aspectRatio, // undefined = config default (contextBlock falls back to config.kling.aspectRatio)
+    resolution, // the effective (validated) resolution — contextBlock advertises it, stampResolution pins it
     durationTargetS: durationTargetS ?? config.kling.defaultShotSeconds * 3,
     // Guaranteed text-to-video? (no cast AND no reference image to attach — see isTextToVideoPlan)
     textToVideo: isTextToVideoPlan({ backend: be, cast, refCount: inv.filter((e) => e.type === 'reference').length }),
@@ -328,6 +352,19 @@ function stampAspect(spec, aspectRatio) {
   if (!aspectRatio) return;
   if (spec.project && typeof spec.project === 'object') spec.project.aspect_ratio = aspectRatio;
   if (spec.kling && typeof spec.kling === 'object') spec.kling.aspect_ratio = aspectRatio;
+}
+
+/**
+ * Stamp the effective resolution onto a KLING-family spec. The Kling renderer reads
+ * spec.kling.resolution FIRST (klingPromptSettings) and the planner only ever copies the config
+ * default into it — stamping makes the knob (and any per-run pick riding it as an env override)
+ * govern the render instead of depending on the LLM copying the context line faithfully. The
+ * Seedance family is deliberately untouched: its renderers ignore kling.resolution and read their
+ * own knob at render time, so the value stays live rather than frozen at plan time.
+ */
+function stampResolution(spec, ctx) {
+  if (ctx.caps?.family !== 'kling' || !ctx.resolution) return;
+  if (spec.kling && typeof spec.kling === 'object') spec.kling.resolution = ctx.resolution;
 }
 
 /**
@@ -432,6 +469,7 @@ export async function runEngine({ brief, runDir, durationTargetS, backend, aspec
   spec = topUpStarredElements(spec, ctx);
 
   stampAspect(spec, ctx.aspectRatio);
+  stampResolution(spec, ctx);
   spec.render_backend = ctx.backend; // the CANONICAL id this spec was planned FOR — renders must not silently fall back to the config default
   if (ctx.castNames) spec.cast = ctx.castNames; // revisions re-inject the same starred profiles
   if (ctx.environmentSlug) spec.environment = ctx.environmentSlug; // revisions re-inject the same world bible
@@ -607,6 +645,12 @@ export async function reviseSpec({ spec, runDir, feedback, scope, owners, brief,
   cur = topUpStarredElements(cur, ctx);
 
   stampAspect(cur, ctx.aspectRatio);
+  // Same precedence as the aspect above: a revision keeps the resolution the spec was PLANNED with
+  // (for a web run that is the per-run pick, re-injected into this child's env) — re-stamping the
+  // bare config default would drift a CLI-planned spec whose .env moved since. Only a value the
+  // TARGET model cannot render (a backend switch) falls back to the validated effective one.
+  const plannedRes = cur.kling?.resolution;
+  stampResolution(cur, { ...ctx, resolution: ctx.caps.resolutions.includes(plannedRes) ? plannedRes : ctx.resolution });
   // A revision keeps (or deliberately changes) the planned backend — never loses it — and re-stamps
   // it canonically, so revising a spec written before compound ids existed upgrades it in place.
   cur.render_backend = ctx.backend;
