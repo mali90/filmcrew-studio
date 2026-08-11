@@ -14,6 +14,9 @@ export type Backend =
  *  (aspectsFor(backend)). 'adaptive'/'auto' are deliberately absent: the stitch canvas needs a
  *  deterministic ratio. */
 export type Aspect = '9:16' | '16:9' | '1:1' | '4:3' | '3:4' | '21:9';
+/** Every render tier SOME model offers — which ones a given run may pick is per-model
+ *  (resolutionsFor(backend): Kling is 720p+, Seedance 2.5 tops out at 720p). */
+export type Resolution = '480p' | '720p' | '1080p' | '4k';
 export type RunStatus = 'planning' | 'plan-ready' | 'rendering' | 'attention' | 'review' | 'complete';
 export type Phase = 'plan' | 'render' | 'review' | 'deliver';
 export type ActionKind = 'plan' | 'revise' | 'render' | 'probe' | 'render-job' | 'assemble' | 'upscale' | 'mint-voice';
@@ -47,6 +50,9 @@ export interface Manifest {
   idea: string;
   backend: Backend;
   aspect: Aspect;
+  /** Per-run render resolution pick; null/absent = the model's configured default. Reapplied as the
+   *  model's own env knob on every child spawn, and priced by the estimator over the .env value. */
+  resolution?: Resolution | null;
   durationS: number | null;                 // null = auto (the engine decides)
   environment?: string | null;              // selected world/mood/style bible slug (null = none) — revisions re-inject it
   createdAt: string;
@@ -181,7 +187,17 @@ export type GlobalEvent =
   | { type: 'run-activity'; runId: string; eventType: string };
 
 // ── Endpoint payloads ──
-export interface CreateRunBody { idea: string; backend: Backend; aspect: Aspect; durationS: number | null; cast?: string[]; environment?: string }
+export interface CreateRunBody {
+  idea: string;
+  backend: Backend;
+  aspect: Aspect;
+  /** Per-run render resolution — one of the model's own resolutionsFor(backend); omitted/null = the
+   *  configured default. Validated server-side (400 before any spawn). */
+  resolution?: Resolution | null;
+  durationS: number | null;
+  cast?: string[];
+  environment?: string;
+}
 
 // ── Frame-conditioned re-render (WS2-P5) ──
 /** What a re-render pins at its two ends. `auto` mirrors the joins the cut already has — it keeps a

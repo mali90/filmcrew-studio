@@ -45,7 +45,10 @@ export const api = {
   envRead: () => get<{ source: string; rows: { key: string; value: string; secret: boolean; set: boolean }[] }>('/settings/env'),
   envPreview: (updates: Record<string, string>) => post<{ rows: { key: string; from: string; to: string }[]; overwritingReal: boolean }>('/settings/env/preview', { updates }),
   envWrite: (updates: Record<string, string>) => post<{ written: string[] }>('/settings/env', { updates }),
-  defaults: () => get<{ backend: string; aspect: string; resolution: string; seedanceResolution: string }>('/settings/defaults'),
+  // `resolution` is the DEFAULT backend's effective tier (read off the knob that backend's model
+  // actually uses); `resolutions` carries every model's, keyed by model id, for per-model pickers.
+  defaults: () => get<{ backend: string; aspect: string; resolution: string; resolutions: Record<string, string>; seedanceResolution: string }>('/settings/defaults'),
+  /** `resolution` is written to the knob of `d.backend`'s model (or the saved default backend's). */
   saveDefaults: (d: { backend?: string; aspect?: string; resolution?: string; seedanceResolution?: string }) => post<{ written: string[] }>('/settings/defaults', d),
   doctor: () => post<DoctorReport>('/doctor'),
   storage: () => get<{ runs: { bytes: number; count: number }; out: { bytes: number; count: number } }>('/storage'),

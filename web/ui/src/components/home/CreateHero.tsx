@@ -5,10 +5,11 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import clsx from 'clsx';
 import { Mountain } from 'lucide-react';
-import type { Aspect, Backend } from '../../../../shared/api-types';
+import type { Aspect, Backend, Resolution } from '../../../../shared/api-types';
 import {
   ALL_BACKENDS, MODEL_IDS, aspectsFor, backendIdFor, canonicalBackendFor, castLimitFor,
-  modelIdFor, modelLabelFor, modelSegmentLabelFor, providerIdFor, providerLabelFor, providersFor,
+  defaultResolutionFor, modelIdFor, modelLabelFor, modelSegmentLabelFor, providerIdFor,
+  providerLabelFor, providersFor, resolutionsFor,
 } from '../../../../shared/render-models';
 import { api, ApiClientError } from '../../api/client';
 import { Button } from '../ui/Button';
@@ -64,6 +65,16 @@ export const trimAspect = (aspect: string, backend: string): Aspect => {
   const offered = aspectsForBackend(backend);
   return offered.includes(aspect as Aspect) ? (aspect as Aspect) : offered[0]!;
 };
+/** The render tiers this backend's model offers, lowest first. */
+export const resolutionsForBackend = (backend: string): Resolution[] => resolutionsFor(backend);
+/** Keeps a tier the model renders; an invalid pick trims to `fallback` (the saved default for that
+ *  model, when the defaults query has answered) or the model's own registry default — never to a
+ *  tier the POST would 400 on. */
+export const trimResolution = (resolution: string, backend: string, fallback?: string): Resolution => {
+  const offered = resolutionsForBackend(backend);
+  if (offered.includes(resolution as Resolution)) return resolution as Resolution;
+  return offered.includes(fallback as Resolution) ? (fallback as Resolution) : defaultResolutionFor(backend);
+};
 
 const initials = (name: string) =>
   name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join('');
@@ -80,6 +91,7 @@ export function CreateHero({ idea, onIdeaChange, ideaRef }: {
   // views of it, and it is what the POST carries, so nothing downstream ever sees a pair.
   const [backend, setBackend] = useState<Backend>(DEFAULT_BACKEND);
   const [aspect, setAspect] = useState<Aspect>('9:16');
+  const [resolution, setResolution] = useState<Resolution>(defaultResolutionFor(DEFAULT_BACKEND));
   const [durationMode, setDurationMode] = useState<'auto' | 'custom'>('auto');
   const [customS, setCustomS] = useState(12);
   const [trimNote, setTrimNote] = useState<string | null>(null); // what a model switch had to drop
@@ -89,14 +101,19 @@ export function CreateHero({ idea, onIdeaChange, ideaRef }: {
   const castCap = castCapFor(backend);
   const modelLabel = modelLabelFor(backend);
   const offeredAspects = aspectsForBackend(backend);
+  const offeredResolutions = resolutionsForBackend(backend);
   const model = modelIdFor(backend);
   const provider = providerIdFor(backend);
   const providerOptions = providersFor(model);
 
-  // Server-side defaults seed the controls once — never overriding a choice already made. Both values
+  // Server-side defaults seed the controls once — never overriding a choice already made. All values
   // are validated against the registry rather than a hardcoded list, so a default of 'seedance-2.0@fal'
   // or (once a model offers it) '4:3' hydrates, and a ratio that model cannot render is trimmed.
   const defaults = useQuery({ queryKey: ['defaults'], queryFn: api.defaults });
+  // The saved default tier for a backend's MODEL (its own .env knob, per GET /settings/defaults),
+  // trimmed to the ladder; before the query answers it is the model's registry default.
+  const savedResolutionFor = (b: string): Resolution =>
+    trimResolution(defaults.data?.resolutions?.[modelIdFor(b)] ?? '', b);
   useEffect(() => {
     const d = defaults.data;
     if (!d || hydrated.current || touched.current) return;
@@ -107,8 +124,10 @@ export function CreateHero({ idea, onIdeaChange, ideaRef }: {
     const nextAspect = aspectsForBackend(nextBackend).includes(d.aspect as Aspect)
       ? (d.aspect as Aspect)
       : trimAspect(aspect, nextBackend);
+    const nextResolution = savedResolutionFor(nextBackend);
     if (nextBackend !== backend) setBackend(nextBackend);
     if (nextAspect !== aspect) setAspect(nextAspect);
+    if (nextResolution !== resolution) setResolution(nextResolution);
   }, [defaults.data]);
 
   // Cast picker — starring is free (no cost tags). Zero profiles renders nothing at all. Every model
@@ -139,6 +158,10 @@ export function CreateHero({ idea, onIdeaChange, ideaRef }: {
     const keptCast = trimCast(castSlugs, next);
     const dropped = castSlugs.slice(keptCast.length);
     const nextAspect = trimAspect(aspect, next);
+    // An off-ladder tier trims to the new MODEL's default (its saved one when known) rather than a
+    // neighbouring tier: 4k on a 2.5 switch means "the model's own default", not "720p because it
+    // is adjacent" — the same predictability rule as the cast trim above.
+    const nextResolution = trimResolution(resolution, next, defaults.data?.resolutions?.[modelIdFor(next)]);
     // Name the PAIR when the model runs in more than one place — "Seedance 2.0 does not render 21:9"
     // would be a lie about the model; it is this provider's endpoint that cannot.
     const label = providersFor(next).length > 1
@@ -150,9 +173,11 @@ export function CreateHero({ idea, onIdeaChange, ideaRef }: {
         ? `${label} stars up to ${cap} character${cap > 1 ? 's' : ''} — unstarred ${dropped.map(nameOf).join(' & ')}.`
         : '',
       nextAspect !== aspect ? `${label} does not render ${aspect} — switched the aspect to ${nextAspect}.` : '',
+      nextResolution !== resolution ? `${label} does not render ${resolution} — switched the resolution to ${nextResolution}.` : '',
     ].filter(Boolean);
     if (dropped.length) setCastSlugs(keptCast);
     if (nextAspect !== aspect) setAspect(nextAspect);
+    if (nextResolution !== resolution) setResolution(nextResolution);
     setTrimNote(notes.join(' ') || null);
   };
   // Keep the provider across a model switch when the new model runs there too; backendIdFor falls
@@ -189,6 +214,9 @@ export function CreateHero({ idea, onIdeaChange, ideaRef }: {
       idea: trimmed,
       backend,
       aspect,
+      // always sent: the control shows a selected tier, and pinning it on the run keeps the render
+      // (and its price) at what the user SAW even if the .env default moves later
+      resolution,
       durationS: durationMode === 'custom' && Number.isFinite(customS) ? clampDuration(customS) : null,
       ...(castSlugs.length ? { cast: castSlugs } : {}),
       // derived from the LIVE list, not raw envSlug state — an environment deleted while Home is
@@ -373,6 +401,16 @@ export function CreateHero({ idea, onIdeaChange, ideaRef }: {
                 );
               })}
             </div>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <span className="text-caption font-medium text-ink-muted">Resolution</span>
+            <SegmentedControl
+              label="Resolution"
+              value={resolution}
+              onChange={(r) => { touched.current = true; setTrimNote(null); setResolution(r); }}
+              segments={offeredResolutions.map((r) => ({ value: r, label: r }))}
+            />
           </div>
 
           <div className="flex flex-col gap-1.5">

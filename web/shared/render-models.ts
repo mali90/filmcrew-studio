@@ -15,9 +15,12 @@ import {
   aspectsFor as registryAspectsFor,
   capsFor as registryCapsFor,
   castLimitFor as registryCastLimitFor,
+  defaultResolutionFor as registryDefaultResolutionFor,
   normalizeBackend as registryNormalizeBackend,
+  resolutionEnvFor as registryResolutionEnvFor,
+  resolutionsFor as registryResolutionsFor,
 } from '../../src/lib/render-models.js';
-import type { Aspect, Backend } from './api-types';
+import type { Aspect, Backend, Resolution } from './api-types';
 
 // The registry is untyped JS; describe here only the fields the UI actually reads.
 interface ModelEntry { label: string; shortLabel?: string; castLimit: number; aspects: Aspect[]; providers: Record<string, unknown> }
@@ -82,6 +85,13 @@ export function backendIdFor(model: string, provider: string): Backend {
 export const castLimitFor = (value: string): number => registryCastLimitFor(value) as number;
 /** The ratios this model renders, in menu order (never 'adaptive'/'auto'). */
 export const aspectsFor = (value: string): Aspect[] => registryAspectsFor(value) as Aspect[];
+/** The render tiers this model offers, lowest first — the resolution control's segments. */
+export const resolutionsFor = (value: string): Resolution[] => registryResolutionsFor(value) as Resolution[];
+/** The model's own default tier (its config knob's fallback, before any .env override). */
+export const defaultResolutionFor = (value: string): Resolution => registryDefaultResolutionFor(value) as Resolution;
+/** The .env knob this model's resolution rides (KLING_RESOLUTION / SEEDANCE_RESOLUTION /
+ *  SEEDANCE25_RESOLUTION) — what the wizard's buildUpdates writes, per MODEL, never per provider. */
+export const resolutionEnvFor = (value: string): string => registryResolutionEnvFor(value) as string;
 
 // ── Seams: how strongly this backend can pin a boundary frame (WS2-P5) ──────────────────────────
 //
