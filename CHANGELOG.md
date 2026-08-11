@@ -220,6 +220,27 @@
   install commands.
 
 ### Fixed
+- **Paying to fix one clip no longer tears down the review room.** Clicking *Re-render K2* used to
+  flip the whole page back to the render-phase job list: the video you were just watching vanished,
+  and three job cards appeared — two of them "Done" for clips you never touched. A segment re-render
+  now keeps the review stage mounted: the current cut keeps playing while the new clip is rendered
+  (the stage falls back to the cut's own file while the master is rebuilt), a banner names the
+  segment in flight with a ticking elapsed ("Re-rendering K2 — you're watching the current cut; the
+  new clip takes its place here when it lands"), the tile sweeps, and the strip's *Re-render* button
+  is disabled with the one-render-at-a-time reason on the button itself. Full renders, probes and
+  first renders keep the job-card view — there, everything really is being replaced. Around that
+  fix, the same pass makes the run page answer the questions it used to leave open: the resolution
+  you picked (and the cast with its reference counts) now shows in the run facts, the plan summary
+  (`… · 16:9 · 720p · …`), the approve bar's upscale caption (the cut's *actual* short side), and
+  the final card's facts; the money captions at plan-ready name the run's real provider — never a
+  hardcoded "fal" — and explain what a probe buys; the review rail leads with the free exit
+  (Approve → Change something → History) and the History header keeps the running "≈$ so far"
+  total on screen; the post-approve card says what Topaz is actually lifting toward (720p/1080p/4K
+  from the run's own estimate, not a hardcoded 1080p) with an elapsed line; the phase spine reads
+  **Plan ✓ / waiting on you** at plan-ready instead of pulsing "active" at the user; a dropped
+  live stream says so under the spine while paid work is in flight; revising from review says the
+  clips, takes and cut are untouched; and *Cancel render* states what cancelling keeps and that
+  the clip in flight may still bill.
 - **Starring a cast now sends the character's FULL reference set, not one image each.** A run with
   three starred characters — each carrying seven reference views — could reach a Seedance render
   with a single image per character: the Casting agent's "pick the smallest set" guidance biased it
