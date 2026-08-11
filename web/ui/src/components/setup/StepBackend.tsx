@@ -6,7 +6,8 @@ import type { Dispatch } from 'react';
 import clsx from 'clsx';
 import type { Backend } from '../../../../shared/api-types';
 import {
-  MODEL_IDS, aspectsFor, backendIdFor, canonicalBackendFor, castLimitFor, modelLabelFor, providersFor,
+  MODEL_IDS, aspectsFor, backendIdFor, canonicalBackendFor, castLimitFor, defaultResolutionFor,
+  modelLabelFor, providersFor, resolutionsFor,
 } from '../../../../shared/render-models';
 import { FixFooter } from './FixFooter';
 import type { WizardAction, WizardState } from './wizard';
@@ -80,8 +81,14 @@ export function StepBackend({ state, dispatch }: { state: WizardState; dispatch:
                 type: 'patch',
                 // A Segmind validation is MODEL-scoped (validate-segmind probes the picked model's
                 // configured slug), so switching cards resets it — a check that passed for the 2.5
-                // slug says nothing about a bad SEGMIND_SEEDANCE20_SLUG.
-                patch: { backend: b.id, ...(b.id !== state.backend ? { segmindCheck: { state: 'idle' as const } } : {}) },
+                // slug says nothing about a bad SEGMIND_SEEDANCE20_SLUG. A resolution off the new
+                // model's ladder trims to that model's default — the presets step must never carry
+                // (and buildUpdates never write) a tier the chosen backend cannot render.
+                patch: {
+                  backend: b.id,
+                  ...(b.id !== state.backend ? { segmindCheck: { state: 'idle' as const } } : {}),
+                  ...(resolutionsFor(b.id).includes(state.resolution) ? {} : { resolution: defaultResolutionFor(b.id) }),
+                },
               })}
               className={clsx(
                 'flex flex-col items-start rounded-r2 border p-4 text-left transition-colors duration-[120ms]',

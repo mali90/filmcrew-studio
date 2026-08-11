@@ -6,7 +6,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { api, ApiClientError } from '../../api/client';
 import {
-  MODEL_IDS, aspectsFor, backendIdFor, canonicalBackendFor, modelLabelFor, providersFor,
+  MODEL_IDS, aspectsFor, backendIdFor, canonicalBackendFor, defaultResolutionFor, modelIdFor,
+  modelLabelFor, providersFor, resolutionsFor,
 } from '../../../../shared/render-models';
 import { Button } from '../ui/Button';
 import { useToast } from '../ui/Toast';
@@ -33,6 +34,16 @@ const optionFor = (value: string): string => {
 const aspectsOf = (value: string): string[] => {
   try { return aspectsFor(value) as string[]; } catch { return ['9:16', '16:9', '1:1']; }
 };
+const resolutionsOf = (value: string): string[] => {
+  try { return resolutionsFor(value) as string[]; } catch { return []; }
+};
+
+/** The saved tier for a backend's MODEL, from the per-model map GET /settings/defaults answers —
+ *  the server reads the knob each model ACTUALLY uses, so with a Seedance backend this is never a
+ *  stale KLING_RESOLUTION value the render would ignore. Registry default until the query lands. */
+const savedResolutionFor = (value: string, d?: { resolutions?: Record<string, string> }): string => {
+  try { return d?.resolutions?.[modelIdFor(value)] ?? defaultResolutionFor(value); } catch { return ''; }
+};
 
 // Silhouette + plain-word name per ratio; WHICH ratios are offered comes from the chosen model.
 const ASPECT_SHAPE: Record<string, { label: string; box: string }> = {
@@ -51,22 +62,27 @@ export function DefaultsCard() {
 
   const [backend, setBackend] = useState(BACKEND_OPTIONS[0]!.value as string);
   const [aspect, setAspect] = useState('9:16');
+  const [resolution, setResolution] = useState(savedResolutionFor(BACKEND_OPTIONS[0]!.value));
   const [seeded, setSeeded] = useState(false);
 
   useEffect(() => {
     if (seeded || !q.data) return;
     setBackend(optionFor(q.data.backend));
     setAspect(q.data.aspect);
+    setResolution(savedResolutionFor(optionFor(q.data.backend), q.data));
     setSeeded(true);
   }, [seeded, q.data]);
 
   const offeredAspects = aspectsOf(backend);
   // Saving a pair the create page would refuse helps nobody: switching model trims an unrenderable
-  // ratio to that model's first, exactly as the create page does.
+  // ratio to that model's first, exactly as the create page does. The resolution snaps to the NEW
+  // model's own saved tier — each model has its own knob, and showing the previous model's pick as
+  // "selected" would misreport what is saved (and silently rewrite the knob on Save).
   const chooseBackend = (next: string) => {
     setBackend(next);
     const offered = aspectsOf(next);
     if (!offered.includes(aspect)) setAspect(offered[0]!);
+    setResolution(savedResolutionFor(next, q.data));
   };
 
   const save = useMutation({
@@ -86,6 +102,9 @@ export function DefaultsCard() {
     // Compare canonically: a legacy saved value that means the selected pair is unchanged.
     if (backend !== (q.data ? optionFor(q.data.backend) : backend)) d.backend = backend;
     if (aspect !== q.data?.aspect) d.aspect = aspect;
+    // Compared against the CHOSEN model's own saved tier: the server writes `resolution` to that
+    // model's knob (the posted backend's, or the saved default's when only the tier changed).
+    if (resolution && resolution !== savedResolutionFor(backend, q.data)) d.resolution = resolution;
     if (!Object.keys(d).length) {
       toast({ kind: 'info', text: 'Nothing changed — there is nothing to save.' });
       return;
@@ -151,10 +170,36 @@ export function DefaultsCard() {
           </div>
         </div>
 
+        <div>
+          <span className="mb-1 block text-label text-ink-secondary">Resolution</span>
+          <div role="radiogroup" aria-label="Default resolution" className="flex flex-wrap gap-1.5">
+            {resolutionsOf(backend).map((value) => (
+              <button
+                key={value}
+                type="button"
+                role="radio"
+                aria-checked={resolution === value}
+                onClick={() => setResolution(value)}
+                className={clsx(
+                  'tnum inline-flex h-8 items-center rounded-full border px-3 text-label transition-colors duration-[120ms]',
+                  resolution === value
+                    ? 'border-accent bg-[var(--accent-soft)] text-ink'
+                    : 'border-line bg-surface-2 text-ink-secondary hover:border-line-strong',
+                )}
+              >
+                {value}
+              </button>
+            ))}
+          </div>
+          <p className="mt-1 text-caption text-ink-muted">
+            {`${modelLabelFor(backend)}’s own tiers, saved to its own setting — each model keeps its own default.`}
+          </p>
+        </div>
+
         <p className="text-caption text-ink-muted">
-          Renders are deliberately economical: Kling outputs ~720p, Seedance 2.0 480p, Seedance 2.5
-          480p or 720p. Approving a finished video offers an optional Topaz upscale to 1080p —
-          that&rsquo;s where full quality comes from, not from rendering large.
+          Renders are deliberately economical by default, and Seedance bills per pixel — higher
+          tiers cost more per second. Approving a finished video offers an optional Topaz upscale
+          to 1080p — full quality can come from there, not from rendering large.
         </p>
         <p className="text-caption text-ink-muted">
           The same model bills differently per provider: Segmind runs Seedance at roughly half

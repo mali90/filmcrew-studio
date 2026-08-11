@@ -270,6 +270,38 @@ test('settings: masked env read, previewed diff, write, defaults round-trip', as
   assert.equal(status.json().defaults.backend, 'kling');
 });
 
+// The defaults surfaces write and read the knob the TARGET model actually uses. Writing
+// KLING_RESOLUTION for every backend (the old behavior) is how a Seedance default silently
+// rendered at its own default whatever the user saved.
+test('defaults: resolution rides the target model\'s own knob; reads report the knob the backend uses', async () => {
+  const envFile = path.join(envRoot, '.env');
+  const original = fs.readFileSync(envFile, 'utf8');
+  try {
+    const save = await post('/api/settings/defaults', { backend: 'seedance-2.5@segmind', resolution: '480p' });
+    assert.equal(save.statusCode, 200, save.body);
+    const env = fs.readFileSync(envFile, 'utf8');
+    assert.match(env, /^SEEDANCE25_RESOLUTION=480p$/m, '2.5 has its own knob');
+    assert.ok(!/^KLING_RESOLUTION=/m.test(env), 'the kling knob stays untouched');
+
+    // migration honesty: the reported tier is the one the default backend's render will USE
+    const d = (await get('/api/settings/defaults')).json();
+    assert.equal(d.resolution, '480p');
+    assert.equal(d.resolutions['seedance-2.5'], '480p');
+    assert.equal(d.resolutions['kling-o3'], '1080p', 'other models answer their own knob/default');
+    assert.equal((await get('/api/setup/status')).json().defaults.resolution, '480p');
+
+    // a tier the target model cannot render is a 400 naming its ladder — nothing written
+    const bad = await post('/api/settings/defaults', { resolution: '4k' }); // saved default is now 2.5
+    assert.equal(bad.statusCode, 400, bad.body);
+    assert.match(bad.json().hint, /480p, 720p/);
+    assert.ok(!/^SEEDANCE25_RESOLUTION=4k$/m.test(fs.readFileSync(envFile, 'utf8')));
+    // a resolution-only save maps onto the SAVED default backend's knob
+    const only = await post('/api/settings/defaults', { resolution: '720p' });
+    assert.equal(only.statusCode, 200, only.body);
+    assert.match(fs.readFileSync(envFile, 'utf8'), /^SEEDANCE25_RESOLUTION=720p$/m);
+  } finally { fs.writeFileSync(envFile, original); }
+});
+
 test('doctor runs as a fresh child and reports machine-readable checks', async () => {
   const res = await post('/api/doctor', {});
   assert.equal(res.statusCode, 200, res.body);

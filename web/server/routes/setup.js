@@ -42,9 +42,15 @@ export function registerSetupRoutes(app) {
     // so importing it is the allowed pattern.
     const backend = get('RENDER_BACKEND') || 'kling';
     let renderProvider = 'fal';
+    // The reported resolution follows the same rule: the knob the default backend's MODEL actually
+    // reads — a Seedance default with only KLING_RESOLUTION in .env must not display a value the
+    // render will never use.
+    let resolution = get('KLING_RESOLUTION') || '1080p';
     try {
-      const { normalizeBackend } = await import(path.join(root, 'src/lib/render-models.js'));
-      renderProvider = normalizeBackend(backend).provider;
+      const { defaultResolutionFor, normalizeBackend, resolutionEnvFor } = await import(path.join(root, 'src/lib/render-models.js'));
+      const { model, provider: rp } = normalizeBackend(backend);
+      renderProvider = rp;
+      resolution = get(resolutionEnvFor(model)) || defaultResolutionFor(model);
     } catch { /* unknown backend — doctor's own check names it; the fal gate stays as the fallback */ }
     const renderKeySet = renderProvider === 'segmind' ? segmindKeySet : falKeySet;
     return {
@@ -53,7 +59,7 @@ export function registerSetupRoutes(app) {
       fal: { hasKey: falKeySet },
       segmind: { hasKey: segmindKeySet },
       renderProvider,
-      defaults: { backend, aspect: get('KLING_ASPECT') || '9:16', resolution: get('KLING_RESOLUTION') || '1080p' },
+      defaults: { backend, aspect: get('KLING_ASPECT') || '9:16', resolution },
       complete: llmKeySet && renderKeySet,
     };
   });
@@ -156,11 +162,20 @@ export function registerSetupRoutes(app) {
 
   app.get('/api/settings/defaults', async () => {
     const { get } = await envSettings.read();
+    const { RENDER_MODELS, defaultResolutionFor, normalizeBackend, resolutionEnvFor } = await import(path.join(root, 'src/lib/render-models.js'));
+    // The saved tier of the knob EACH MODEL actually reads (or the model's own default) — never a
+    // blanket KLING_RESOLUTION read: with a Seedance default backend that knob is not what the
+    // render uses, and showing its value here is exactly the lie this endpoint used to tell.
+    const effectiveFor = (model) => get(resolutionEnvFor(model)) || defaultResolutionFor(model);
+    const backend = get('RENDER_BACKEND') || 'kling';
+    let resolution;
+    try { resolution = effectiveFor(normalizeBackend(backend).model); } catch { resolution = get('KLING_RESOLUTION') || '1080p'; }
     return {
-      backend: get('RENDER_BACKEND') || 'kling',
+      backend,
       aspect: get('KLING_ASPECT') || '9:16',
-      resolution: get('KLING_RESOLUTION') || '1080p',
-      seedanceResolution: get('SEEDANCE_RESOLUTION') || '480p',
+      resolution, // the DEFAULT backend's effective tier — what its next render will actually use
+      resolutions: Object.fromEntries(Object.keys(RENDER_MODELS).map((m) => [m, effectiveFor(m)])),
+      seedanceResolution: get('SEEDANCE_RESOLUTION') || '480p', // legacy field — old readers keep working
     };
   });
 
@@ -169,8 +184,23 @@ export function registerSetupRoutes(app) {
     const updates = {};
     if (backend !== undefined) updates.RENDER_BACKEND = backend === 'kling' ? '' : String(backend);
     if (aspect !== undefined) updates.KLING_ASPECT = String(aspect);
-    if (resolution !== undefined) updates.KLING_RESOLUTION = String(resolution);
+    if (resolution !== undefined) {
+      // The tier belongs to a MODEL's knob, resolved through the registry: the backend posted with
+      // it, or the saved default backend when only the tier changed. Writing KLING_RESOLUTION
+      // unconditionally here is what let a Seedance default ignore the wizard's pick.
+      const { capsFor, normalizeBackend } = await import(path.join(root, 'src/lib/render-models.js'));
+      const target = backend !== undefined ? String(backend) : ((await envSettings.read()).get('RENDER_BACKEND') || 'kling');
+      let caps;
+      try { caps = capsFor(normalizeBackend(target).id); } catch (e) {
+        throw Object.assign(new Error(e.message), { statusCode: 400, hint: 'save a valid backend with (or before) its resolution' });
+      }
+      if (!caps.resolutions.includes(String(resolution))) {
+        throw Object.assign(new Error(`"${resolution}" is not a ${caps.label} resolution`), { statusCode: 400, hint: `${caps.label} renders ${caps.resolutions.join(', ')}` });
+      }
+      updates[caps.resolutionEnv] = String(resolution);
+    }
     if (seedanceResolution !== undefined) {
+      // legacy field, kept accepted: pre-registry callers set the shared Seedance knob directly
       if (!['480p', '720p', '1080p'].includes(String(seedanceResolution))) {
         throw Object.assign(new Error(`"${seedanceResolution}" is not a Seedance resolution`), { statusCode: 400, hint: '480p, 720p or 1080p' });
       }

@@ -1,9 +1,13 @@
 // Step 5 — default aspect + resolution. Aspect reads as shaped tiles; resolution is a segmented
-// control. Both are just defaults for the create form.
+// control offering the CHOSEN backend's own ladder (2.5 is 480p/720p; Kling starts at 720p) and
+// saved to that model's own .env knob (wizard buildUpdates). Both are just defaults for the create
+// form.
 import type { Dispatch } from 'react';
 import clsx from 'clsx';
 import type { Aspect } from '../../../../shared/api-types';
+import { capsFor, modelLabelFor, resolutionsFor } from '../../../../shared/render-models';
 import { Button } from '../ui/Button';
+import { SegmentedControl } from '../ui/SegmentedControl';
 import type { WizardAction, WizardState } from './wizard';
 
 const ASPECT_TILES: { value: Aspect; shape: string; note: string }[] = [
@@ -54,6 +58,23 @@ export function StepPresets({ state, dispatch }: { state: WizardState; dispatch:
         </div>
       </div>
 
+
+      <div className="mt-6">
+        <span className="text-caption font-medium text-ink-muted">Resolution</span>
+        <div className="mt-1.5">
+          <SegmentedControl
+            label="Default resolution"
+            value={state.resolution}
+            onChange={(resolution) => dispatch({ type: 'patch', patch: { resolution } })}
+            segments={resolutionsFor(state.backend).map((r) => ({ value: r, label: r }))}
+          />
+        </div>
+        <p className="mt-1.5 text-caption text-ink-faint">
+          {capsFor(state.backend).family === 'seedance'
+            ? `${modelLabelFor(state.backend)}’s own tiers — Seedance bills per pixel, so higher tiers cost more per second. Approving a finished video can upscale it to 1080p.`
+            : `${modelLabelFor(state.backend)}’s own tiers, billed at one flat per-second rate. Approving a finished video can upscale it to 1080p.`}
+        </p>
+      </div>
 
       <div className="mt-8 flex justify-end">
         <Button variant="primary" size="lg" onClick={() => dispatch({ type: 'next' })}>Continue</Button>

@@ -1,11 +1,12 @@
 // The first-run wizard's state machine — one reducer holds every answer so Back is lossless
 // within the session. Nothing persists client-side: the .env written at the end IS the persistence.
-import type { Aspect, Backend } from '../../../../shared/api-types';
+import type { Aspect, Backend, Resolution } from '../../../../shared/api-types';
+import { defaultResolutionFor, resolutionEnvFor } from '../../../../shared/render-models';
 import type { KeyCheck } from '../ui/KeyField';
 
 export type Provider = 'claude' | 'openai' | 'gemini' | 'copilot';
 export type Transport = 'api' | 'cli';
-export type Resolution = '720p' | '1080p' | '4k';
+export type { Resolution };
 
 // `backend` comes BEFORE the render-key step: the key the wizard must collect depends on which
 // provider the chosen backend bills (a Segmind pick needs SEGMIND_API_KEY, not a fal key).
@@ -44,7 +45,7 @@ export const initialWizardState: WizardState = {
   segmindCheck: { state: 'idle' },
   backend: 'kling',
   aspect: '9:16',
-  resolution: '1080p',
+  resolution: defaultResolutionFor('kling'), // the default backend's own tier — trimmed on backend switch
 };
 
 export type WizardAction =
@@ -103,7 +104,11 @@ export function buildUpdates(s: WizardState): Record<string, string> {
     ...(s.segmindKey ? { SEGMIND_API_KEY: s.segmindKey } : {}),
     RENDER_BACKEND: s.backend === 'kling' ? '' : s.backend,
     KLING_ASPECT: s.aspect,
-    KLING_RESOLUTION: s.resolution,
+    // The knob the CHOSEN backend's model actually reads (KLING_RESOLUTION / SEEDANCE_RESOLUTION /
+    // SEEDANCE25_RESOLUTION, from the registry). Writing KLING_RESOLUTION unconditionally was the
+    // silent bug: a Seedance default backend ignored the wizard's pick entirely and rendered at its
+    // own .env default. Other models' knobs are left alone — a rerun must not blank them.
+    [resolutionEnvFor(s.backend)]: s.resolution,
   };
   if (s.transport === 'api') {
     const keyEnv = PROVIDERS.find((p) => p.id === s.provider)?.keyEnv;

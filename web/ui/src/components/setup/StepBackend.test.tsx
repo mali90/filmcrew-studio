@@ -46,10 +46,22 @@ describe('StepBackend — the cards are the registry', () => {
     const { dispatch, group } = renderStep();
     await userEvent.click(within(group).getByRole('radio', { name: /Seedance 2\.5 Segmind/ }));
     // The segmindCheck reset rides along: validate-segmind probes the PICKED model's configured
-    // slug, so a check that passed for one model says nothing about another's.
+    // slug, so a check that passed for one model says nothing about another's. The resolution trim
+    // does too: the initial 1080p default is off 2.5's ladder (480p/720p), so the patch snaps it to
+    // the new model's default — the presets step and buildUpdates must never hold a tier the chosen
+    // backend cannot render.
     expect(dispatch).toHaveBeenCalledWith({
       type: 'patch',
-      patch: { backend: 'seedance-2.5@segmind', segmindCheck: { state: 'idle' } },
+      patch: { backend: 'seedance-2.5@segmind', segmindCheck: { state: 'idle' }, resolution: '720p' },
+    });
+  });
+
+  it('a resolution the new model also renders survives the switch (no spurious trim)', async () => {
+    const { dispatch, group } = renderStep({ resolution: '720p' });
+    await userEvent.click(within(group).getByRole('radio', { name: /Seedance 2\.5 fal/ }));
+    expect(dispatch).toHaveBeenCalledWith({
+      type: 'patch',
+      patch: { backend: 'seedance-2.5@fal', segmindCheck: { state: 'idle' } },
     });
   });
 });
