@@ -130,6 +130,22 @@ describe('PlanReview — provider naming and probe explanation', () => {
     expect(screen.queryByText(/fal bills/)).not.toBeInTheDocument();
   });
 
+  // U2b — the sentence read immediately before the first spend states what is being bought:
+  // aspect and resolution included, since the resolution pick changes the bill.
+  it('the summary line states aspect and the picked resolution', async () => {
+    const run = structuredClone(makeRun('plan-ready'));
+    run.manifest!.resolution = '720p';
+    renderRunPage(run);
+    await screen.findByRole('region', { name: 'The plan is ready' });
+    expect(screen.getByText(/· 9:16 · 720p ·/)).toBeInTheDocument();
+  });
+
+  it('a run without a resolution pick reads "default res" — the model decides', async () => {
+    renderRunPage(makeRun('plan-ready'));
+    await screen.findByRole('region', { name: 'The plan is ready' });
+    expect(screen.getByText(/· 9:16 · default res ·/)).toBeInTheDocument();
+  });
+
   it('the summary line names the model in human words, not the raw backend id', async () => {
     renderRunPage(makeRun('plan-ready'));
     await screen.findByRole('region', { name: 'The plan is ready' });

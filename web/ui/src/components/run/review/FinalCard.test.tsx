@@ -39,6 +39,29 @@ describe('FinalCard', () => {
     expect(screen.queryByRole('button', { name: /reveal|copy path/i })).not.toBeInTheDocument();
   });
 
+  // U2c — the facts grid states what resolution was DELIVERED: the approved cut's own record
+  // first, the latest render's dimension next, and only then the run's pick as a stand-in.
+  it('states the delivered resolution from the approved cut\'s record', () => {
+    const run = makeRun('complete');
+    run.manifest!.cuts = [{ id: 'c1', take: 't1', master: '/abs/out/ocean.mp4', shortSide: 1080, createdAt: '2026-07-04T10:00:00.000Z' }];
+    renderReview(<FinalCard run={run} />);
+    expect(screen.getByText('Resolution')).toBeInTheDocument();
+    expect(screen.getByText('1080p')).toBeInTheDocument();
+  });
+
+  it('falls back to the run\'s resolution pick when no dimension was recorded', () => {
+    const run = makeRun('complete'); // fixture cut carries no shortSide
+    run.manifest!.resolution = '720p';
+    renderReview(<FinalCard run={run} />);
+    expect(screen.getByText('720p')).toBeInTheDocument();
+  });
+
+  it('shows an em dash when neither a dimension nor a pick is on record', () => {
+    renderReview(<FinalCard run={makeRun('complete')} />);
+    const dt = screen.getByText('Resolution');
+    expect(dt.parentElement?.textContent).toBe('Resolution—');
+  });
+
   // estUsd:null means two different things in a ledger, and only one of them is "free": an assemble
   // really costs nothing, while a Segmind render spent money at a rate nobody publishes. Summing
   // them together would print a confident "$0.00" over a real bill.

@@ -94,7 +94,10 @@ export function ApproveBar({ run, cutId = null }: { run: RunDetail; cutId?: stri
           <span className="mt-0.5 block text-caption text-ink-muted">
             {alreadyHD
               ? `This video is already ${shortSide}p — at or above the ${targetLabel} target.`
-              : `One Topaz job per clip — skip it if the render is already ${targetLabel}.`}
+              : shortSide != null
+                // the cut's actual resolution, stated where the upscale decision is made (U2d)
+                ? `This cut is ${shortSide}p — one Topaz job per clip lifts it toward ~${targetLabel}.`
+                : `One Topaz job per clip — skip it if the render is already ${targetLabel}.`}
           </span>
         </label>
       </div>

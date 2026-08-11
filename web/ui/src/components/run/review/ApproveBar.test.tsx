@@ -74,6 +74,20 @@ describe('ApproveBar', () => {
     expect(screen.getByRole('button', { name: 'Approve' })).toBeEnabled();
   });
 
+  // U2d — the cut's ACTUAL resolution belongs beside the upscale decision; only a cut with no
+  // dimension on record keeps the generic caption.
+  it('states the cut\'s own resolution in the non-HD caption', () => {
+    const run = makeRun('review');
+    run.manifest!.cuts = [{ id: 'c1', take: 't1', master: '/abs/out/x.mp4', shortSide: 496, createdAt: 'now' }];
+    renderReview(<ApproveBar run={run} />);
+    expect(screen.getByText('This cut is 496p — one Topaz job per clip lifts it toward ~1080p.')).toBeInTheDocument();
+  });
+
+  it('keeps the generic caption when the cut\'s resolution is unknown', () => {
+    renderReview(<ApproveBar run={makeRun('review')} />); // fixture cut records no shortSide
+    expect(screen.getByText(/One Topaz job per clip — skip it if the render is already 1080p\./)).toBeInTheDocument();
+  });
+
   it('approves without upscale — free, no cost tag on the button', async () => {
     const captured = captureApprove();
     renderReview(<ApproveBar run={makeRun('review')} />);

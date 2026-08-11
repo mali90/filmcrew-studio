@@ -99,8 +99,10 @@ export function PlanReview({ run }: { run: RunDetail }) {
   return (
     <section aria-label="The plan is ready" className="rounded-r3 border border-line bg-surface-1 p-5">
       <h3 className="text-title text-ink">The plan is ready</h3>
+      {/* The sentence read immediately before the first spend states what is being bought —
+          aspect and resolution included, since the resolution pick changes the bill (U2b). */}
       <p className="tnum mt-1.5 text-body text-ink-secondary">
-        {spec?.project?.title ?? run.title ?? run.idea} · {jobs.length} job{jobs.length === 1 ? '' : 's'} · {totalSeconds}s total · {modelLabelFor(run.backend ?? 'kling')}
+        {spec?.project?.title ?? run.title ?? run.idea} · {jobs.length} job{jobs.length === 1 ? '' : 's'} · {totalSeconds}s total · {run.aspect} · {run.manifest?.resolution ?? 'default res'} · {modelLabelFor(run.backend ?? 'kling')}
       </p>
 
       <div className="mt-4 flex flex-wrap items-center gap-2">

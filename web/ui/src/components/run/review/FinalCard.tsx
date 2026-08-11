@@ -29,6 +29,10 @@ export function FinalCard({ run }: { run: RunDetail }) {
 
   const spendText = spendLabel(run.manifest?.costLedger ?? []);
   const title = run.title ?? 'Your video';
+  // The DELIVERED resolution (U2c): the approved cut's own recorded short side, else the latest
+  // render's; only with no dimension on record does the run's resolution PICK stand in for it.
+  const approvedCut = run.manifest?.cuts.find((c) => c.id === run.manifest?.approved?.cut);
+  const shortSide = approvedCut?.shortSide ?? run.latestRender?.masterShortSide;
   // the on-disk basename ("<slug>-<id>-final.mp4") is the download's filename
   const fileName = run.finalFsPath?.split('/').pop() ?? `${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.mp4`;
 
@@ -79,6 +83,10 @@ export function FinalCard({ run }: { run: RunDetail }) {
         <div>
           <dt className="text-caption text-ink-muted">Upscaled</dt>
           <dd className="text-dense text-ink">{run.manifest?.approved?.upscaled ? 'yes' : 'no'}</dd>
+        </div>
+        <div>
+          <dt className="text-caption text-ink-muted">Resolution</dt>
+          <dd className="tnum text-dense text-ink">{shortSide ? `${shortSide}p` : run.manifest?.resolution ?? '—'}</dd>
         </div>
         <div>
           <dt className="text-caption text-ink-muted">Total estimated cost</dt>
