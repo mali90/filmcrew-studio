@@ -3,6 +3,20 @@
 ## Unreleased
 
 ### Added
+- **The resolution you pick now actually governs the render — end to end, and per run.** It used
+  to be written to `KLING_RESOLUTION` no matter which backend you chose, so a Seedance default
+  (Seedance reads `SEEDANCE_RESOLUTION` / `SEEDANCE25_RESOLUTION`) silently ignored the wizard's
+  pick and rendered at its own `.env` default. The knob each model reads now lives in the model
+  registry, and every surface resolves it from there: the wizard and Settings offer the chosen
+  model's *own* tiers (Seedance 2.5 is 480p/720p only; Kling starts at 720p) and write that
+  model's own variable, and both read back the value the default backend will actually use — never
+  a stale Kling setting a Seedance render ignores. The create page gains a **Resolution** control
+  beside Aspect: the pick is validated against the model's ladder before anything spawns (a tier
+  the model cannot render is a 400, not a paid surprise), stored on the run, re-applied to every
+  child spawn — plan, render, revise, re-render — and priced by the estimate and cost ledger, so a
+  run created at 480p is never quoted 720p money or vice versa. The planner's context stops
+  hardcoding Kling's `4k/1080p/720p` enum too, so it can never suggest a tier the renderer would
+  refuse.
 - **A delivered run can be reopened for changes — and until it is, the server itself refuses to
   spend on it.** Approving used to lock a run in the interface only: a stale tab, a second browser
   window, or a double-click that landed just after the approval still reached `POST /render` and
