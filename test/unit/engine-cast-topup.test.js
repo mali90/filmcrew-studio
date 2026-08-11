@@ -1,10 +1,12 @@
 // The STARRED-cast contract, deterministic layer: topUpStarredElements. A starred character exists
 // to pin identity, so a plan that sampled one reference per character (the LLM's "smallest set"
 // habit) is topped up mechanically to the full set — within the exact budget validateJobs and the
-// renderers enforce: per-model maxImages, tightened by a declared combined-refs cap, minus the
-// opening/seam slot on chained jobs, capped by Kling's per-element ceiling, split evenly across the
-// starred cast. Un-starred elements are never touched. Symptom this pins down: three casts starred,
-// ONE image each sent to a Seedance render.
+// renderers enforce: per-model maxImages, tightened by a declared combined-refs cap MINUS the voice
+// references that share it, capped by Kling's per-element ceiling, split evenly across the starred
+// cast. Seam pins reserve nothing (they are dropped before a cast ref) and voice clips reserve
+// everything they will spend (nothing drops them — the renderer throws instead).
+// Un-starred elements are never touched. Symptom this pins down: three casts starred, ONE image
+// each sent to a Seedance render.
 //
 // Fixtures are SYNTHETIC (inventory arrays ride ctx.inventory) — no real profiles/references.
 import test from 'node:test';
@@ -15,12 +17,17 @@ neutralizeDotenv();
 const { topUpStarredElements, contextBlock } = await import('../../src/lib/engine.js');
 const { inventoryText, characterRefs, refBelongsTo } = await import('../../src/lib/elements.js');
 const { capsFor } = await import('../../src/lib/render-models.js');
+const { nameOf } = await import('../../src/lib/seedance-args.js');
 
 // ── synthetic fixtures ──────────────────────────────────────────────────────
 const ref = (id) => ({ id, type: 'reference', file: `elements/references/${id}.png`, abs: `/synthetic/${id}.png`, description: '' });
 const refsFor = (cslug, n) => Array.from({ length: n }, (_, i) => ref(`${cslug}-${String(i + 1).padStart(2, '0')}`));
 const el = (id, character, role = 'subject') => ({ id, role, image: `elements/references/${id}.png`, ...(character ? { character } : {}) });
-const ctxFor = (backend, castNames, inventory) => ({ backend, caps: capsFor(backend), castNames, inventory });
+const ctxFor = (backend, castNames, inventory, voiceClipFor = () => null) =>
+  ({ backend, caps: capsFor(backend), castNames, inventory, voiceClipFor });
+/** One VO line, the shape jobSpeakers reads — a speaker only costs an @AudioN ref if it has a clip. */
+const line = (shotId, speaker) => ({ shot_id: shotId, speaker, text: 'a line of dialogue' });
+const voiced = (...names) => (sp) => (names.includes(sp) ? `/synthetic/${sp}.mp3` : null);
 const countFor = (spec, cslug) => spec.kling.elements.filter((e) => (e.character ? e.character.toLowerCase().replace(/\s+/g, '-') === cslug : refBelongsTo(e.id, cslug))).length;
 
 // ── the symptom: starred char with 7 refs but ONE element → topped to budget ─
@@ -67,13 +74,12 @@ test('two starred casts split the full budget evenly (no seam reservation — pi
     },
   };
   topUpStarredElements(spec, ctxFor('seedance-2.0@fal', ['keeper', 'gull'], inv));
-  // chained 2-job Seedance render → 9-image cap minus the seam slot = 8; floor(8/2) = 4 each
+  // 2-job Seedance render, nothing voiced → the whole 9-image cap; floor(9/2) = 4 each
   assert.equal(countFor(spec, 'keeper'), 4);
   assert.equal(countFor(spec, 'gull'), 4);
-  assert.equal(spec.kling.elements.length, 8, 'roster fits the tightest (chained) job budget');
+  assert.equal(spec.kling.elements.length, 8, 'an even split of the 9-image budget leaves one slot unspendable');
   const caps = capsFor('seedance-2.0@fal');
-  assert.ok(spec.kling.jobs[0].elements.length <= caps.maxImages, 'first job within maxImages');
-  assert.ok(spec.kling.jobs[1].elements.length <= caps.maxImages - 1, 'chained job leaves the seam slot free');
+  for (const job of spec.kling.jobs) assert.ok(job.elements.length <= caps.maxImages, `${job.job_id} within maxImages`);
 });
 
 test('an authored first_frame reserves nothing — cast fills the budget and the pin drops instead', () => {
@@ -100,10 +106,96 @@ test('fal Seedance 2.5: three starred casts top up fully and never break the 50 
   };
   topUpStarredElements(spec, ctxFor('seedance-2.5@fal', casts, inv));
   const caps = capsFor('seedance-2.5@fal');
-  // chained → budget min(50, 50) - 1 = 49; floor(49/3) = 16 each
+  // nothing voiced → budget min(50, 50) = 50; floor(50/3) = 16 each
   for (const c of casts) assert.equal(countFor(spec, c), 16);
   assert.equal(spec.kling.elements.length, 48);
-  assert.ok(spec.kling.elements.length <= Math.min(caps.maxImages, caps.maxCombinedRefs) - 1);
+  assert.ok(spec.kling.elements.length <= Math.min(caps.maxImages, caps.maxCombinedRefs));
+});
+
+// ── the combined budget is shared with VOICE refs, and nothing ever drops those ──
+test('fal Seedance 2.5: a voiced line reserves its @Audio slot out of the 50 combined refs', () => {
+  // The reviewer's scenario: one starred character with more references than the model has slots,
+  // and a single voiced line. Topping up to all 50 image slots makes render-seedance count 51
+  // combined refs and THROW before it uploads anything — an engine-produced plan that cannot render.
+  const inv = refsFor('keeper', 60);
+  const spec = {
+    spec_version: '1.0',
+    kling: { elements: [el('keeper-01', 'Keeper')], jobs: [{ job_id: 'J1', shots: ['S1'] }] },
+    audio: { voice: { lines: [line('S1', 'Keeper')] } },
+  };
+  topUpStarredElements(spec, ctxFor('seedance-2.5@fal', ['keeper'], inv, voiced('Keeper')));
+  const caps = capsFor('seedance-2.5@fal');
+  assert.equal(spec.kling.elements.length, 49, 'the voice clip keeps its slot — 49 images + 1 audio = 50');
+  // The renderer's own pre-upload arithmetic, run here: images (capped) + audio refs ≤ combined cap.
+  const plannedImages = Math.min(spec.kling.elements.length, caps.maxImages);
+  assert.ok(plannedImages + 1 <= caps.maxCombinedRefs,
+    `${plannedImages} images + 1 voice ref exceeds ${nameOf(caps)}'s ${caps.maxCombinedRefs}-reference combined budget`);
+});
+
+test('two voiced speakers reserve two slots; an unregistered speaker reserves none', () => {
+  const inv = refsFor('keeper', 60);
+  const specFor = (clipFor, lines) => {
+    const spec = {
+      spec_version: '1.0',
+      kling: { elements: [el('keeper-01', 'Keeper')], jobs: [{ job_id: 'J1', shots: ['S1'] }] },
+      audio: { voice: { lines } },
+    };
+    topUpStarredElements(spec, ctxFor('seedance-2.5@fal', ['keeper'], inv, clipFor));
+    return spec.kling.elements.length;
+  };
+  assert.equal(specFor(voiced('Keeper', 'Gull'), [line('S1', 'Keeper'), line('S1', 'Gull')]), 48);
+  // A speaker the model voices NATIVELY (no minted clip) sends no @AudioN ref, so it costs nothing.
+  assert.equal(specFor(voiced('Keeper'), [line('S1', 'Keeper'), line('S1', 'Gull')]), 49);
+  assert.equal(specFor(() => null, [line('S1', 'Keeper'), line('S1', 'Gull')]), 50, 'nothing voiced — the whole budget is the cast\'s');
+  // A line belonging to a shot this job does not render is not this job's audio (jobSpeakers).
+  assert.equal(specFor(voiced('Keeper'), [line('S9', 'Keeper')]), 50);
+});
+
+test('the reservation follows the TIGHTEST job that inherits the roster', () => {
+  const inv = refsFor('keeper', 60);
+  const spec = {
+    spec_version: '1.0',
+    kling: {
+      elements: [el('keeper-01', 'Keeper')],
+      jobs: [{ job_id: 'J1', shots: ['S1'] }, { job_id: 'J2', shots: ['S2'] }], // both inherit
+    },
+    audio: { voice: { lines: [line('S2', 'Keeper'), line('S2', 'Gull')] } }, // only J2 speaks
+  };
+  topUpStarredElements(spec, ctxFor('seedance-2.5@fal', ['keeper'], inv, voiced('Keeper', 'Gull')));
+  assert.equal(spec.kling.elements.length, 48, 'the roster rides in J2 too — it has to fit J2');
+});
+
+test('a model with per-kind budgets is untouched: a voice clip never takes an image slot', () => {
+  // Seedance 2.0 declares maxImages/maxAudioRefs and NO combined cap, so the two budgets are
+  // independent and reserving an image slot for audio would just starve the cast for nothing.
+  const inv = refsFor('keeper', 20);
+  const spec = {
+    spec_version: '1.0',
+    kling: { elements: [el('keeper-01', 'Keeper')], jobs: [{ job_id: 'J1', shots: ['S1'] }] },
+    audio: { voice: { lines: [line('S1', 'Keeper')] } },
+  };
+  topUpStarredElements(spec, ctxFor('seedance-2.0@fal', ['keeper'], inv, voiced('Keeper')));
+  assert.equal(spec.kling.elements.length, capsFor('seedance-2.0@fal').maxImages);
+});
+
+test('a job naming its own subset is topped up within ITS budget, voice refs included', () => {
+  const inv = [...refsFor('keeper', 60), ...refsFor('gull', 60)];
+  const spec = {
+    spec_version: '1.0',
+    kling: {
+      elements: [el('keeper-01', 'Keeper'), el('gull-01', 'Gull')],
+      jobs: [
+        { job_id: 'J1', shots: ['S1'], elements: ['keeper-01', 'gull-01'] }, // silent
+        { job_id: 'J2', shots: ['S2'], elements: ['keeper-01', 'gull-01'] }, // two voiced speakers
+      ],
+    },
+    audio: { voice: { lines: [line('S2', 'Keeper'), line('S2', 'Gull')] } },
+  };
+  topUpStarredElements(spec, ctxFor('seedance-2.5@fal', ['keeper', 'gull'], inv, voiced('Keeper', 'Gull')));
+  // No job inherits the roster, so the pool follows the widest job (J1, silent → 50); each job is
+  // then filled to its own combined budget.
+  assert.ok(spec.kling.jobs[0].elements.length <= 50);
+  assert.ok(spec.kling.jobs[1].elements.length <= 48, `J2 sends ${spec.kling.jobs[1].elements.length} images + 2 voice refs`);
 });
 
 test('a tighter combined-refs cap wins over maxImages', () => {
@@ -115,7 +207,7 @@ test('a tighter combined-refs cap wins over maxImages', () => {
     kling: { elements: casts.map((c) => el(`${c}-01`, c)), jobs: [{ job_id: 'J1', shots: ['S1'] }, { job_id: 'J2', shots: ['S2'] }] },
   };
   topUpStarredElements(spec, { backend: 'seedance-2.5@fal', caps, castNames: casts, inventory: inv });
-  // budget min(50, 10) - 1 seam = 9; floor(9/3) = 3 each
+  // budget min(50, 10) = 10, nothing voiced; floor(10/3) = 3 each
   for (const c of casts) assert.equal(countFor(spec, c), 3);
   assert.equal(spec.kling.elements.length, 9);
 });

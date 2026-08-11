@@ -258,7 +258,15 @@
   per-clip minimum), so the preview's @Audio references always match the wire prompt.
 - **The starred-cast top-up no longer holds a reference slot back for the seam frame** — seam pins
   yield to cast references at render (a pin is a nicety, identity is not), so reserving the slot
-  only starved a starred character of one view without saving the pin.
+  only starved a starred character of one view without saving the pin. Voice references are the
+  opposite case and are now reserved: on a model that counts images and audio against ONE budget
+  (fal Seedance 2.5's 50), a starred character used to be topped up into all 50 image slots, and a
+  single voiced line with a minted clip then made the renderer count 51 references and throw before
+  uploading anything — an engine-produced, validated plan that could not render. Each job's voiced
+  speakers that really have a registered clip (capped by the model's audio-ref cap, counted exactly
+  as the renderer counts them) now come out of the roster budget, and a job naming its own element
+  subset is filled to its own. Models with per-kind budgets are untouched — there a voice clip never
+  takes an image slot.
 
 - **Paying to fix one clip no longer tears down the review room.** Clicking *Re-render K2* used to
   flip the whole page back to the render-phase job list: the video you were just watching vanished,

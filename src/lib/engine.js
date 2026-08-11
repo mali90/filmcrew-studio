@@ -15,7 +15,8 @@ import { validateSpec } from './spec-schema.js';
 import { RENDER_MODELS, capsFor, castLimitFor, normalizeBackend, demotesOpeningFrame } from './render-models.js';
 import { knobsFor } from './prompt-settings.js';
 import { buildInventory, inventoryText, characterRefs, refBelongsTo } from './elements.js';
-import { voicesInventoryText } from './voices.js';
+import { getVoiceRefClip, voicesInventoryText } from './voices.js';
+import { jobSpeakers } from './cast-groups.js';
 import { SEEDANCE_TTV_GUIDANCE } from './seedance.js';
 
 const DIR = resolvePath('engine');
@@ -376,9 +377,9 @@ function stampResolution(spec, ctx) {
  * states the same rule to the LLM, but a paid render must not hang on prompt adherence: after the
  * plan lands, any starred character carrying fewer element entries than its available reference
  * images is topped up mechanically — no re-prompt — within the SAME budget validateJobs and the
- * renderers enforce: per-model maxImages, tightened by a declared combined-refs cap (fal 2.5's 50),
- * minus the opening/seam slot where a boundary frame rides as an ordinary image ref, and capped at
- * Kling's per-element ceiling (frontal + maxRefsPerElement — extra views are sliced off at render).
+ * renderers enforce: per-model maxImages, tightened by a declared combined-refs cap (fal 2.5's 50)
+ * minus what that job's VOICE references will spend out of it, and capped at Kling's per-element
+ * ceiling (frontal + maxRefsPerElement — extra views are sliced off at render).
  * The budget splits evenly across the starred cast; un-starred elements are never touched.
  */
 export function topUpStarredElements(spec, ctx) {
@@ -387,15 +388,35 @@ export function topUpStarredElements(spec, ctx) {
   if (!cast.length || !k || typeof k !== 'object') return spec;
   const caps = ctx.caps ?? capsFor(ctx.backend);
   const inv = ctx.inventory ?? buildInventory();
+  // The voice registry is per-install (and holds proprietary cast), so it is injectable for the
+  // same reason `ctx.inventory` is: this deterministic layer is unit-tested over synthetic casts.
+  const voiceClipFor = ctx.voiceClipFor ?? getVoiceRefClip;
   const els = Array.isArray(k.elements) ? k.elements : [];
   const jobs = Array.isArray(k.jobs) ? k.jobs : [];
-  const hardCap = Math.min(Number(caps.maxImages) || 0,
-    Number.isFinite(Number(caps.maxCombinedRefs)) ? Number(caps.maxCombinedRefs) : Infinity);
-  // Cast refs get the WHOLE budget — no seam-slot reservation. SEAM_PRIORITY (seam-rule.js) drops
-  // boundary/seam pins before a cast reference ever goes: a pin is a nicety, identity is not.
-  // Reserving a slot here would starve a starred character of one view to protect a pin the
-  // renderer would sacrifice anyway the moment the budget bites.
-  const rosterBudget = hardCap;
+  const imageCap = Number(caps.maxImages) || 0;
+  const combinedCap = Number.isFinite(Number(caps.maxCombinedRefs)) ? Number(caps.maxCombinedRefs) : Infinity;
+  // Voice references are NOT sacrificial. A seam pin is (SEAM_PRIORITY drops boundary pins before a
+  // cast reference ever goes, which is why no seam slot is reserved below), but nothing drops a
+  // voice clip: render-seedance's pre-upload combined check THROWS the moment images + audio pass
+  // the model's combined cap — that check exists precisely so a paid upload round never precedes a
+  // doomed submit. A roster topped up to all 50 slots plus one voiced line is therefore an
+  // engine-produced plan that cannot render, so each job's expected audio demand is reserved here.
+  // Counted exactly the way the renderer counts it (jobSpeakers ∩ a registered voice clip, capped
+  // by maxAudioRefs); a job with no voiced speaker reserves nothing.
+  const audioDemand = (job) => {
+    if (combinedCap === Infinity) return 0; // per-kind budgets — a voice clip never takes an image slot
+    const speakers = Array.isArray(job?.shots) ? jobSpeakers(job, spec) : [];
+    return Math.min(speakers.filter((sp) => voiceClipFor(sp)).length, Number(caps.maxAudioRefs) || 0);
+  };
+  /** What ONE job may spend on images: the image cap, and whatever its voice clips leave over. */
+  const budgetFor = (job) => Math.max(0, Math.min(imageCap, combinedCap - audioDemand(job)));
+  // A job with an empty/absent `elements` inherits the WHOLE roster at render time, so the roster
+  // has to fit the tightest job that inherits it. When every job names its own subset the roster is
+  // never sent whole and the widest job budget is the honest ceiling for the shared pool.
+  const inheriting = jobs.filter((j) => !Array.isArray(j?.elements) || !j.elements.length);
+  const rosterBudget = inheriting.length ? Math.min(...inheriting.map(budgetFor))
+    : jobs.length ? Math.max(...jobs.map(budgetFor))
+    : Math.max(0, Math.min(imageCap, combinedCap));
   const perElementCap = caps.maxRefsPerElement != null ? 1 + caps.maxRefsPerElement : Infinity;
   const share = Math.min(Math.floor(rosterBudget / cast.length), perElementCap);
   const added = [];
@@ -419,11 +440,11 @@ export function topUpStarredElements(spec, ctx) {
       els.push({ id: r.id, role: 'subject', image: r.file, character: charName });
       added.push(r.id);
       // A job naming an explicit subset gets the new ref only where the character already rides,
-      // within that job's OWN budget (its own seam slot, not the roster's worst case).
-      jobs.forEach((job, idx) => {
+      // within that job's OWN budget (its own voice refs, not the roster's worst case).
+      jobs.forEach((job) => {
         if (!Array.isArray(job?.elements) || !job.elements.length) return; // inherits the roster
         if (!job.elements.some((id) => { const e = els.find((x) => x.id === id); return e && owns(e); })) return;
-        if (job.elements.length < hardCap) job.elements.push(r.id);
+        if (job.elements.length < budgetFor(job)) job.elements.push(r.id);
       });
     }
   }
