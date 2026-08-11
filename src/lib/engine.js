@@ -12,8 +12,8 @@ import log from './logger.js';
 import { ensureDir, writeJson, slug } from './util.js';
 import { complete, extractJson } from './llm.js';
 import { validateSpec } from './spec-schema.js';
-import { RENDER_MODELS, capsFor, castLimitFor, normalizeBackend } from './render-models.js';
-import { buildInventory, inventoryText } from './elements.js';
+import { RENDER_MODELS, capsFor, castLimitFor, normalizeBackend, demotesOpeningFrame } from './render-models.js';
+import { buildInventory, inventoryText, characterRefs, refBelongsTo } from './elements.js';
 import { voicesInventoryText } from './voices.js';
 import { SEEDANCE_TTV_GUIDANCE } from './seedance.js';
 
@@ -86,7 +86,12 @@ export function contextBlock(ctx) {
     // Every number here is the RENDERING MODEL's own (registry caps), with the shared fallbacks for
     // the caps a model leaves undeclared — the same pair spec-schema's validateJobs applies, so the
     // planner is never told a window the validator will then reject.
-    `- Hard caps: ≤${caps.maxSegments ?? 6} shots/job, ≤${caps.maxSeconds}s/job, ≤${caps.maxSegmentChars ?? 512} chars/segment, ≤${caps.maxImages} reference images/job`,
+    // The reference budget names every cap the CASTING arithmetic needs: the per-job image cap, a
+    // declared combined budget (fal 2.5 counts images+audio+video together), and the per-character
+    // ceiling on models whose elements slice extra views off at render (Kling's frontal + N refs).
+    `- Hard caps: ≤${caps.maxSegments ?? 6} shots/job, ≤${caps.maxSeconds}s/job, ≤${caps.maxSegmentChars ?? 512} chars/segment, ≤${caps.maxImages} reference images/job` +
+      (caps.maxCombinedRefs != null ? `, ≤${caps.maxCombinedRefs} references/job combined across images+audio+video` : '') +
+      (caps.maxRefsPerElement != null ? `, ≤${1 + caps.maxRefsPerElement} images per character (1 frontal + ${caps.maxRefsPerElement} references)` : ''),
     ...(caps.family === 'seedance'
       ? [`- Seedance packing rule: every job must total ${caps.minSeconds}–${caps.maxSeconds}s (a job under ${caps.minSeconds}s fails validation — merge short shots); the caps above are this model's own.`,
          // The budget must mirror what validateJobs will enforce, which depends on seam chaining:
@@ -307,7 +312,8 @@ export async function buildCtx({ brief, backend, aspectRatio, durationTargetS, c
     durationTargetS: durationTargetS ?? config.kling.defaultShotSeconds * 3,
     // Guaranteed text-to-video? (no cast AND no reference image to attach — see isTextToVideoPlan)
     textToVideo: isTextToVideoPlan({ backend: be, cast, refCount: inv.filter((e) => e.type === 'reference').length }),
-    inventoryText: inventoryText(inv),
+    inventoryText: inventoryText(inv, { castNames: cast?.length ? [...cast] : [] }),
+    inventory: inv, // the scanned entries themselves — topUpStarredElements re-reads them post-plan
     voicesText: voicesInventoryText(),
     profilesText: await loadProfiles(cast),
     castNames: cast?.length ? [...cast] : null,
@@ -322,6 +328,71 @@ function stampAspect(spec, aspectRatio) {
   if (!aspectRatio) return;
   if (spec.project && typeof spec.project === 'object') spec.project.aspect_ratio = aspectRatio;
   if (spec.kling && typeof spec.kling === 'object') spec.kling.aspect_ratio = aspectRatio;
+}
+
+/**
+ * Post-plan normalization — the STARRED-cast contract, enforced in code. A starred character exists
+ * precisely to pin identity, and the per-model cast caps were sized around each cast bringing its
+ * FULL reference set (seedance-2.5's 4-cast cap = 4 casts × 7 refs + seam slots = 30). 4-casting.md
+ * states the same rule to the LLM, but a paid render must not hang on prompt adherence: after the
+ * plan lands, any starred character carrying fewer element entries than its available reference
+ * images is topped up mechanically — no re-prompt — within the SAME budget validateJobs and the
+ * renderers enforce: per-model maxImages, tightened by a declared combined-refs cap (fal 2.5's 50),
+ * minus the opening/seam slot where a boundary frame rides as an ordinary image ref, and capped at
+ * Kling's per-element ceiling (frontal + maxRefsPerElement — extra views are sliced off at render).
+ * The budget splits evenly across the starred cast; un-starred elements are never touched.
+ */
+export function topUpStarredElements(spec, ctx) {
+  const cast = ctx?.castNames ?? [];
+  const k = spec?.kling;
+  if (!cast.length || !k || typeof k !== 'object') return spec;
+  const caps = ctx.caps ?? capsFor(ctx.backend);
+  const inv = ctx.inventory ?? buildInventory();
+  const els = Array.isArray(k.elements) ? k.elements : [];
+  const jobs = Array.isArray(k.jobs) ? k.jobs : [];
+  // The seam slot mirrors contextBlock's Reference budget line: a model that demotes the opening
+  // frame to an image ref loses one slot on chained follow-up jobs and on an authored first_frame.
+  const seamSlot = (idx, job) => (demotesOpeningFrame(caps) && (Boolean(job?.first_frame) || (config.kling.chainFrames && idx > 0)) ? 1 : 0);
+  const hardCap = Math.min(Number(caps.maxImages) || 0,
+    Number.isFinite(Number(caps.maxCombinedRefs)) ? Number(caps.maxCombinedRefs) : Infinity);
+  // Jobs that omit job.elements inherit the WHOLE roster, so the roster fits the tightest job.
+  const rosterBudget = Math.max(0, hardCap - (jobs.some((j, i) => seamSlot(i, j) > 0) ? 1 : 0));
+  const perElementCap = caps.maxRefsPerElement != null ? 1 + caps.maxRefsPerElement : Infinity;
+  const share = Math.min(Math.floor(rosterBudget / cast.length), perElementCap);
+  const added = [];
+  for (const name of cast) {
+    const cslug = slug(name);
+    // An element belongs to this character by its `character` field when set, else by the same
+    // filename convention the cast routes link with (id === slug, or "<slug>-…").
+    const owns = (e) => (e?.character ? slug(e.character) === cslug : refBelongsTo(String(e?.id ?? ''), cslug));
+    const avail = characterRefs(inv, name);
+    const mine = els.filter(owns);
+    const target = Math.min(avail.length, share);
+    if (mine.length >= target) continue;
+    const usedIds = new Set(els.map((e) => e.id));
+    const usedImages = new Set(els.map((e) => e.image));
+    // Keep the plan's own spelling when it named the character — characterGroups groups by the
+    // EXACT string, and a second spelling would split one cast member into two element groups.
+    const charName = mine.find((e) => e.character)?.character ?? name;
+    const fresh = avail.filter((r) => !usedIds.has(r.id) && !usedImages.has(r.file)).slice(0, target - mine.length);
+    for (const r of fresh) {
+      if (els.length >= rosterBudget) break;
+      els.push({ id: r.id, role: 'subject', image: r.file, character: charName });
+      added.push(r.id);
+      // A job naming an explicit subset gets the new ref only where the character already rides,
+      // within that job's OWN budget (its own seam slot, not the roster's worst case).
+      jobs.forEach((job, idx) => {
+        if (!Array.isArray(job?.elements) || !job.elements.length) return; // inherits the roster
+        if (!job.elements.some((id) => { const e = els.find((x) => x.id === id); return e && owns(e); })) return;
+        if (job.elements.length < Math.max(0, hardCap - seamSlot(idx, job))) job.elements.push(r.id);
+      });
+    }
+  }
+  if (added.length) {
+    if (!Array.isArray(k.elements)) k.elements = els;
+    log.info(`Casting top-up: starred cast pins its full reference set — added ${added.length} element(s) [${added.join(', ')}] (${share}/character across ${cast.length} starred, budget ${rosterBudget}).`);
+  }
+  return spec;
 }
 
 /**
@@ -356,6 +427,9 @@ export async function runEngine({ brief, runDir, durationTargetS, backend, aspec
 
   // 7 QC gate + targeted re-runs.
   spec = await qcLoop(spec, ctx, { runDir, maxFix, maxQc });
+
+  // Deterministic layer of the starred-cast contract — after the QC gate, before the final gate.
+  spec = topUpStarredElements(spec, ctx);
 
   stampAspect(spec, ctx.aspectRatio);
   spec.render_backend = ctx.backend; // the CANONICAL id this spec was planned FOR — renders must not silently fall back to the config default
@@ -529,6 +603,9 @@ export async function reviseSpec({ spec, runDir, feedback, scope, owners, brief,
   }
   cur = await qcLoop(cur, ctx, { runDir, maxFix, maxQc, filePrefix: 'spec-r07-qc', seedNote: note });
 
+  // A revision re-runs Casting on backend/cast switches — the starred-cast contract holds here too.
+  cur = topUpStarredElements(cur, ctx);
+
   stampAspect(cur, ctx.aspectRatio);
   // A revision keeps (or deliberately changes) the planned backend — never loses it — and re-stamps
   // it canonically, so revising a spec written before compound ids existed upgrades it in place.
@@ -542,4 +619,4 @@ export async function reviseSpec({ spec, runDir, feedback, scope, owners, brief,
   return { spec: cur, passed, owners: ownerList };
 }
 
-export default { runEngine, reviseSpec, ownersForScope, parseRouterTags, scopeShots };
+export default { runEngine, reviseSpec, ownersForScope, parseRouterTags, scopeShots, topUpStarredElements };

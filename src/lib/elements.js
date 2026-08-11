@@ -46,15 +46,47 @@ export function buildInventory() {
   return out;
 }
 
-/** A human-readable inventory listing for injection into an agent prompt. */
-export function inventoryText(inv = buildInventory()) {
+/** The filename convention that links a reference to a character — the id IS the character slug,
+ *  or is prefixed "<slug>-". The same rule the web cast routes apply (refLinked), kept here so the
+ *  engine and the UI can never disagree about who owns an image. */
+export const refBelongsTo = (refId, castSlug) => refId === castSlug || refId.startsWith(`${castSlug}-`);
+
+/** Every reference-type inventory entry linked to `name` (inventory order = sorted filenames). */
+export function characterRefs(inv, name) {
+  const c = slug(String(name ?? ''));
+  if (!c) return [];
+  return inv.filter((e) => e.type === 'reference' && refBelongsTo(e.id, c));
+}
+
+/**
+ * A human-readable inventory listing for injection into an agent prompt. `castNames` (the starred
+ * cast) groups the reference section per character, with a count — the Casting agent's STARRED-cast
+ * rule needs to SEE the full set to attach the full set (a flat list undersells a character whose
+ * seven views sit between other files).
+ */
+export function inventoryText(inv = buildInventory(), { castNames = [] } = {}) {
   if (!inv.length) return '(no element images found — add files under elements/references, elements/first-frame, elements/last-frame)';
   const byType = { reference: [], first_frame: [], last_frame: [] };
   for (const e of inv) byType[e.type]?.push(e);
-  const section = (label, list) =>
-    !list.length ? '' : `\n${label}:\n` + list.map((e) => `  - id: ${e.id}  file: ${e.file}${e.description ? `  — ${e.description}` : ''}`).join('\n');
+  const line = (e) => `  - id: ${e.id}  file: ${e.file}${e.description ? `  — ${e.description}` : ''}`;
+  const section = (label, list) => (!list.length ? '' : `\n${label}:\n` + list.map(line).join('\n'));
+  const REF_LABEL = 'REFERENCE IMAGES (Elements — pin subject/object/style; the per-job cap is the Hard caps line above)';
+  let refSection = section(REF_LABEL, byType.reference);
+  if (castNames?.length && byType.reference.length) {
+    const claimed = new Set();
+    const parts = [];
+    for (const name of castNames) {
+      const refs = characterRefs(inv, name);
+      for (const r of refs) claimed.add(r.id);
+      parts.push(`  ${name} — STARRED cast, ${refs.length} reference image${refs.length === 1 ? '' : 's'}:` +
+        (refs.length ? `\n${refs.map(line).join('\n')}` : ' (none on disk)'));
+    }
+    const rest = byType.reference.filter((e) => !claimed.has(e.id));
+    if (rest.length) parts.push(`  Other references (attach by relevance only):\n${rest.map(line).join('\n')}`);
+    refSection = `\n${REF_LABEL}:\n${parts.join('\n')}`;
+  }
   return [
-    section('REFERENCE IMAGES (Elements — pin subject/object/style; the per-job cap is the Hard caps line above)', byType.reference),
+    refSection,
     section('FIRST-FRAME seeds (optional opening frame)', byType.first_frame),
     section('LAST-FRAME seeds (optional closing frame — requires a first frame)', byType.last_frame),
   ].filter(Boolean).join('\n');
@@ -68,4 +100,4 @@ export function resolveImage(image) {
   return abs;
 }
 
-export default { buildInventory, inventoryText, resolveImage };
+export default { buildInventory, inventoryText, resolveImage, refBelongsTo, characterRefs };

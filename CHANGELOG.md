@@ -206,7 +206,20 @@
   install commands.
 
 ### Fixed
-- **The prompt preview's byte budget is now pinned to the renderer's own defaults, for installs
+- **Starring a cast now sends the character's FULL reference set, not one image each.** A run with
+  three starred characters — each carrying seven reference views — could reach a Seedance render
+  with a single image per character: the Casting agent's "pick the smallest set" guidance biased it
+  toward a sample, exactly the habit starring exists to override (the per-model cast caps were sized
+  around each cast bringing its whole set). Three layers fix it: the casting brief now carries a
+  STARRED-cast rule with the budget arithmetic spelled out (all of a starred character's images, the
+  per-job reference budget split evenly across the starred cast, the seam slot left free on chained
+  renders); the agents' element inventory groups references per starred character with a count, and
+  the Hard caps line states the combined-reference budget (fal Seedance 2.5's 50) and Kling's
+  per-character ceiling so the arithmetic has its numbers; and — because a paid render must not hang
+  on prompt adherence — the engine now tops the plan up **deterministically** after the QC gate:
+  any starred character with fewer element entries than its available references gets the rest
+  attached mechanically, within the same caps the validator and renderers enforce, with one log
+  line saying what was added.
   with no `.env` at all.** The server may not import `config.js` (that would let a request
   reconfigure the running process), so it re-declares the prompt-shaping defaults by hand. Every
   test that compared preview against wire wrote an explicit `.env` first, so both sides read the
