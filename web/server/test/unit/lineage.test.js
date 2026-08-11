@@ -97,9 +97,88 @@ test('re-rendering an UPSTREAM segment breaks exactly the joint after it, and no
   assert.deepEqual(joints.map((j) => j.kind), ['linked', 'broken']);
 });
 
+test('an APPLIED end pin on the PREDECESSOR holds a joint its successor cannot vouch for', PENDING, () => {
+  // The re-render dialog's closing pin, on a nonterminal segment: t5's K2 was rendered to ARRIVE on
+  // the cut's K3 (an `auto`/`end`/`both` plan), so the join is recorded in K2's seamOut. K3 was never
+  // touched, so its seamIn still names t4's K2 — judged by the successor alone, the joint the user
+  // just paid to pin reads "broken" and the stitcher hard-cuts it.
+  const run = structuredClone(fivemjo);
+  run.takes.push({
+    take: 't5',
+    at: '2026-06-28T16:00:00.000Z',
+    jobs: [{
+      jobId: 'K2',
+      clip: '/runs/5mjo/renders/t5/K2/clip.mp4',
+      seamIn: { mode: 'none', frame: null, from: null },
+      seamOut: { mode: 'soft', frame: '/runs/5mjo/renders/t5/K2/last_frame.png', to: { take: 't4', job: 'K3', clip: '/runs/5mjo/renders/t4/K3/clip.mp4' } },
+    }],
+  });
+  run.cut[1] = { jobId: 'K2', take: 't5' };
+  const { segments, joints } = lineage.computeLineage(run);
+  assert.equal(segments[2].continuesFromPrev, true, "K2 was rendered to arrive on THIS K3's opening frame");
+  assert.equal(segments[2].confidence, 'recorded', 'the predecessor wrote it down — nothing is being reconstructed');
+  assert.equal(segments[2].reason, 'source-matches');
+  assert.deepEqual(segments[2].from, { take: 't5', job: 'K2' }, 'the segment on the other side of the joint');
+  assert.deepEqual(joints.map((j) => j.kind), ['isolated', 'linked'],
+    'nothing pins the new K2 at its start (a scene cut by design); its ending holds the joint after it');
+});
+
+test('an end pin whose destination has since been replaced is not evidence of anything', PENDING, () => {
+  // Same pin, but K3 was re-rendered afterwards: seamOut.to names a clip the cut no longer contains,
+  // which is the b1nx case from the other side and must NOT resurrect the joint.
+  const run = structuredClone(fivemjo);
+  run.takes.push({
+    take: 't5',
+    at: '2026-06-28T16:00:00.000Z',
+    jobs: [{
+      jobId: 'K2',
+      clip: '/runs/5mjo/renders/t5/K2/clip.mp4',
+      seamIn: { mode: 'none', frame: null, from: null },
+      seamOut: { mode: 'soft', frame: '/runs/5mjo/renders/t5/K2/last_frame.png', to: { take: 't4', job: 'K3', clip: '/runs/5mjo/renders/t4/K3/clip.mp4' } },
+    }],
+  });
+  run.takes.push({
+    take: 't6',
+    at: '2026-06-28T17:00:00.000Z',
+    jobs: [{
+      jobId: 'K3',
+      clip: '/runs/5mjo/renders/t6/K3/clip.mp4',
+      seamIn: { mode: 'none', frame: null, from: null },
+      seamOut: { mode: 'none', frame: null, to: null },
+    }],
+  });
+  run.cut[1] = { jobId: 'K2', take: 't5' };
+  run.cut[2] = { jobId: 'K3', take: 't6' };
+  const { segments, joints } = lineage.computeLineage(run);
+  assert.equal(segments[2].continuesFromPrev, false);
+  assert.deepEqual(joints.map((j) => j.kind), ['isolated', 'isolated']);
+});
+
+test('a dropped end pin records mode "none" — a destination alone never holds a joint open', PENDING, () => {
+  const run = structuredClone(fivemjo);
+  run.takes.push({
+    take: 't5',
+    at: '2026-06-28T16:00:00.000Z',
+    jobs: [{
+      jobId: 'K2',
+      clip: '/runs/5mjo/renders/t5/K2/clip.mp4',
+      seamIn: { mode: 'none', frame: null, from: null },
+      // the reference budget dropped the soft pin: nothing was applied, so nothing may be claimed
+      seamOut: { mode: 'none', frame: null, to: { take: 't4', job: 'K3', clip: '/runs/5mjo/renders/t4/K3/clip.mp4' } },
+    }],
+  });
+  run.cut[1] = { jobId: 'K2', take: 't5' };
+  const { segments } = lineage.computeLineage(run);
+  assert.equal(segments[2].continuesFromPrev, false, "t4's K3 opens on the OLD K2 and nothing pinned the new one to it");
+});
+
 test('a segment rendered with no seam at all is "isolated" — a scene cut by design, not a fault', PENDING, () => {
   const run = structuredClone(fivemjo);
+  // A joint has TWO records, so an unpinned joint has to be unpinned on both sides: K2 opened on
+  // nothing, and K1 was not aimed at K2 either (which is also what the renderers write — a `from` is
+  // dropped with an unapplied opening pin, and only then does the pipeline skip stamping `to`).
   run.takes.at(-1).jobs[1].seamIn = { mode: 'none', frame: null, from: null };
+  run.takes.at(-1).jobs[0].seamOut = { mode: 'none', frame: null, to: null };
   const { segments, joints } = lineage.computeLineage(run);
   assert.equal(segments[1].continuesFromPrev, false);
   assert.equal(joints[0].kind, 'isolated', 'nothing was ever pinned here — the UI must not cry "broken"');

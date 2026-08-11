@@ -242,9 +242,15 @@
   ladder), a Kling run created with a resolution is refused up front, and the delivered size shown
   everywhere is measured off the master instead of promised up front. Legacy `.env` values and old
   specs stay valid as the no-ops they always were.
-- **An end-pinned segment re-render now records where its closing frame points**, so the continuity
-  rule sees the joint as intact and the seamless stitcher colour-matches it instead of hard-cutting
-  the very join the re-render dialog promised to preserve.
+- **An end-pinned segment re-render now records where its closing frame points — and both continuity
+  judges read it.** A joint has two records, one per side, and only the successor's was ever
+  consulted: re-rendering a middle segment with a closing pin left the untouched successor still
+  naming the clip it was rendered against takes ago, so the stitcher hard-cut (and the clip strip
+  called "broken") the very join the re-render dialog had just charged for. The rule now lives in
+  one place (`src/lib/seam-rule.js`) that the stitcher and the review UI both import: a joint is
+  intact when *either* side recorded it against the clip really sitting opposite. A pin the
+  reference budget dropped still counts for nothing, and a destination whose clip has since been
+  replaced is still no evidence at all.
 - **A manual cut that reaches back to an older take refreshes the run's clip lineage**, so a later
   "match the current joins" re-render pins against the neighbours actually in the cut, not the
   newest take's seams.

@@ -1,8 +1,9 @@
 // WS2-P2 — the continuity rule, pure.
 //
 // THE RULE, in one sentence:
-//   segment i continues from i−1 iff its recorded seam SOURCE CLIP is the clip currently at
-//   position i−1 of the cut.
+//   segment i continues from i−1 iff either side recorded the join against the clip that is really
+//   sitting on the other side of it — i's own seam SOURCE CLIP is the clip currently at position
+//   i−1, or i−1's applied end pin names the clip currently at position i.
 //
 // Not "a seam frame was used". Run b1nx used one and is still broken: K1 was re-rendered into take
 // t2, the cut kept t1's K2, and that K2 opens on a frame grabbed from a K1 the cut no longer
@@ -20,11 +21,14 @@
 // Input is a plain run record (the runs service assembles it); output is ids only — a take/job pair
 // is meaningful to the UI, a host directory is a leak.
 //
-// The one import is `pinStrengths`, the single place that decides how a backend applies a boundary
-// frame (the seam rule plus the reference budget that can drop a soft pin). A re-render dialog that
-// answered that question for itself would eventually promise a "seamless" join the renderer
-// soft-pins — so it asks the same function the renderer asks.
-import { pinStrengths } from '../../../src/lib/seam-rule.js';
+// The only import is src/lib/seam-rule.js (pure, config-free, filesystem-free), for the two rules
+// this module must not own a second copy of: `pinStrengths`, which decides how a backend applies a
+// boundary frame (the seam rule plus the reference budget that can drop a soft pin), and
+// `closesOnNext`, which reads a recorded joint from the PREDECESSOR's side. A re-render dialog that
+// answered the first for itself would eventually promise a "seamless" join the renderer soft-pins;
+// a badge that answered the second for itself would call a joint broken while the stitcher
+// (src/lib/seamstitch.js, which asks the same functions) stitches it.
+import { closesOnNext, pinStrengths } from '../../../src/lib/seam-rule.js';
 
 /** Joint verdicts, in the order of how much the UI is allowed to promise. */
 export const JOINT_KINDS = Object.freeze(['linked', 'broken', 'isolated', 'unknown']);
@@ -37,7 +41,9 @@ export const BOUNDARY_MODES = Object.freeze(['auto', 'both', 'start', 'end', 'no
  * a wording change never becomes a behaviour change.
  *   no-prev          the first segment: there is nothing to continue from
  *   no-seam          nothing was pinned here (no source recorded, or history says it never chained)
- *   source-matches   the recorded/derived source IS the clip at the previous position
+ *   source-matches   the join was recorded against the clip that is really on the other side — this
+ *                    segment's own source IS the clip at the previous position, or the previous
+ *                    segment's applied end pin names the clip sitting here
  *   source-replaced  the source clip has since been replaced in the cut — THE b1nx case
  *   mode-none        the renderer applied no boundary at all (a scene cut by design)
  *   mode-unsupported the provider rejected the anchor we sent, so nothing was pinned after all
@@ -103,15 +109,16 @@ function sourceIds(src) {
 }
 
 /**
- * Is `src` the clip sitting at the previous position? Clip identity is the authoritative test; when
+ * Is `src` the clip sitting at `side`'s position? Clip identity is the authoritative test; when
  * either side has no clip on record (an errored job, a partially written take) fall back to the
- * take+job pair, which addresses the same slot.
+ * take+job pair, which addresses the same slot. Handed to the shared seam rule as its identity
+ * test, so both directions of a joint are compared the same way.
  */
-function sourceIsCurrent(src, prev) {
+function sourceIsCurrent(src, side) {
   const a = str(src?.clip);
-  const b = str(prev.record?.clip);
+  const b = str(side.record?.clip);
   if (a && b) return a === b;
-  return str(src?.take) === prev.take && str(src?.job ?? src?.jobId) === prev.jobId;
+  return str(src?.take) === side.take && str(src?.job ?? src?.jobId) === side.jobId;
 }
 
 /**
@@ -152,6 +159,15 @@ function verdictFor(run, idx, cur, prev) {
   // a review page.
   if (!cur.record || !prev.record) {
     return { continuesFromPrev: false, confidence: 'derived', from: null, reason: 'unknown-segment' };
+  }
+
+  // The joint's OTHER record: an applied end pin on the predecessor names the clip it was rendered
+  // to arrive on. When that is the clip sitting here, the two share a boundary frame no matter what
+  // the successor's own (older, untouched) seamIn still says — the case a nonterminal re-render with
+  // an `auto`/`end`/`both` plan creates, and the joint the user paid to pin. Recorded evidence, so
+  // it outranks a replay: `confidence` follows the record that answered.
+  if (closesOnNext(prev.record, cur, sourceIsCurrent)) {
+    return { continuesFromPrev: true, confidence: 'recorded', from: { take: prev.take, job: prev.jobId }, reason: 'source-matches' };
   }
 
   if (confidence === 'recorded') {

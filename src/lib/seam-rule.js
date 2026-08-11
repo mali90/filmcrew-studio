@@ -15,6 +15,11 @@
 //                 reference budget could not hold — a missing seam, not a broken one.
 //   'unsupported' a RUNTIME downgrade: the provider rejected the anchor we sent (see the Kling
 //                 end_image_url fallback). chooseSeamMode never returns it.
+//
+// The tail of the file holds the READING half of the same rule — given two clips' recorded seams,
+// is the joint between them really pinned? — for the same reason: src/lib/seamstitch.js (what the
+// stitcher does) and web/server/lib/lineage.js (what the badge says) must never disagree about a
+// joint, and two copies of that rule would eventually promise "seamless" over a hard cut.
 import { refLabel } from './render-models.js';
 
 /** The closed vocabulary the sidecars, the lineage and the UI copy all share. */
@@ -181,13 +186,81 @@ export function castRefCountFor(spec, jobId) {
   return job?.elements?.length || (spec?.kling?.elements?.length ?? 0);
 }
 
+// ── Reading a recorded joint ─────────────────────────────────────────────────────────────────────
+// A joint has TWO records, one per side: the successor's `seamIn` (the frame it opened on) and the
+// predecessor's `seamOut` (the frame it was made to arrive on). Either one, when it was really
+// applied and names the clip sitting on the other side, is evidence the two clips share a boundary
+// frame. Judging by the successor alone hard-cuts the joint a nonterminal re-render just paid to
+// pin: the new predecessor records the join in `seamOut.to`, while the untouched successor still
+// carries the `seamIn.from` of the clip it was rendered against takes ago.
+
+/** A non-empty string, or null — ids and paths arrive from JSON and may be anything. */
+const str = (v) => (typeof v === 'string' && v.length ? v : null);
+
+/** Seam modes that pinned NOTHING: no frame was shared, so a joint resting on one is a real cut.
+ *  'unsupported' is the provider having rejected the anchor we sent. */
+export const UNPINNED_SEAM_MODES = Object.freeze(['none', 'unsupported']);
+
+/** Did this recorded seam apply a pin at all? A missing record is an unpinned end, never a pin. */
+export function seamApplied(seam) {
+  if (!seam || typeof seam !== 'object') return false;
+  return !UNPINNED_SEAM_MODES.includes(str(seam.mode) ?? 'none');
+}
+
+/** The default identity test: the clip a lineage pointer names IS the clip sitting at that
+ *  position. Callers holding richer records (lineage.js knows each side's take+job too) pass their
+ *  own — the RULE is which record is consulted, not how a position is addressed. */
+const sameClip = (pointer, side) => {
+  const a = str(pointer?.clip);
+  const b = str(side?.clip);
+  return Boolean(a && b && a === b);
+};
+
+/**
+ * Did `next` open on `prev`'s closing frame, by its own record? Clip identity is the authoritative
+ * test: a seam recorded against a clip that is no longer in this cut is exactly the false
+ * continuation claim the check exists to catch (run b1nx — K1 re-rendered into a new take, the cut
+ * still using the old take's K2, which opens on a frame nothing here contains).
+ * @param {{seamIn?:object}} next  the record at the later position
+ * @param {object} prev            the record (or entry) at the earlier position
+ * @param {(pointer:object, side:object)=>boolean} [same]
+ */
+export function openedOnPrev(next, prev, same = sameClip) {
+  const seam = next?.seamIn;
+  return seamApplied(seam) && Boolean(seam.from) && same(seam.from, prev);
+}
+
+/**
+ * Was `prev` rendered to ARRIVE on `next`'s opening frame, by its own record? The mirror image, and
+ * the only evidence there is when the successor was never re-rendered: an applied end pin records
+ * where it was headed (pipeline.js seamDestFor), and a pin the reference budget dropped records
+ * mode 'none' — so a destination alone never counts, it has to have been applied.
+ * @param {{seamOut?:object}} prev  the record at the earlier position
+ * @param {object} next             the record (or entry) at the later position
+ * @param {(pointer:object, side:object)=>boolean} [same]
+ */
+export function closesOnNext(prev, next, same = sameClip) {
+  const seam = prev?.seamOut;
+  return seamApplied(seam) && Boolean(seam.to) && same(seam.to, next);
+}
+
+/** Is this joint really pinned? Evidence from EITHER side counts — the one rule both judges ask. */
+export const jointPinned = (prev, next, same = sameClip) => (
+  openedOnPrev(next, prev, same) || closesOnNext(prev, next, same)
+);
+
 export default {
   SEAM_MODES,
   SEAM_PRIORITY,
+  UNPINNED_SEAM_MODES,
   chooseSeamMode,
   seamPinSentence,
   planSeamRefs,
   appliedSeamModes,
   pinStrengths,
   castRefCountFor,
+  seamApplied,
+  openedOnPrev,
+  closesOnNext,
+  jointPinned,
 };
