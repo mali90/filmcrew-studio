@@ -167,6 +167,22 @@ test('two voiced speakers reserve two slots; an unregistered speaker reserves no
   assert.equal(specFor(voiced('Keeper'), [line('S9', 'Keeper')]), 50);
 });
 
+// …and only when the renderer is really going to send them. The gate is voiceRefsRide (the one the
+// renderer and the prompt preview both ask): with audio off no @AudioN rides at all, so a reserved
+// slot per speaker buys nothing and costs a starred character up to ten identity images.
+// The other half of the same gate — SEEDANCE_VOICE_MODE=native — needs its own process, because
+// config.js snapshots the environment at import: test/unit/engine-cast-topup-voice-mode.test.js.
+test('audio turned OFF reserves nothing — no clip rides, so the whole budget is the cast\'s', () => {
+  const inv = refsFor('keeper', 60);
+  const spec = {
+    spec_version: '1.0',
+    kling: { generate_audio: false, elements: [el('keeper-01', 'Keeper')], jobs: [{ job_id: 'J1', shots: ['S1'] }] },
+    audio: { voice: { lines: [line('S1', 'Keeper'), line('S1', 'Gull')] } },
+  };
+  topUpStarredElements(spec, ctxFor('seedance-2.5@fal', ['keeper'], inv, voiced('Keeper', 'Gull')));
+  assert.equal(spec.kling.elements.length, 50, 'both speakers are voiced natively — nothing to hold slots for');
+});
+
 test('the reservation follows the TIGHTEST job that inherits the roster', () => {
   const inv = refsFor('keeper', 60);
   const spec = {

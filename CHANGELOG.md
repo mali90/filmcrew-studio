@@ -286,7 +286,9 @@
   speakers that really have a registered clip (capped by the model's audio-ref cap, counted exactly
   as the renderer counts them) now come out of the roster budget, and a job naming its own element
   subset is filled to its own. Models with per-kind budgets are untouched — there a voice clip never
-  takes an image slot.
+  takes an image slot. The reservation asks the renderer's own gate rather than counting speakers:
+  with audio off, or `SEEDANCE_VOICE_MODE=native`, no `@Audio` reference is sent at all, so nothing
+  is held back and the starred cast keeps every slot the image budget has.
 
 - **Paying to fix one clip no longer tears down the review room.** Clicking *Re-render K2* used to
   flip the whole page back to the render-phase job list: the video you were just watching vanished,
