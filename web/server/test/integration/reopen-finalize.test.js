@@ -198,6 +198,17 @@ test('approving twice needs a reopen in between — the delivery history never d
   assert.equal(redelivered.finals.length, before.finals.length + 1, 'one reopen, one more delivery');
   assert.equal(redelivered.finals.at(-2).replacedBy, redelivered.finals.at(-1).id, 'and the old one says what replaced it');
   assert.equal((await get(`/api/runs/${runId}`)).json().run.status, 'complete');
+
+  // …and to a file of its OWN. Nothing was re-rendered and nothing was upscaled, so the master is
+  // still the file already on the user's disk — recording that path again would list ONE mp4 as two
+  // finals, with both "Earlier finals" links downloading the same bytes, under a card that promises
+  // the earlier final stays put and "approving again writes a new final beside it".
+  const [old, fresh] = redelivered.finals.slice(-2);
+  assert.notEqual(fresh.final, old.final, 'a second delivery is a second FILE, not the same path twice');
+  for (const f of redelivered.finals) assert.ok(fs.existsSync(f.final), `${f.final} is missing from disk`);
+  assert.equal(Buffer.compare(fs.readFileSync(fresh.final), fs.readFileSync(old.final)), 0,
+    'nothing was re-rendered, so the new file is the same cut byte for byte');
+  assert.equal((await get(`/api/runs/${runId}`)).json().run.finalFsPath, fresh.final);
 });
 
 test('reopening twice is idempotent-ish: it never loses a final and never double-counts', PENDING, async () => {

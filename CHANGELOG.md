@@ -238,6 +238,13 @@
   install commands.
 
 ### Fixed
+- **Approving a reopened run again really does write a new final beside the old one.** When nothing
+  had been re-rendered and no upscale was asked for, the second approval delivered the *same file*:
+  the delivery history grew a second row pointing at the first row's path, the genuine first
+  delivery was stamped as replaced by a file identical to it, and both "Earlier finals" downloads
+  handed you the same mp4 — against a card that promises the earlier final stays put. The
+  unchanged re-delivery now gets its own file (`<name>-final.mp4`, then `-final-2`, …, never
+  overwriting anything), so every row in the history is a file you can still download and compare.
 - **Kling no longer advertises resolution tiers it cannot render.** fal's Kling o3 endpoint takes
   no resolution parameter — the old `KLING_RESOLUTION` knob was parsed, displayed and even priced,
   but never sent. The pickers now hide the control for Kling (the registry declares an empty

@@ -700,6 +700,26 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     return m;
   }
 
+  /** Has this exact file already gone out as a final? `approved` is checked too, so a run delivered
+   *  before `finals` existed answers as well as one delivered after. */
+  const alreadyDelivered = (m, file) => (m?.finals ?? []).some((f) => f?.final === file) || m?.approved?.final === file;
+
+  /**
+   * A second delivery of a file the run already delivered: `<name>-final.mp4`, then `-final-2`, …
+   * in out/, never overwriting anything (the same rule pipeline.js gives a master — not imported
+   * from there, because that module reads config.js and this one is on the config-free import graph).
+   * out/ and not beside the source, because the browser reaches a delivery by basename alone.
+   */
+  function copyOfDelivery(master) {
+    const ext = path.extname(master) || '.mp4';
+    const base = path.basename(master, ext);
+    fs.mkdirSync(outDir, { recursive: true }); // a CLI-made run can have its master anywhere
+    for (let n = 1; ; n++) {
+      const p = path.join(outDir, `${base}-final${n === 1 ? '' : `-${n}`}${ext}`);
+      if (!fs.existsSync(p)) { fs.copyFileSync(master, p); return p; }
+    }
+  }
+
   function render(runId, { mode }) {
     assertNotFinalized(runId);
     const dir = dirFor(runId);
@@ -934,8 +954,14 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
       // A free finalize delivers the cut's own master untouched, so its measured size IS the cut's
       // (the latest render's only when the default — latest — cut is the one being approved).
       const shortSide = chosen ? chosen.shortSide ?? null : run.latestRender?.masterShortSide ?? null;
+      // Reopen → approve with nothing re-rendered hands this route the very file it already
+      // delivered. Recording that path again would list ONE file as two finals and stamp the genuine
+      // first delivery `replacedBy` a row that replaced nothing — under a card that promises
+      // "approving again writes a new final beside it". So write that file: a copy, because there is
+      // nothing new to render and the earlier delivery must stay byte-for-byte where it is.
+      const final = alreadyDelivered(m0, master) ? copyOfDelivery(master) : master;
       const m = updateManifest(dir, (mm) => recordFinal(mm, {
-        cut: chosen?.id ?? mm.cuts.at(-1)?.id ?? null, final: master, upscaled: false, shortSide, at: now().toISOString(),
+        cut: chosen?.id ?? mm.cuts.at(-1)?.id ?? null, final, upscaled: false, shortSide, at: now().toISOString(),
       }));
       emitStatus(runId);
       return { final: m.approved.final, queued: null };
