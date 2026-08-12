@@ -95,6 +95,32 @@ function continuityOf(run) {
 // of surfacing mid-plan with a half-written run.
 const toSlug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 
+/**
+ * One recorded seam for the wire. The renderer writes a seam as instructions to the STITCHER —
+ * `frame` is the still on disk the clip opens on, `from`/`to.clip` the neighbour clip it was grabbed
+ * off — and the manifest keeps all of it. The browser has use for none of it: the take/job ids are
+ * the whole vocabulary the run page speaks, exactly as `serializeContinuity` decided for the sibling
+ * feature. An ALLOWLIST for the same reason that one is: a field added to the seam record later
+ * cannot leak a host path by accident.
+ */
+const seamIds = (s) => {
+  if (!s || typeof s !== 'object') return s ?? null;
+  const end = (e) => (e && typeof e === 'object' ? { take: e.take ?? null, job: e.job ?? null } : null);
+  const wire = { mode: s.mode ?? null };
+  // Present only on the outgoing seam, and a token ('provider' | 'ffmpeg'), never a path.
+  if ('frameSource' in s) wire.frameSource = s.frameSource ?? null;
+  if ('from' in s) wire.from = end(s.from);
+  if ('to' in s) wire.to = end(s.to);
+  return wire;
+};
+
+/** `clipLineage` for the wire: which take each job's newest clip came from, and its seams as ids. */
+const lineageIds = (lineage) => (lineage && typeof lineage === 'object'
+  ? Object.fromEntries(Object.entries(lineage).map(([jobId, l]) => [jobId, l && typeof l === 'object'
+    ? { take: l.take ?? null, seamIn: seamIds(l.seamIn), seamOut: seamIds(l.seamOut) }
+    : l]))
+  : lineage);
+
 const dirSize = (dir) => {
   let bytes = 0;
   const walk = (d) => {
@@ -124,15 +150,18 @@ export function registerRunRoutes(app) {
    * The manifest, minus the host paths the browser has no use for. `approved.final` keeps its
    * absolute path (that is the explicit "Reveal in Finder / Copy path" contract, mirrored by
    * `finalFsPath`); the P6 delivery HISTORY does not — the UI only ever takes `basename()` of those
-   * entries, so shipping the host's directory layout for every past final is pure leak. Same
-   * contract `serializeContinuity` keeps for the sibling feature: ids and names, never fs paths.
+   * entries, so shipping the host's directory layout for every past final is pure leak. `clipLineage`
+   * does not either: its seams carry the frame and neighbour-clip paths the stitcher reads off disk,
+   * and every list tick would hand the run tree's layout to the browser for nothing. Same contract
+   * `serializeContinuity` keeps for the sibling feature: ids and names, never fs paths.
    */
   const redactManifest = (m) => {
     if (!m || typeof m !== 'object') return m;
     const name = (p) => (p ? path.basename(String(p)) : p);
     const finals = Array.isArray(m.finals) ? m.finals.map((f) => (f?.final ? { ...f, final: name(f.final) } : f)) : m.finals;
     const history = Array.isArray(m.history) ? m.history.map((h) => (h?.final ? { ...h, final: name(h.final) } : h)) : m.history;
-    return { ...m, ...(finals ? { finals } : {}), ...(history ? { history } : {}) };
+    const clipLineage = lineageIds(m.clipLineage);
+    return { ...m, ...(finals ? { finals } : {}), ...(history ? { history } : {}), ...(clipLineage ? { clipLineage } : {}) };
   };
 
   const serializeRender = (lr) => lr && {

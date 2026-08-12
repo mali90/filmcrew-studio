@@ -96,7 +96,8 @@ function writeRun(runId, jobIds, manifest = null) {
       { id: 't2', mode: 'job', jobId: 'K1', revision: null, createdAt: '2026-07-02T11:30:00.000Z' }],
     jobClips: { K1: clipOf(id, 't2', 'K1'), K2: clipOf(id, 't1', 'K2') },
     clipLineage: {
-      K1: { take: 't2', seamIn: seamIn(null), seamOut: seamOut(null) },
+      // pipeline.js stamps `frameSource` on every closing frame it produces, hard cut or not
+      K1: { take: 't2', seamIn: seamIn(null), seamOut: { ...seamOut(null), frameSource: 'ffmpeg' } },
       K2: { take: 't1', seamIn: seamIn(at(id, 't1', 'K1')), seamOut: seamOut(null) },
     },
   });
@@ -208,6 +209,39 @@ test('continuity carries take/job ids and NEVER a filesystem path', async () => 
       assert.ok(!new RegExp(`"${key}"`).test(blob), `${id}: continuity must not expose a "${key}" field`);
     }
   }
+});
+
+// `continuity` is not the only place lineage reaches the browser: the manifest itself rides every
+// run payload, and its `clipLineage` seams are the renderer's notes to the STITCHER — the frame file
+// the clip opens on, the neighbour clip it was grabbed off, both absolute. The same rule has to hold
+// for them, on the list as well as the detail, or the contract only covers the field that was
+// written last.
+test('the manifest lineage reaches the browser as take/job ids, never seam paths', async () => {
+  const detail = (await continuityOf('b1nx')).manifest.clipLineage;
+  const listed = (await get('/api/runs')).json().runs.find((r) => r.id === 'b1nx').manifest.clipLineage;
+
+  for (const [where, lineage] of [['detail', detail], ['list', listed]]) {
+    assert.deepEqual(Object.keys(lineage).sort(), ['K1', 'K2'], `${where}: every job still has an entry`);
+    assert.equal(lineage.K2.take, 't1', `${where}: the take id survives — the read model derives from it`);
+    assert.deepEqual(lineage.K2.seamIn.from, { take: 't1', job: 'K1' }, `${where}: and the seam still names what it joined to`);
+    assert.equal(lineage.K2.seamIn.mode, 'soft', `${where}: including how it was pinned`);
+    assert.equal(lineage.K1.seamOut.frameSource, 'ffmpeg', `${where}: a token about the frame is not a path to it`);
+    assert.deepEqual(Object.keys(lineage.K2.seamIn).sort(), ['from', 'mode'],
+      `${where}: an allowlist, so a field added to the seam record later cannot ride along`);
+
+    const blob = JSON.stringify(lineage);
+    assert.ok(!blob.includes(tmpRoot), `${where}: the run directory leaked into clipLineage`);
+    assert.ok(!/[/\\]/.test(blob), `${where}: no path separator of any kind belongs in this shape`);
+    assert.ok(!/\.mp4|\.png/.test(blob), `${where}: no clip or frame filenames either`);
+    for (const key of ['clip', 'frame']) {
+      assert.ok(!new RegExp(`"${key}"`).test(blob), `${where}: clipLineage must not expose a "${key}" field`);
+    }
+  }
+
+  // On disk nothing moved: the stitcher reads those very paths back out of the manifest.
+  const onDisk = JSON.parse(fs.readFileSync(path.join(runsDir, 'b1nx', 'web.json'), 'utf8'));
+  assert.ok(path.isAbsolute(onDisk.clipLineage.K2.seamIn.frame), 'only the VIEW is redacted');
+  assert.ok(path.isAbsolute(onDisk.clipLineage.K2.seamIn.from.clip));
 });
 
 test('runs with nothing rendered answer null — the strip claims nothing it cannot prove', async () => {

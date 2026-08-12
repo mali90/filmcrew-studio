@@ -91,7 +91,19 @@ export interface Manifest {
   jobClips?: Record<string, string>;
   // Where each job's newest clip came from and the seams the renderer recorded for it. Absent on
   // runs made before WS2-P1 — their continuity is derived from take history and flagged as such.
-  clipLineage?: Record<string, { take: string; seamIn?: unknown; seamOut?: unknown }>;
+  // IDS ONLY on the wire: the manifest on disk records each seam's frame and neighbour-clip paths
+  // for the stitcher, and routes/runs.js strips them on the way out (same contract as `continuity`).
+  clipLineage?: Record<string, { take: string | null; seamIn?: ClipLineageSeam; seamOut?: ClipLineageSeam }>;
+}
+
+/** One recorded seam, as the wire carries it: how the join was pinned and the take/job it joins to.
+ *  `frameSource` says who produced the closing still ('provider' = the model returned its own,
+ *  'ffmpeg' = grabbed locally) — a token, never a path. */
+export interface ClipLineageSeam {
+  mode: string | null;
+  frameSource?: string | null;
+  from?: { take: string | null; job: string | null } | null;
+  to?: { take: string | null; job: string | null } | null;
 }
 
 /**
