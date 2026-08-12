@@ -207,6 +207,20 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
     return { hasSeamIn: Boolean(job.first_frame || (chain && index > 0)), hasSeamOut: Boolean(job.last_frame) };
   }
 
+  /**
+   * Every boundary pairing a render of this job could REALLY apply — what the meter has to survive.
+   * The full render's own (above) is one of them; `rerender-job` resolves the rest over the cut
+   * (web/server/lib/lineage.js resolveBoundaries), and it may pin either end wherever a neighbour
+   * exists: `boundaries:'auto'` ends a nonterminal segment on its successor's opening frame the
+   * moment that join is on record, and `'both'`/`'start'`/`'end'` force one outright.
+   */
+  function boundaryCandidates(job, index) {
+    const plan = boundariesFor(job, index);
+    const ends = (planned, hasNeighbour) => [...new Set([planned, hasNeighbour])];
+    return ends(plan.hasSeamIn, index > 0).flatMap((hasSeamIn) =>
+      ends(plan.hasSeamOut, index < jobs.length - 1).map((hasSeamOut) => ({ hasSeamIn, hasSeamOut })));
+  }
+
   /** The Kling storyboard: one ≤500-byte segment per shot, `@Element1` leading each. */
   function klingView(job, index, override = null) {
     const settings = klingPromptSettings(spec, defaults.kling);
@@ -294,53 +308,73 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
       }
       refGroups.push({ name: g.name, refs });
     }
-    const { hasSeamIn, hasSeamOut } = boundariesFor(job, index);
     const audioOn = !!settings.audioOn;
-    // Voice references (@AudioN) ride the renderer's gate itself, not a copy of it: something for
-    // the clips to ride on (cast refs or a boundary frame at EITHER end), audio on, and a voiceMode
-    // that keeps the clip.
-    const candidates = voiceRefsRide({
-      castRefCount: castCount, hasSeamIn, hasSeamOut, audioOn, voiceMode: defaults.seedance.voiceMode,
-    })
-      ? jobSpeakers(job, spec).filter((sp) => voiceClipFor(sp))
-      : [];
-    // …and the same REFUSAL. More voiced speakers than the model has @Audio slots is a hard error in
-    // the renderer (before it fits a single clip), so slicing the list to fit here would present a
-    // ready-looking preview for a job that can never be sent. viewFor turns the throw into the job's
-    // `error` — the same shape an unbuildable prompt already reports, and the sheet already words it
-    // as "the render would fail on the same message".
-    cappedAudioRefs(caps, job.job_id, candidates.length);
-    // The renderer's own drop rule, same inputs: window sized by the PRE-drop candidate count, a
-    // clip under the per-clip minimum never reaches the wire — so it never reaches the preview.
-    const fitCaps = { ...caps, audioBudgetS: caps.audioBudgetS ?? 15 };
-    const voiced = candidates.filter((sp) => {
-      const dur = voiceDurS.get(slug(sp));
-      return dur == null || fitAudioRef(dur, fitCaps, { refCount: candidates.length || 1 }) !== 'drop';
-    });
-    const audioLabels = new Map(voiced.map((sp, i) => [slug(sp), refLabel(caps, 'Audio', i + 1)]));
-    const audioRefFor = (sp) => audioLabels.get(slug(sp ?? '')) ?? null;
 
-    // The combined budget (fal 2.5 counts images + audio + video against one cap), checked BEFORE
-    // the seam layout for the same reason the renderer checks it before uploading anything: only the
-    // CAST and the surviving voice clips count, because planSeamRefs drops a soft-pinned boundary
-    // frame rather than overrun. Without this the preview happily drops cast refs the renderer would
-    // never get to drop — it throws first — and `refs` below would cite labels no render can send.
-    cappedCombinedRefs(caps, { images: castCount, audio: voiced.length });
+    /**
+     * Everything about this job that MOVES when the boundary frames move: which voice clips ride,
+     * how the reference budget lays the images out, and therefore which pin sentences the front
+     * matter carries. One function, called once for the render this view describes and again for
+     * every render its byte meter has to survive — two copies of this layout is how a preview and a
+     * paid render start disagreeing.
+     */
+    function layoutFor(hasSeamIn, hasSeamOut) {
+      // Voice references (@AudioN) ride the renderer's gate itself, not a copy of it: something for
+      // the clips to ride on (cast refs or a boundary frame at EITHER end), audio on, and a voiceMode
+      // that keeps the clip.
+      const candidates = voiceRefsRide({
+        castRefCount: castCount, hasSeamIn, hasSeamOut, audioOn, voiceMode: defaults.seedance.voiceMode,
+      })
+        ? jobSpeakers(job, spec).filter((sp) => voiceClipFor(sp))
+        : [];
+      // …and the same REFUSAL. More voiced speakers than the model has @Audio slots is a hard error in
+      // the renderer (before it fits a single clip), so slicing the list to fit here would present a
+      // ready-looking preview for a job that can never be sent. viewFor turns the throw into the job's
+      // `error` — the same shape an unbuildable prompt already reports, and the sheet already words it
+      // as "the render would fail on the same message".
+      cappedAudioRefs(caps, job.job_id, candidates.length);
+      // The renderer's own drop rule, same inputs: window sized by the PRE-drop candidate count, a
+      // clip under the per-clip minimum never reaches the wire — so it never reaches the preview.
+      const fitCaps = { ...caps, audioBudgetS: caps.audioBudgetS ?? 15 };
+      const voiced = candidates.filter((sp) => {
+        const dur = voiceDurS.get(slug(sp));
+        return dur == null || fitAudioRef(dur, fitCaps, { refCount: candidates.length || 1 }) !== 'drop';
+      });
+      const audioLabels = new Map(voiced.map((sp, i) => [slug(sp), refLabel(caps, 'Audio', i + 1)]));
+      const audioRefFor = (sp) => audioLabels.get(slug(sp ?? '')) ?? null;
 
-    const seam = chooseSeamMode({ caps, castRefCount: castCount, hasSeamIn, hasSeamOut });
-    const plan = planSeamRefs({
-      caps,
-      castRefs: Array.from({ length: castCount }, (_, i) => `cast:${i}`), // only ORDER and COUNT reach the prompt
-      seamIn: seam.in.mode === 'soft' ? 'seam:in' : null,
-      seamOut: seam.out.mode === 'soft' ? 'seam:out' : null,
-      otherRefCount: caps.maxCombinedRefs != null ? voiced.length : 0,
-    });
-    const startFrameRef = plan.imageRefs.find((r) => r.kind === 'seamIn')?.label ?? null;
-    const endFrameRef = plan.imageRefs.find((r) => r.kind === 'seamOut')?.label ?? null;
+      // The combined budget (fal 2.5 counts images + audio + video against one cap), checked BEFORE
+      // the seam layout for the same reason the renderer checks it before uploading anything: only the
+      // CAST and the surviving voice clips count, because planSeamRefs drops a soft-pinned boundary
+      // frame rather than overrun. Without this the preview happily drops cast refs the renderer would
+      // never get to drop — it throws first — and `refs` below would cite labels no render can send.
+      cappedCombinedRefs(caps, { images: castCount, audio: voiced.length });
 
-    // `feedback`/`nonce` are the RE-RENDER knobs (a director note, "Alternate take N"); a full
-    // render from the plan sends neither, so a plan preview must not add them.
-    const opts = { refGroups, audioRefFor, startFrameRef, endFrameRef, feedback: '', nonce: 0, shotSyntax: caps.shotSyntax };
+      const seam = chooseSeamMode({ caps, castRefCount: castCount, hasSeamIn, hasSeamOut });
+      const plan = planSeamRefs({
+        caps,
+        castRefs: Array.from({ length: castCount }, (_, i) => `cast:${i}`), // only ORDER and COUNT reach the prompt
+        seamIn: seam.in.mode === 'soft' ? 'seam:in' : null,
+        seamOut: seam.out.mode === 'soft' ? 'seam:out' : null,
+        otherRefCount: caps.maxCombinedRefs != null ? voiced.length : 0,
+      });
+      const startFrameRef = plan.imageRefs.find((r) => r.kind === 'seamIn')?.label ?? null;
+      const endFrameRef = plan.imageRefs.find((r) => r.kind === 'seamOut')?.label ?? null;
+
+      // `feedback`/`nonce` are the RE-RENDER knobs (a director note, "Alternate take N"); a full
+      // render from the plan sends neither, so a plan preview must not add them.
+      return {
+        voiced,
+        audioRefFor,
+        seam,
+        plan,
+        opts: { refGroups, audioRefFor, startFrameRef, endFrameRef, feedback: '', nonce: 0, shotSyntax: caps.shotSyntax },
+      };
+    }
+
+    // The FULL render from the plan: the prompt, the references and the seam verdicts this view
+    // reports are that render's, byte for byte (a refusal here is still the job's `error`).
+    const { hasSeamIn, hasSeamOut } = boundariesFor(job, index);
+    const { voiced, audioRefFor, seam, plan, opts } = layoutFor(hasSeamIn, hasSeamOut);
     const planned = composeSeedanceJobPrompt(job, spec, settings, opts);
     // The renderer's own call (seedance.js → applyOverride): the user's words with THIS render's
     // front matter and seam pins re-composed over them, then clamped. Preview === wire, still.
@@ -365,6 +399,17 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
     ));
     for (const sp of voiced) refs.push({ ref: audioRefFor(sp), character: sp, role: 'voice' });
 
+    // The meter's denominator is not THIS render's pins but the widest pin set any render of this
+    // segment can apply (boundaryCandidates): the saved words are re-composed under whichever
+    // boundaries the re-render resolves, and `applyOverride` clamps the result. Metering the plan's
+    // pins alone accepted an edit that a `boundaries:'auto'` re-render then truncated from the end,
+    // mid-paid-render, with nothing on screen saying so. A pairing the renderer would REFUSE (more
+    // voiced speakers than @Audio slots once a frame makes the job reference-to-video) reserves
+    // nothing: that render throws before it spends, so it can never cut anybody's words.
+    const pinBytes = Math.max(...boundaryCandidates(job, index).map((b) => {
+      try { return pinBytesOf('seedance', job, spec, settings, layoutFor(b.hasSeamIn, b.hasSeamOut).opts); } catch { return 0; }
+    }));
+
     return {
       prompt,
       segments: null,
@@ -373,7 +418,7 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
       bytes: utf8(prompt),
       maxBytes: Number(settings.promptMaxBytes),
       segmentMaxBytes: null,
-      pinBytes: pinBytesOf('seedance', job, spec, settings, opts),
+      pinBytes,
       // What the render will really APPLY, not what it wished for: a soft pin whose reference lost
       // its slot to the image budget (a full cast at maxImages) pins nothing, and the sheet must say
       // so — this is the pre-flight signal that a joint is going to be a scene cut.

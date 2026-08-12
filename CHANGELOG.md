@@ -267,6 +267,15 @@
   that was deterministically unrenderable. The preview now shows the renderer's own message on that
   job ("the render would fail on the same message: …"); both surfaces call the same check, so the
   wording cannot drift.
+- **An edit saved right up to the meter's limit is no longer cut short by the re-render that spends
+  the money.** The editor's "room left for your words" counted only the boundary pins a *full*
+  render applies, but a segment re-render pins more: `Auto` ends a middle segment on its
+  successor's opening frame the moment that join is on record, and that extra pin sentence comes
+  out of the same byte cap. An edit accepted at the displayed limit was therefore clamped during
+  the paid re-render — the tail of the user's text silently gone, on the one screen that promises
+  "exactly what we send, word for word". The meter now reserves room for the widest pin set any
+  render of that segment can really apply (a segment with no neighbour to join to reserves nothing
+  for a join), so what the editor accepts is what the wire carries.
 - **The starred-cast top-up no longer holds a reference slot back for the seam frame** — seam pins
   yield to cast references at render (a pin is a nicety, identity is not), so reserving the slot
   only starved a starred character of one view without saving the pin. Voice references are the
