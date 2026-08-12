@@ -1,6 +1,6 @@
 // Small pure helpers shared by the review/deliver components.
 import type { ContinuityEntry, Manifest, ProductionSpec } from '../../../../../shared/api-types';
-import type { PinStrength } from '../../../../../shared/render-models';
+import { pinStrengthFor, pinStrengthsFor, type PinStrength } from '../../../../../shared/render-models';
 
 export type { PinStrength };
 
@@ -164,6 +164,90 @@ export function boundaryPlanSentence({ jobId, prev, next, boundaries, pinStrengt
     ? `Nothing pins its start, so the join from ${prevId} stays a scene cut.`
     : `${jobId} opens the cut, so nothing pins its start.`;
   return `${head} It will ${closes} ${nextId}'s opening frame — that join is ${endWords}.`;
+}
+
+// ── What a segment re-render does to its joins (WS2-P5) ──────────────────────────────────────────
+// Two surfaces can start one — the strip's dialog and the rail's "the plan changed" block — and
+// they post to the SAME endpoint, so an offer one makes and the other withholds is the same bug
+// twice. The decision therefore lives here, once, and both call it.
+
+/** What `boundaries:'auto'` resolves to, how each pin would really land, and whether a downstream
+ *  cascade repairs anything at all. */
+export interface SegmentJoins {
+  /** What auto pins at each end — mirrored from `resolveBoundaries` in web/server/lib/lineage.js. */
+  autoStart: boolean;
+  autoEnd: boolean;
+  /** What THIS request asks for (auto's answer unless the caller overrides an end). */
+  wantStart: boolean;
+  wantEnd: boolean;
+  /** How each asked-for pin would really land — budget included, so a pin the reference budget
+   *  drops reads as no pin rather than as a promise the clip cannot keep. */
+  startStrength: PinStrength;
+  endStrength: PinStrength;
+  /** The next clip really starts on this one's last frame AND this backend can end a segment on a
+   *  given frame at all — otherwise the downstream join is nobody's choice and nothing is said. */
+  showSeamWarning: boolean;
+  /** …and nothing is going to pin that ending. An APPLIED ending pin renders this segment against
+   *  the unchanged next clip and records the joint as intact, so re-rendering everything downstream
+   *  would replace footage nothing touched — for a chain no stronger than the pin already bought. */
+  offerCascade: boolean;
+}
+
+/**
+ * @param p.pinStart/pinEnd  an explicit choice for that end (the dialog's Custom plan); omitted
+ *   leaves auto's answer, which is all the rail ever posts.
+ */
+export function segmentJoins({ backend, castRefCount, hasPrev, hasNext, entry, nextEntry, pinStart, pinEnd }: {
+  backend: string;
+  castRefCount: number;
+  hasPrev: boolean;
+  hasNext: boolean;
+  /** this segment's own continuity entry — does it start on the previous clip? */
+  entry: ContinuityEntry | null | undefined;
+  /** the NEXT segment's entry — does that clip start on this one? */
+  nextEntry: ContinuityEntry | null | undefined;
+  pinStart?: boolean;
+  pinEnd?: boolean;
+}): SegmentJoins {
+  // A RECORDED verdict decides; anything reconstructed keeps the historical default (chain the
+  // opening frame, pin no ending) rather than acting on a guess — resolveBoundaries' own rule.
+  const recorded = (e: ContinuityEntry | null | undefined) => e?.confidence === 'recorded';
+  const autoStart = hasPrev && (recorded(entry) ? Boolean(entry?.continuesFromPrev) : true);
+  const autoEnd = hasNext && (recorded(nextEntry) ? Boolean(nextEntry?.continuesFromPrev) : false);
+  const wantStart = hasPrev && (pinStart ?? autoStart);
+  const wantEnd = hasNext && (pinEnd ?? autoEnd);
+
+  // Both ends at once, and through the BUDGET-aware helper: the two pins compete for the same image
+  // slots, and at a full cast SEAM_PRIORITY drops the closing one (then the opening one) before it
+  // drops a paid identity reference. Each end keeps its own answer all the way to the copy — the
+  // budget can preserve one pin and drop the other.
+  const strengths = pinStrengthsFor(backend, { castRefCount, hasSeamIn: wantStart, hasSeamOut: wantEnd });
+  const startStrength: PinStrength = wantStart ? strengths.in : 'none';
+  const endStrength: PinStrength = wantEnd ? strengths.out : 'none';
+
+  // Can this backend end a segment on a given frame at all? A model with no closing anchor and no
+  // reference slot for one (Kling text-to-video) cannot, and then the downstream join is nobody's
+  // choice (plan P5: supportsEndFrame && feedsNext). `autoEnd` IS "the join is on record": auto
+  // pins an ending exactly where the successor recorded that it opened on this clip.
+  const showSeamWarning = pinStrengthFor(backend, { castRefCount, end: 'out' }) !== 'none' && autoEnd;
+  return {
+    autoStart, autoEnd, wantStart, wantEnd, startStrength, endStrength,
+    showSeamWarning,
+    offerCascade: showSeamWarning && endStrength === 'none',
+  };
+}
+
+/** The downstream join, in plain words: what re-rendering `jobId` does to the clip after it. One
+ *  wording for both surfaces — the fact is the same on either. */
+export function downstreamSeamSentence({ jobId, nextId, endStrength }: {
+  jobId: string; nextId: string; endStrength: PinStrength;
+}): string {
+  const opener = `${nextId} starts on ${jobId}’s current last frame.`;
+  // Asked-for is not delivered: an ending pin the reference budget drops leaves the downstream join
+  // exactly as broken as never asking for one.
+  return endStrength !== 'none'
+    ? `${opener} Ending ${jobId} on ${nextId}'s opening frame keeps that join ${seamStrengthWords(endStrength)}, so ${nextId} and everything after it can stay exactly as they are.`
+    : `${opener} Re-rendering ${jobId} changes that frame, so ${nextId}'s join will break.`;
 }
 
 // ── Delivery lifecycle (WS2-P6) ──────────────────────────────────────────────────────────────────

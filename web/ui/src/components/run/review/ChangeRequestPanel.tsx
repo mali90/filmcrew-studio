@@ -13,12 +13,12 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { ChevronDown, Film, MessageSquare, PenLine } from 'lucide-react';
 import type { RunDetail } from '../../../../../shared/api-types';
-import { castRefCountFor, pinStrengthFor } from '../../../../../shared/render-models';
+import { castRefCountFor } from '../../../../../shared/render-models';
 import { api, ApiClientError } from '../../../api/client';
 import { Button } from '../../ui/Button';
 import { SegmentedControl } from '../../ui/SegmentedControl';
 import { useToast } from '../../ui/Toast';
-import { jointKindOf } from './lib';
+import { downstreamSeamSentence, segmentJoins } from './lib';
 import { PaidButton } from './PaidButton';
 import { PromptButton } from './PromptSheet';
 import { SegmentRerenderDialog } from './SegmentRerenderDialog';
@@ -94,14 +94,19 @@ export function ChangeRequestPanel({ run }: { run: RunDetail }) {
   const jobIdx = scopedJob ? jobIds.indexOf(scopedJob) : -1;
   const downstream = jobIdx >= 0 ? jobIds.slice(jobIdx + 1) : [];
 
-  // The downstream seam sentence is only true where the next clip really starts on this one's last
-  // frame AND this backend could have ended a segment on a given frame at all (plan P5:
-  // supportsEndFrame && feedsNext) — otherwise it is warning about a join nobody made or could make.
+  // What this block may say about the downstream join, and whether a cascade would repair anything
+  // at all. Its scoped buttons post `boundaries: 'auto'` to the endpoint SegmentRerenderDialog posts
+  // to, so the answer is that dialog's own — the same helper, not a second reading of the same cut.
   const backend = run.latestRender?.backend ?? run.backend ?? 'kling';
-  const castRefCount = scopedJob ? castRefCountFor(run.spec, scopedJob) : 0;
-  const supportsEndFrame = pinStrengthFor(backend, { castRefCount, end: 'out' }) !== 'none';
-  const nextEntry = (run.continuity ?? []).find((e) => e.jobId === downstream[0]) ?? null;
-  const feedsNext = downstream.length > 0 && jointKindOf(nextEntry) === 'linked';
+  const entryOf = (id: string | null | undefined) => (run.continuity ?? []).find((e) => e.jobId === id) ?? null;
+  const { endStrength, showSeamWarning, offerCascade } = segmentJoins({
+    backend,
+    castRefCount: scopedJob ? castRefCountFor(run.spec, scopedJob) : 0,
+    hasPrev: jobIdx > 0,
+    hasNext: downstream.length > 0,
+    entry: entryOf(scopedJob),
+    nextEntry: entryOf(downstream[0]),
+  });
 
   const jobEstimate = useQuery({
     queryKey: ['estimate', run.id, 'job', scopedJob],
@@ -111,7 +116,9 @@ export function ChangeRequestPanel({ run }: { run: RunDetail }) {
   const cascadeEstimate = useQuery({
     queryKey: ['estimate', run.id, 'job-cascade', scopedJob],
     queryFn: () => api.estimate(run.id, { mode: 'job', jobId: scopedJob!, cascade: true }),
-    enabled: !!scopedJob && downstream.length > 0,
+    // Priced only where it is offered: a cascade nobody can click is a paid render nobody asked to
+    // hear the price of.
+    enabled: !!scopedJob && offerCascade,
   });
   const fullEstimate = useQuery({
     queryKey: ['estimate', run.id, 'full'],
@@ -152,25 +159,25 @@ export function ChangeRequestPanel({ run }: { run: RunDetail }) {
               >
                 Re-render {scopedJob} only
               </PaidButton>
-              {downstream.length > 0 && (
-                <>
-                  <PaidButton
-                    variant="secondary"
-                    className="w-full justify-center"
-                    costUsd={cascadeEstimate.data?.totalUsd ?? null}
-                    costUnknown={Boolean(cascadeEstimate.data?.unknownPrice)}
-                    loading={rerenderJob.isPending}
-                    onPaidClick={() => rerenderJob.mutate(true)}
-                  >
-                    Re-render {scopedJob} + downstream
-                  </PaidButton>
-                  {supportsEndFrame && feedsNext && (
-                    <p className="text-caption text-ink-muted">
-                      {downstream[0]} was chained from {scopedJob}&rsquo;s last frame — re-rendering{' '}
-                      {scopedJob} alone may show a visible seam.
-                    </p>
-                  )}
-                </>
+              {/* Offered only where it repairs something: an ending pin Auto applies renders this
+                  segment against the unchanged next clip and records the joint as intact, so
+                  re-rendering everything downstream would charge for footage nothing touched. */}
+              {offerCascade && (
+                <PaidButton
+                  variant="secondary"
+                  className="w-full justify-center"
+                  costUsd={cascadeEstimate.data?.totalUsd ?? null}
+                  costUnknown={Boolean(cascadeEstimate.data?.unknownPrice)}
+                  loading={rerenderJob.isPending}
+                  onPaidClick={() => rerenderJob.mutate(true)}
+                >
+                  Re-render {scopedJob} + downstream
+                </PaidButton>
+              )}
+              {showSeamWarning && (
+                <p className="text-caption text-ink-muted" data-testid="rail-seam-note">
+                  {downstreamSeamSentence({ jobId: scopedJob, nextId: downstream[0], endStrength })}
+                </p>
               )}
             </>
           ) : (

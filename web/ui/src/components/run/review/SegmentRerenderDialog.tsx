@@ -17,13 +17,13 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { AlertTriangle, ArrowLeft, ArrowRight } from 'lucide-react';
 import type { Aspect, BoundaryMode, ContinuityEntry, JobView, RunDetail } from '../../../../../shared/api-types';
-import { capsFor, castRefCountFor, pinStrengthFor, pinStrengthsFor, type PinStrength } from '../../../../../shared/render-models';
+import { capsFor, castRefCountFor } from '../../../../../shared/render-models';
 import { api, ApiClientError } from '../../../api/client';
 import { Button } from '../../ui/Button';
 import { Dialog } from '../../ui/Dialog';
 import { SegmentedControl } from '../../ui/SegmentedControl';
 import { useToast } from '../../ui/Toast';
-import { boundaryPlanSentence, seamStrengthWords, type BoundaryChoice } from './lib';
+import { boundaryPlanSentence, downstreamSeamSentence, segmentJoins, type BoundaryChoice } from './lib';
 import { PaidButton } from './PaidButton';
 
 /** The neighbour's still, next to its clip: `…/K1/clip.mp4` → `…/K1/last_frame.png`. */
@@ -102,12 +102,21 @@ export function SegmentRerenderDialog({ run, jobId, open, onClose }: {
   const entryOf = (id: string | null): ContinuityEntry | null =>
     (id ? (run.continuity ?? []).find((e) => e.jobId === id) ?? null : null);
 
-  // What `boundaries:'auto'` will resolve to on the server, mirrored from resolveBoundaries: a
-  // RECORDED verdict decides, and anything reconstructed keeps the historical default (chain the
-  // opening frame, pin no ending) rather than acting on a guess.
-  const recorded = (e: ContinuityEntry | null) => e?.confidence === 'recorded';
-  const autoStart = Boolean(prevId) && (recorded(entryOf(jobId)) ? Boolean(entryOf(jobId)?.continuesFromPrev) : true);
-  const autoEnd = Boolean(nextId) && (recorded(entryOf(nextId)) ? Boolean(entryOf(nextId)?.continuesFromPrev) : false);
+  const backend = run.latestRender?.backend ?? run.backend ?? 'kling';
+  const castRefCount = castRefCountFor(run.spec, jobId);
+  // What `boundaries:'auto'` will resolve to on the server, and what the re-render it starts does to
+  // this segment's two joins. One derivation, shared with the rail's "the plan changed" block
+  // (./lib segmentJoins) — both post to the same endpoint, so both must offer the same things.
+  const joinsFor = (over?: { pinStart: boolean; pinEnd: boolean }) => segmentJoins({
+    backend,
+    castRefCount,
+    hasPrev: Boolean(prevId),
+    hasNext: Boolean(nextId),
+    entry: entryOf(jobId),
+    nextEntry: entryOf(nextId),
+    ...over,
+  });
+  const { autoStart, autoEnd } = joinsFor();
 
   const [pinStart, setPinStart] = useState(autoStart);
   const [pinEnd, setPinEnd] = useState(autoEnd);
@@ -119,27 +128,17 @@ export function SegmentRerenderDialog({ run, jobId, open, onClose }: {
     [jobId, open], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
-  const wantStart = Boolean(prevId) && (plan === 'auto' ? autoStart : pinStart);
-  const wantEnd = Boolean(nextId) && (plan === 'auto' ? autoEnd : pinEnd);
+  // The Custom plan re-asks the same question with the boxes as they stand; Auto keeps the answer
+  // the cut already gave. Strengths are budget-aware and per end (the budget can preserve one pin
+  // and drop the other), which is what the sentence and the warning below are built from.
+  const { wantStart, wantEnd, startStrength, endStrength, showSeamWarning, offerCascade } =
+    plan === 'custom' ? joinsFor({ pinStart, pinEnd }) : joinsFor();
 
   // What gets POSTed. `auto` is sent as `auto` — the server owns the mirroring, and re-deriving it
   // here into 'both'/'start' would freeze a stale reading of the cut into the request.
   const boundaries: BoundaryMode = plan === 'auto'
     ? 'auto'
     : wantStart && wantEnd ? 'both' : wantStart ? 'start' : wantEnd ? 'end' : 'none';
-
-  const backend = run.latestRender?.backend ?? run.backend ?? 'kling';
-  const castRefCount = castRefCountFor(run.spec, jobId);
-  // Both ends at once, and through the BUDGET-aware helper: the two pins compete for the same image
-  // slots, and at a full cast SEAM_PRIORITY drops the closing one (then the opening one) before it
-  // drops a paid identity reference. Asking per end, budget-free, is how a dropped pin gets sold as
-  // "near-seamless (reference-guided)" and delivered as a scene cut.
-  const strengths = pinStrengthsFor(backend, { castRefCount, hasSeamIn: wantStart, hasSeamOut: wantEnd });
-  // Each end keeps ITS OWN answer all the way to the copy. The budget can preserve one pin and drop
-  // the other ({ in: 'soft', out: 'none' } at a full cast), and collapsing that to the weaker one
-  // told the reviewer both joins were scene cuts while hiding the surviving pin's caveat.
-  const startStrength: PinStrength = wantStart ? strengths.in : 'none';
-  const endStrength: PinStrength = wantEnd ? strengths.out : 'none';
 
   const resolved: BoundaryChoice = wantStart && wantEnd ? 'both' : wantStart ? 'start' : wantEnd ? 'end' : 'none';
   const sentence = boundaryPlanSentence({
@@ -150,19 +149,6 @@ export function SegmentRerenderDialog({ run, jobId, open, onClose }: {
     pinStrength: { in: startStrength, out: endStrength },
   });
 
-  // Can this backend end a segment on a given frame at all? A model with no closing anchor and no
-  // reference slot for one (Kling text-to-video) cannot, and then the downstream join is nobody's
-  // choice — so the warning that offers to fix it stays away (plan P5: supportsEndFrame && feedsNext).
-  const supportsEndFrame = pinStrengthFor(backend, { castRefCount, end: 'out' }) !== 'none';
-  const feedsNext = Boolean(nextId) && recorded(entryOf(nextId)) && Boolean(entryOf(nextId)?.continuesFromPrev);
-  const showSeamWarning = supportsEndFrame && feedsNext;
-  // An APPLIED ending pin renders this segment against the unchanged next clip and records that it
-  // lands there — the joint the shared lineage rule then reads as intact (src/lib/seam-rule.js
-  // closesOnNext, the same answer the stitcher gets). Re-rendering every downstream clip would
-  // replace footage nothing touched, and the chain it rebuilds is no stronger than the pin already
-  // bought. So the cascade is offered for the case it actually repairs: an ending nobody pinned, or
-  // one the reference budget dropped.
-  const offerCascade = showSeamWarning && endStrength === 'none';
   // Derived, never stored: ticking the box and THEN pinning the ending (Custom) must not post a
   // cascade this screen has stopped offering.
   const willCascade = cascade && offerCascade;
@@ -329,14 +315,7 @@ export function SegmentRerenderDialog({ run, jobId, open, onClose }: {
 
         {showSeamWarning && (
           <WarnRow testId="downstream-seam-warning">
-            <p>
-              {nextId} starts on {jobId}&rsquo;s current last frame.{' '}
-              {/* Asked-for is not delivered: an ending pin the reference budget drops leaves the
-                  downstream join exactly as broken as never asking for one. */}
-              {endStrength !== 'none'
-                ? `Ending ${jobId} on ${nextId}'s opening frame keeps that join ${seamStrengthWords(endStrength)}, so ${nextId} and everything after it can stay exactly as they are.`
-                : `Re-rendering ${jobId} changes that frame, so ${nextId}'s join will break.`}
-            </p>
+            <p>{downstreamSeamSentence({ jobId, nextId: nextId!, endStrength })}</p>
             {offerCascade && (
               <label className="mt-2 flex items-center gap-2 text-dense text-ink-secondary">
                 <input

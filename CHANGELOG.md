@@ -503,6 +503,11 @@
   nothing had changed, for a chain no stronger than the pin already bought. The offer now appears
   only where it repairs something real: an ending left unpinned, or one the reference budget
   dropped. Ticking it and then pinning the ending withdraws the offer and the charge with it.
+  The rail's "the plan changed since this cut" block follows the same rule now, from the same
+  derivation rather than a second reading of the cut: it posts the same `auto` boundaries to the
+  same endpoint, so where that pin keeps the join it says so ("K2 and everything after it can stay
+  exactly as they are") instead of predicting a seam, and its **+ downstream** button — and the
+  price quoted on it — appear only where the join really breaks.
 
 ### Changed
 - **Segmind's prices are on file — and they are roughly half fal's for the same model.** Every
