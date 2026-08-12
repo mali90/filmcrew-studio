@@ -44,10 +44,19 @@ export function useRunEvents(runId: string | undefined): RunLive & { connected: 
         qc.invalidateQueries({ queryKey: ['runs'] });
       }
       if (event.type === 'spec-block') qc.invalidateQueries({ queryKey: ['spec', runId] });
-      // A prompt edit changes the stored text, not the live render — the reducer rightly ignores it
-      // (see run-events.ts). The prompt sheet reads through React Query, so refetching is what makes
-      // a save land in every open tab instead of leaving one showing words we would no longer send.
-      if (event.type === 'prompt-override') qc.invalidateQueries({ queryKey: ['prompts', runId] });
+      // The prompt sheet reads through React Query and stays mounted across the review, so every
+      // edge that moves what it shows has to say so:
+      //   · a prompt edit changes the stored text, not the live render — the reducer rightly ignores
+      //     it (see run-events.ts), and refetching is what makes a save land in every open tab
+      //     instead of leaving one showing words we would no longer send;
+      //   · a finished render or re-render wrote a new take's sidecars, which ARE the version
+      //     picker's options — without this the newest take is missing until a reload;
+      //   · a revise (and a replan) rewrites the spec every 'plan' view is composed from, so the
+      //     sheet would go on quoting pre-revision words and a stale banner computed against them.
+      if (event.type === 'prompt-override' || event.type === 'spec-block'
+        || event.type === 'done' || event.type === 'error') {
+        qc.invalidateQueries({ queryKey: ['prompts', runId] });
+      }
     };
     return () => { cancelled = true; es.close(); sourceRef.current = null; setConnected(false); };
   }, [runId, qc]);
