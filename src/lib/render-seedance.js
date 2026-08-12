@@ -31,7 +31,7 @@ import fs from 'node:fs';
 import config from '../../config.js';
 import log from './logger.js';
 import { refLabel } from './render-models.js';
-import { buildSeedanceArgs, cappedAudioRefs, cappedCombinedRefs, fitAudioRef, audioWindowFor, nameOf } from './seedance-args.js';
+import { buildSeedanceArgs, cappedAudioRefs, cappedCombinedRefs, fitAudioRef, audioWindowFor, voiceRefsRide, nameOf } from './seedance-args.js';
 import { appliedSeamModes, chooseSeamMode, planSeamRefs } from './prompt-compose.js';
 import { readJobOverride } from './prompt-overrides.js';
 import { buildSeedanceJobPrompt, seedanceConfigFor, modelKnobs } from './seedance.js';
@@ -159,13 +159,15 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
   // Counted exactly as the builder will see it — kept image refs, the demoted opening frame, and
   // the fitted voice clips (video refs are never authored today). audioRefsFor is hoisted here for
   // that count: it is local ffmpeg work (fit/transcode into the take dir), no upload — and the gate
-  // mirrors section 2's (planned refs or an opening frame, audio on, non-native voiceMode).
+  // is `voiceRefsRide`, the one the prompt preview asks too (see section 2).
   const plannedImages = Math.min(groups.reduce((n, g) => n + g.els.length, 0), caps.maxImages);
   const seam = chooseSeamMode({
     caps, castRefCount: plannedImages, hasSeamIn: !!startFrameSrc, hasSeamOut: !!endFrameSrc,
   });
-  const voiceRefs = ((plannedImages > 0 || startFrameSrc) && sdCfg.generateAudio && knobs.voiceMode !== 'native')
-    ? await audioRefsFor(job, spec, dir, caps) : [];
+  const voiceRefs = voiceRefsRide({
+    castRefCount: plannedImages, hasSeamIn: !!startFrameSrc, hasSeamOut: !!endFrameSrc,
+    audioOn: sdCfg.generateAudio, voiceMode: knobs.voiceMode,
+  }) ? await audioRefsFor(job, spec, dir, caps) : [];
   // Only the CAST is counted here: a soft-pinned boundary frame is droppable (planSeamRefs drops it
   // below), so counting it would fail a render that would have succeeded without its seam.
   cappedCombinedRefs(caps, { images: plannedImages, audio: voiceRefs.length });
@@ -233,9 +235,10 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
 
   // 2. Voice refs (@AudioN), only when audio is on AND voiceMode keeps the clip. In 'native' mode we
   //    attach NO clip and let the model voice the written line natively (see config.seedance.voiceMode).
-  //    A text-to-video job (no image refs) also voices natively: the endpoint requires audio refs to
-  //    ride ≥1 image/video ref, so with no images we attach no clip. The refs themselves were fitted
-  //    up top (pre-upload combined-budget check) — only the uploads happen here.
+  //    A text-to-video job also voices natively: the endpoint requires audio refs to ride ≥1
+  //    image/video ref, so with nothing to condition on we attach no clip — and a boundary frame at
+  //    EITHER end is such a thing (voiceRefsRide). The refs themselves were fitted up top (pre-upload
+  //    combined-budget check) — only the uploads happen here.
   const audioUrls = [];
   const audioIdx = new Map();
   for (const r of voiceRefs) {

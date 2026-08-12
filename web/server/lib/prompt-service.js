@@ -161,7 +161,7 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
     import(path.join(root, 'src/lib/seedance-args.js')),
   ]);
   const { capsFor, normalizeBackend, refLabel } = models;
-  const { cappedAudioRefs, cappedCombinedRefs, fitAudioRef } = seedanceArgs;
+  const { cappedAudioRefs, cappedCombinedRefs, fitAudioRef, voiceRefsRide } = seedanceArgs;
   const { composeKlingStoryboard, composeSeedanceJobPrompt, applyOverride, pinBytesOf, promptFingerprint, chooseSeamMode, planSeamRefs, appliedSeamModes } = compose;
   const { klingPromptSettings, seedancePromptSettings } = promptSettings;
   const { characterGroups, jobSpeakers } = castGroups;
@@ -296,9 +296,12 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
     }
     const { hasSeamIn, hasSeamOut } = boundariesFor(job, index);
     const audioOn = !!settings.audioOn;
-    // Voice references (@AudioN) ride the same gate as the renderer's: something to attach them to,
-    // audio on, and a voiceMode that keeps the clip.
-    const candidates = (castCount > 0 || hasSeamIn) && audioOn && defaults.seedance.voiceMode !== 'native'
+    // Voice references (@AudioN) ride the renderer's gate itself, not a copy of it: something for
+    // the clips to ride on (cast refs or a boundary frame at EITHER end), audio on, and a voiceMode
+    // that keeps the clip.
+    const candidates = voiceRefsRide({
+      castRefCount: castCount, hasSeamIn, hasSeamOut, audioOn, voiceMode: defaults.seedance.voiceMode,
+    })
       ? jobSpeakers(job, spec).filter((sp) => voiceClipFor(sp))
       : [];
     // …and the same REFUSAL. More voiced speakers than the model has @Audio slots is a hard error in

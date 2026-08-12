@@ -101,6 +101,30 @@ test('a model with per-kind budgets only is judged by those — no phantom combi
   assert.equal(view.refs.length, 12);
 });
 
+// ── the voice GATE: what makes a job carry voice refs at all ────────────────────────────────────
+//
+// The renderer answers this with voiceRefsRide (src/lib/seedance-args.js, asserted end to end in
+// test/unit/seedance-voice-gate.test.js). The preview asks the same function, so a cast-less
+// segment pinned only at its END previews the @Audio ref the wire will really carry — it used to
+// count cast images and an opening frame only, and previewed native dialogue for a job that ships
+// its clips.
+test('a cast-less job pinned only at its ENDING frame still previews its voice ref', async () => {
+  const spec = specWith(0, ['ana']);
+  spec.kling.jobs[0].last_frame = 'elements/references/closing.png';
+  const view = await preview(spec, 'seedance-2.0@fal');
+  assert.equal(view.error ?? null, null);
+  assert.deepEqual(view.refs.filter((r) => r.role === 'closing frame').map((r) => r.ref), ['@Image1'],
+    'the ending image is what makes this reference-to-video');
+  assert.deepEqual(view.refs.filter((r) => r.role === 'voice').map((r) => r.character), ['ana']);
+  assert.match(view.prompt, /@Audio1/, 'and the previewed prompt cites the clip the render sends');
+});
+
+test('a job with nothing to condition on previews no voice ref — the model voices the line', async () => {
+  const view = await preview(specWith(0, ['ana']), 'seedance-2.0@fal');
+  assert.equal(view.error ?? null, null);
+  assert.deepEqual(view.refs, [], 'text-to-video attaches neither an image nor an audio reference');
+});
+
 test('a speaker with no minted clip costs no reference — it is voiced natively', async () => {
   // Four speakers, one of them unregistered: three @Audio refs, which is the 2.0 cap exactly.
   const view = await preview(specWith(2, ['ana', 'bo', 'cy', 'nobody']), 'seedance-2.0@fal');

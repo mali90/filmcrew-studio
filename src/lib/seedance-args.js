@@ -74,6 +74,28 @@ export function fitAudioRef(durationS, caps, { refCount = 1 } = {}) {
   return 'keep';
 }
 
+/**
+ * Do this job's `@AudioN` voice clips ride at all? The reference endpoints take audio only
+ * alongside something the model is conditioned on, so a genuine text-to-video job attaches no clip
+ * and is voiced natively; `voiceMode: 'native'` and audio-off are the two deliberate ways to ask
+ * for the same thing.
+ *
+ * A CLOSING frame counts exactly like an opening one. Both reach the model as an image — a native
+ * first/last-frame anchor where the model has one, otherwise a trailing image reference — so a
+ * cast-less segment pinned only at its END is a reference-to-video job, and dropping its registered
+ * voices there fell back to model-native dialogue for no reason the user could see.
+ *
+ * Lives here, beside the budget checks, because the renderer (src/lib/render-seedance.js) and the
+ * prompt PREVIEW (web/server/lib/prompt-service.js) must answer it identically: the preview's whole
+ * claim is that it shows what the wire will carry, and two copies of this rule is how that claim
+ * quietly stops being true.
+ * @param {{castRefCount?:number, hasSeamIn?:boolean, hasSeamOut?:boolean, audioOn?:boolean, voiceMode?:string}} job
+ */
+export function voiceRefsRide({ castRefCount = 0, hasSeamIn = false, hasSeamOut = false, audioOn = false, voiceMode = 'native' } = {}) {
+  const conditioned = castRefCount > 0 || Boolean(hasSeamIn) || Boolean(hasSeamOut);
+  return conditioned && Boolean(audioOn) && voiceMode !== 'native';
+}
+
 /** Reject an unlisted enum value loudly, naming the model's legal set (no cap ⇒ no opinion). */
 function oneOf(caps, kind, value, allowed) {
   if (!allowed?.length || allowed.includes(value)) return value;
@@ -194,4 +216,4 @@ export function buildSeedanceArgs(intent, caps) {
   return args;
 }
 
-export default { buildSeedanceArgs, firstFrameIsRef, fitAudioRef, audioWindowFor, cappedAudioRefs, cappedCombinedRefs };
+export default { buildSeedanceArgs, firstFrameIsRef, fitAudioRef, audioWindowFor, voiceRefsRide, cappedAudioRefs, cappedCombinedRefs };

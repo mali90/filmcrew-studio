@@ -340,6 +340,13 @@
   Topaz a second time for a master already on disk. It now answers 409 and names *reopen* as the way
   forward, exactly as `render`, `revise`, `rerender-job` and `assemble` do; after a reopen, a second
   delivery works as before and lands as exactly one more final.
+- **A segment pinned only at its ENDING frame keeps its character voices.** Seedance attaches voice
+  reference clips only to a job the model is conditioned on, and the check counted cast images and an
+  opening frame — but not a closing one. A cast-less segment re-rendered against the next clip's
+  opening frame therefore sent its ending image and dropped every registered voice, and the dialogue
+  came back in model-native voices with nothing on screen saying why. Both ends now count, and the
+  prompt preview asks the renderer's own function rather than a copy of it, so what the sheet shows
+  stays what the wire carries.
 - **Starring a cast now sends the character's FULL reference set, not one image each.** A run with
   three starred characters — each carrying seven reference views — could reach a Seedance render
   with a single image per character: the Casting agent's "pick the smallest set" guidance biased it
