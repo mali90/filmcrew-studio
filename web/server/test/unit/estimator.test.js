@@ -4,9 +4,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { estimateRender, estimateUpscale, jobSeconds, readProbeResolution, readRenderResolution, readSeedanceResolution, readUpscaleProvider, readUpscaleTargetShortSide } from '../../lib/estimator.js';
+import { estimateRender, estimateUpscale, jobSeconds, readEnvVar, readProbeResolution, readRenderResolution, readSeedanceResolution, readUpscaleProvider, readUpscaleTargetShortSide } from '../../lib/estimator.js';
+import { voiceKnobs } from '../../lib/voice-refs.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
+// config.js is the CHILD's reading of the same .env, and it runs `import 'dotenv/config'` — point
+// dotenv at nothing BEFORE it is ever loaded, so a developer's real .env cannot leak in here.
+const { neutralizeDotenv } = await import(path.join(ROOT, 'test/helpers/env.js'));
+neutralizeDotenv();
+const { buildConfig } = await import(path.join(ROOT, 'config.js'));
 const golden = () => JSON.parse(fs.readFileSync(path.join(ROOT, 'examples/ocean-lighthouse/spec.json'), 'utf8'));
 
 const threeJobs = () => {
@@ -297,6 +303,88 @@ test('readUpscaleTargetShortSide: an explicit provider beats the env derivation'
     assert.equal(readUpscaleTargetShortSide(dir, 'kling-o3@fal'), 720, 'env segmind honors the 720p target');
     assert.equal(readUpscaleTargetShortSide(dir, 'kling-o3@fal', undefined, 'fal'), 1080, 'picking fal beats UPSCALE_PROVIDER=segmind');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ── ONE reading of the .env: dotenv's ────────────────────────────────────────
+// readEnvVar answers for EVERY .env-derived knob this server quotes or budgets — the resolution
+// tiers, the upscale provider and its target, key presence, and run-service's voice-reference
+// demand. The render child reads that same file through dotenv (`import 'dotenv/config'` in
+// config.js), whose grammar differs from a hand-rolled "first KEY= line" reader in three ways: the
+// LAST assignment wins, a trailing `# comment` is not part of the value, and `export KEY=…` is
+// still an assignment. Reading it the other way is not a cosmetic disagreement — it made the server
+// promise a soft boundary pin against a voice demand the renderer did not have, and quote a tier it
+// would not render. So dotenv itself is the oracle, on a file using all three quirks at once.
+test('readEnvVar reads a .env exactly as the render child does — dotenv itself is the oracle', async () => {
+  const { parse } = await import('dotenv');
+  const quirkyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-dotenv-q-'));
+  const plainDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-dotenv-p-'));
+  try {
+    const quirky = [
+      '# what someone had configured first',
+      'SEEDANCE_GENERATE_AUDIO=false',
+      'SEEDANCE_RESOLUTION=480p',
+      'UPSCALE_TARGET_RESOLUTION=1080p',
+      'export SEEDANCE_VOICE_MODE=reference',
+      'export UPSCALE_PROVIDER=segmind',
+      'SEGMIND_API_KEY=y',
+      'SEEDANCE_PROBE_RESOLUTION=480p # probes stay cheap',
+      'LLM_MODEL=claude sonnet 4 # a value runs to the comment, not to the first space',
+      '',
+      '# …and what they changed their mind to, further down the same file',
+      'SEEDANCE_GENERATE_AUDIO=true',
+      'SEEDANCE_RESOLUTION=1080p',
+      'UPSCALE_TARGET_RESOLUTION=4k',
+    ].join('\n') + '\n';
+    fs.writeFileSync(path.join(quirkyDir, '.env'), quirky);
+
+    // What the CHILD gets, from dotenv's own parser — never a second reading of ours.
+    const child = parse(quirky);
+    assert.deepEqual(child, {
+      SEEDANCE_GENERATE_AUDIO: 'true',
+      SEEDANCE_RESOLUTION: '1080p',
+      UPSCALE_TARGET_RESOLUTION: '4k',
+      SEEDANCE_VOICE_MODE: 'reference',
+      UPSCALE_PROVIDER: 'segmind',
+      SEGMIND_API_KEY: 'y',
+      SEEDANCE_PROBE_RESOLUTION: '480p',
+      LLM_MODEL: 'claude sonnet 4',
+    }, 'dotenv itself reads it this way');
+    for (const [key, value] of Object.entries(child)) {
+      assert.equal(readEnvVar(quirkyDir, key), value, `${key}: the server reads what the child loads`);
+    }
+
+    // The same values written plainly: every derived knob must answer identically, so no quirk of
+    // the file can move a price, a tier or a budget.
+    fs.writeFileSync(path.join(plainDir, '.env'), Object.entries(child).map(([k, v]) => `${k}=${v}`).join('\n') + '\n');
+    const knobs = (dir) => ({
+      render: readRenderResolution(dir, 'seedance-2.0@fal'),
+      probe: readProbeResolution(dir, 'seedance-2.0@fal'),
+      provider: readUpscaleProvider(dir, 'seedance-2.5@segmind'),
+      target: readUpscaleTargetShortSide(dir, 'kling-o3@fal'),
+      voices: voiceKnobs((k) => readEnvVar(dir, k)),
+    });
+    assert.deepEqual(knobs(quirkyDir), knobs(plainDir), 'the quirks change the bytes, never the answers');
+    assert.deepEqual(knobs(quirkyDir), {
+      render: '1080p',   // the LAST assignment is the tier that renders and bills
+      probe: '480p',     // a trailing comment is not part of the value
+      provider: 'segmind',
+      target: 2160,      // …nor of the target the approve bar promises
+      voices: { audioOn: true, voiceMode: 'reference' }, // `export` is an assignment
+    });
+
+    // …and the child's own reading of those same knobs agrees, by config.js's rules rather than a
+    // restatement of them: this is the pairing that decides a Seedance 2.5 job's voice-reference
+    // demand, and with it whether a promised boundary pin survives the combined-reference cap.
+    const childCfg = buildConfig(child);
+    assert.equal(voiceKnobs((k) => readEnvVar(quirkyDir, k)).audioOn, childCfg.seedance.generateAudio);
+    assert.equal(voiceKnobs((k) => readEnvVar(quirkyDir, k)).voiceMode, childCfg.seedance.voiceMode);
+    assert.equal(readRenderResolution(quirkyDir, 'seedance-2.0@fal'), childCfg.seedance.resolution);
+    assert.equal(readProbeResolution(quirkyDir, 'seedance-2.0@fal'), childCfg.seedance.probeResolution);
+    assert.equal(readEnvVar(quirkyDir, 'UPSCALE_TARGET_RESOLUTION'), childCfg.upscale.targetResolution);
+    assert.equal(readEnvVar(quirkyDir, 'UPSCALE_PROVIDER'), childCfg.upscale.provider);
+  } finally {
+    for (const d of [quirkyDir, plainDir]) fs.rmSync(d, { recursive: true, force: true });
+  }
 });
 
 // The two are one system: a Segmind-rendered run must show SEGMIND's Topaz figure on approve, not

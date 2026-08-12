@@ -247,6 +247,17 @@
   install commands.
 
 ### Fixed
+- **Prices, tiers and continuity promises now read your `.env` the way the render actually does.**
+  The server had its own reader for the settings file, and it disagreed with the renderer's on
+  three perfectly ordinary ways of writing one: it took the *first* assignment of a key where the
+  render keeps the *last*, ignored a line written as `export KEY=value`, and cut a value at the
+  first space instead of at a trailing `# comment`. So a file where you had changed your mind
+  further down — `SEEDANCE_GENERATE_AUDIO=false` early, `=true` later — had the interface quoting a
+  resolution the render would not use, naming an upscale vendor it would not bill, and, on Seedance
+  2.5 (where images, audio and video all draw on one reference budget), promising a re-rendered
+  seam a continuity pin the renderer then had to drop for a voice clip it had not counted — a paid
+  re-render that came back as a scene cut. Every `.env`-derived answer on the server now comes from
+  one reader, the same grammar the render child loads the file with.
 - **A broken prompt-edit file is refused before the render, not after you have paid for it.** The
   check that runs before a render only asked whether the saved edits *parsed* and held a jobs
   object — so a file whose entries were malformed (a prompt that is a number, a segment list that

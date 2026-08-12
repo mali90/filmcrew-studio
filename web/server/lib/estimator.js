@@ -10,12 +10,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-// Two static imports from the host src/ tree, both leaves — zero imports of their own, no env, so
-// neither can drag config.js in. See the canary in test/integration/runs-caps.test.js.
+// Static imports from the host src/ tree, all config-free — no env of their own and nothing in their
+// graphs reaches config.js. See the canary in test/integration/runs-caps.test.js, which walks them.
+// Static rather than lazy because this module is SYNCHRONOUS: readEnvVar answers inside an estimate.
 import { capsFor, normalizeBackend } from '../../../src/lib/render-models.js';
 // …and the render child's OWN resolution rule, imported rather than re-stated: a price quoted for a
 // tier the renderer would not use is exactly the bug a mirrored copy of it caused.
 import { seedanceResolution } from '../../../src/lib/prompt-settings.js';
+// …and dotenv's OWN grammar for the .env, for exactly the same reason (see readEnvVar). It is a
+// re-implementation of dotenv's line parser, NOT dotenv — nothing here ever sources a file.
+import { dotenvValues } from '../../../src/lib/env-file.js';
 
 const PRICES = JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'prices.json'), 'utf8'));
 const DEFAULT_SHOT_SECONDS = 5; // mirrors config.kling.defaultShotSeconds
@@ -141,7 +145,8 @@ const priceKeys = () => Object.keys(PRICES).filter((k) => PRICES[k] && typeof PR
 /** One value out of <envRoot>/.env, read as DATA (never sourced) — the settings page writes that
  *  file and the render child reads it, so it is what the estimate has to price. Exported because
  *  the same reader answers the non-price knobs a run's boundary budget depends on (run-service's
- *  voice-reference demand); a second .env parser in this server would be one too many. */
+ *  voice-reference demand); a second .env parser in this server would be one too many, which is
+ *  why this one and the prompt preview's now share dotenvValues — ONE rule for every knob. */
 export function readEnvVar(envRoot, key, fallbackEnv) {
   // The CHILD's precedence, mirrored exactly: a variable already present in the spawned process's
   // env (childEnv — even an explicit empty string) wins, because dotenv never overwrites an
@@ -149,11 +154,14 @@ export function readEnvVar(envRoot, key, fallbackEnv) {
   // actually bills another.
   if (fallbackEnv && Object.hasOwn(fallbackEnv, key)) return String(fallbackEnv[key] ?? '').trim();
   try {
-    const text = fs.readFileSync(path.join(envRoot, '.env'), 'utf8');
-    // LINE-bounded whitespace ([^\S\n], never \s): `\s` crosses the newline, so a blank `FAL_KEY=`
-    // line would swallow the NEXT assignment as its value and report a key that is not there.
-    const m = text.match(new RegExp(`^[^\\S\\n]*${key}[^\\S\\n]*=[^\\S\\n]*("([^"]*)"|'([^']*)'|[^\\s#]+)`, 'm'));
-    return (m?.[2] ?? m?.[3] ?? m?.[1] ?? '').trim();
+    // dotenv's grammar, through the ONE implementation of it this repo has (src/lib/env-file.js,
+    // where it is pinned against dotenv's own parser). A regex of our own answered three of its
+    // rules differently — it took the FIRST assignment where dotenv keeps the LAST, ignored an
+    // `export ` prefix, and ended a value at the first space rather than at a trailing `# comment`
+    // — so an ordinary .env had this server pricing a tier, choosing a vendor and budgeting a
+    // voice reference the render child never saw. Missing stays '' (not undefined): every caller
+    // below reads the answer as a string.
+    return dotenvValues(fs.readFileSync(path.join(envRoot, '.env'), 'utf8'))[key] ?? '';
   } catch { /* no .env yet */ }
   return '';
 }
