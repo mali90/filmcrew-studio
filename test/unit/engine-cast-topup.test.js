@@ -148,6 +148,69 @@ test('fal Seedance 2.5: a voiced line reserves its @Audio slot out of the 50 com
     `${plannedImages} images + 1 voice ref exceeds ${nameOf(caps)}'s ${caps.maxCombinedRefs}-reference combined budget`);
 });
 
+// The other half of that budget: reserving a slot only works if an already-oversized set gives one
+// UP. Casting can attach the full 50 on its own — the spec schema counts images against maxImages
+// and passes it, and the combined cap is not checked until the renderer is about to pay for the
+// upload round — so a plan the engine approves would still die at submit.
+test('fal Seedance 2.5: an OVER-budget starred set is trimmed, not preserved', () => {
+  const inv = refsFor('keeper', 60);
+  const spec = {
+    spec_version: '1.0',
+    kling: { elements: refsFor('keeper', 50).map((r) => el(r.id, 'Keeper')), jobs: [{ job_id: 'J1', shots: ['S1'] }] },
+    audio: { voice: { lines: [line('S1', 'Keeper')] } },
+  };
+  topUpStarredElements(spec, ctxFor('seedance-2.5@fal', ['keeper'], inv, voiced('Keeper')));
+  const caps = capsFor('seedance-2.5@fal');
+  assert.equal(spec.kling.elements.length, 49, 'the 50th image gave its slot back to the voice clip');
+  assert.ok(Math.min(spec.kling.elements.length, caps.maxImages) + 1 <= caps.maxCombinedRefs,
+    `the roster still cannot ride beside its voice clip in ${nameOf(caps)}'s combined budget`);
+});
+
+test('an over-budget EXPLICIT subset is trimmed to the job\'s own budget', () => {
+  const inv = [...refsFor('keeper', 60), ...refsFor('gull', 60)];
+  const full = [...refsFor('keeper', 25), ...refsFor('gull', 25)].map((r) => r.id);
+  const spec = {
+    spec_version: '1.0',
+    kling: {
+      elements: full.map((id) => el(id, id.startsWith('keeper') ? 'Keeper' : 'Gull')),
+      jobs: [
+        { job_id: 'J1', shots: ['S1'], elements: [...full] },       // silent — the whole 50 fits
+        { job_id: 'J2', shots: ['S2'], elements: [...full] },       // two voiced speakers ride here
+      ],
+    },
+    audio: { voice: { lines: [line('S2', 'Keeper'), line('S2', 'Gull')] } },
+  };
+  topUpStarredElements(spec, ctxFor('seedance-2.5@fal', ['keeper', 'gull'], inv, voiced('Keeper', 'Gull')));
+  assert.equal(spec.kling.jobs[0].elements.length, 50, 'a job with no voice clip keeps the whole 50');
+  assert.ok(spec.kling.jobs[1].elements.length <= 48,
+    `J2 sends ${spec.kling.jobs[1].elements.length} images beside 2 voice clips — over the 50 combined`);
+  for (const id of spec.kling.jobs[1].elements) {
+    assert.ok(spec.kling.elements.some((e) => e.id === id), `${id} was trimmed from the roster but left in a job`);
+  }
+});
+
+// A subset left EMPTY inherits the whole roster (characterGroups), which is a bigger change than the
+// trim was asked for: the job would suddenly carry every character in the plan.
+test('a subset whose only reference is trimmed keeps its character, never inherits the roster', () => {
+  const inv = refsFor('keeper', 60);
+  const full = refsFor('keeper', 50).map((r) => r.id);
+  const spec = {
+    spec_version: '1.0',
+    kling: {
+      elements: full.map((id) => el(id, 'Keeper')),
+      jobs: [{ job_id: 'J1', shots: ['S1'], elements: [full.at(-1)] }], // only the reference that goes
+    },
+    audio: { voice: { lines: [line('S1', 'Keeper')] } },
+  };
+  topUpStarredElements(spec, ctxFor('seedance-2.5@fal', ['keeper'], inv, voiced('Keeper')));
+  assert.equal(spec.kling.elements.length, 49);
+  assert.ok(spec.kling.jobs[0].elements.length > 0, 'an emptied subset would silently mean "the whole roster"');
+  for (const id of spec.kling.jobs[0].elements) {
+    assert.ok(spec.kling.elements.some((e) => e.id === id), `${id} is not in the roster`);
+  }
+  assert.ok(spec.kling.jobs[0].elements.length <= 49);
+});
+
 test('two voiced speakers reserve two slots; an unregistered speaker reserves none', () => {
   const inv = refsFor('keeper', 60);
   const specFor = (clipFor, lines) => {

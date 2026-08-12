@@ -382,6 +382,12 @@ function stampResolution(spec, ctx) {
  * minus what that job's VOICE references will spend out of it, and capped at Kling's per-element
  * ceiling (frontal + maxRefsPerElement — extra views are sliced off at render).
  * The budget splits evenly across the starred cast; un-starred elements are never touched.
+ *
+ * The same budget is enforced in the other direction: a Casting agent that attached MORE references
+ * than the model will carry (50 images plus a voice clip is 51 combined on fal Seedance 2.5) writes
+ * a plan the schema accepts — it counts images against maxImages, and the combined cap is only
+ * checked by the renderer, right before a paid upload round — so an over-budget starred set is
+ * trimmed here rather than left to fail at submit.
  */
 export function topUpStarredElements(spec, ctx) {
   const cast = ctx?.castNames ?? [];
@@ -443,6 +449,40 @@ export function topUpStarredElements(spec, ctx) {
   // budget (budget 9, three props, two stars: 4 and 2 instead of 3 each).
   const nonCast = els.filter((e) => !castSlugs.some((cslug) => ownedBy(e, cslug))).length;
   const share = Math.min(Math.floor(Math.max(0, rosterBudget - nonCast) / cast.length), perElementCap);
+  /**
+   * Give back the references the budget cannot carry, before anything is topped up — the top-up's
+   * own `els.length >= budget` guard only stops it from making an over-budget set WORSE. Removed
+   * from the biggest starred set each time, so the trim lands where the crowding is, and never below
+   * one reference per character: WHICH characters ride is Casting's call, and this layer only sizes
+   * their reference sets. Un-starred elements are not ours to take (the same rule as the split).
+   * @returns {object[]} the elements removed, so a job naming one by id can be repaired
+   */
+  const trimToBudget = (list, budget, slugs, ownedIn = (l, cs) => l.filter((e) => ownedBy(e, cs))) => {
+    const cut = [];
+    for (let over = list.length - budget; over > 0; over--) {
+      const biggest = slugs.map((cs) => ownedIn(list, cs)).reduce((a, b) => (b.length > a.length ? b : a), []);
+      if (biggest.length <= 1) break;
+      const [gone] = list.splice(list.indexOf(biggest.at(-1)), 1);
+      cut.push(gone);
+    }
+    return cut;
+  };
+  const trimmed = trimToBudget(els, rosterBudget, castSlugs);
+  if (trimmed.length) {
+    const gone = new Set(trimmed.map((e) => e.id));
+    for (const job of jobs) {
+      if (!Array.isArray(job?.elements) || !job.elements.length) continue;
+      const kept = job.elements.filter((id) => !gone.has(id));
+      // An explicit subset must never be left EMPTY: that means "inherit the whole roster"
+      // (characterGroups), which would cast every character in the plan into a job the planner
+      // wrote for one. Each character it named keeps a seat instead — the subset fill below then
+      // widens that seat to the job's own share.
+      job.elements = kept.length ? kept : castSlugs
+        .filter((cs) => job.elements.some((id) => ownedBy(trimmed.find((e) => e.id === id), cs)))
+        .map((cs) => els.find((e) => ownedBy(e, cs))?.id)
+        .filter(Boolean);
+    }
+  }
   const added = [];
   for (const name of cast) {
     const cslug = slug(name);
@@ -475,12 +515,17 @@ export function topUpStarredElements(spec, ctx) {
   // because which characters a shot contains is the Job Planner's call, not this layer's.
   const byId = new Map(els.map((e) => [e.id, e]));
   let filled = 0;
+  let cutFromJobs = 0;
   for (const job of jobs) {
     if (!Array.isArray(job?.elements) || !job.elements.length) continue; // inherits the whole roster
     const ownedInJob = (cslug) => job.elements.filter((id) => { const e = byId.get(id); return e && ownedBy(e, cslug); });
     const riding = castSlugs.filter((cslug) => ownedInJob(cslug).length);
     if (!riding.length) continue;
     const budget = budgetFor(job);
+    // …and a subset can be over its OWN budget for the same reason the roster can — the planner
+    // named more references than this job's voice clips leave room for. Trimmed against the job's
+    // budget, which is the number the renderer will count.
+    cutFromJobs += trimToBudget(job.elements, budget, riding, (ids, cs) => ids.filter((id) => ownedBy(byId.get(id), cs))).length;
     const others = job.elements.filter((id) => { const e = byId.get(id); return !e || !riding.some((cslug) => ownedBy(e, cslug)); }).length;
     const jobShare = Math.min(share, Math.floor(Math.max(0, budget - others) / riding.length));
     for (const cslug of riding) {
@@ -500,6 +545,9 @@ export function topUpStarredElements(spec, ctx) {
   }
   if (filled) {
     log.info(`Casting top-up: filled ${filled} reference slot(s) in explicit job subsets, so a job that names its own elements sends the same set as the roster.`);
+  }
+  if (trimmed.length || cutFromJobs) {
+    log.info(`Casting top-up: trimmed ${trimmed.length} roster reference(s)${trimmed.length ? ` [${trimmed.map((e) => e.id).join(', ')}]` : ''} and ${cutFromJobs} job-subset slot(s) — the plan carried more references than this model sends alongside its voice clips (budget ${rosterBudget}).`);
   }
   return spec;
 }
