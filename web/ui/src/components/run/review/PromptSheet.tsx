@@ -200,7 +200,13 @@ function LockedPins({ view }: { view: PromptView }) {
         </ul>
       )}
       {view.pinBytes != null && view.pinBytes > 0 && (
-        <p className="tnum mt-1.5">{int(view.pinBytes)} B of the budget is already spoken for.</p>
+        // With no budget there is nothing to be "spoken for" — the number is still worth showing
+        // (it is what an edit cannot change), but calling it a share of a budget would invent one.
+        <p className="tnum mt-1.5">
+          {view.maxBytes == null
+            ? `${int(view.pinBytes)} B of this prompt is ours, not yours to edit.`
+            : `${int(view.pinBytes)} B of the budget is already spoken for.`}
+        </p>
       )}
     </div>
   );

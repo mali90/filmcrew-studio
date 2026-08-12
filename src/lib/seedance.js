@@ -57,7 +57,9 @@ export function buildSeedanceJobPrompt(job, spec, opts = {}) {
     ...(opts.style !== undefined ? { style: opts.style } : {}),
     ...(opts.avoidClause !== undefined ? { avoid: opts.avoidClause } : {}),
     ...(opts.textClause !== undefined ? { textRule: opts.textClause } : {}),
-    ...(Number(opts.maxBytes) ? { promptMaxBytes: Number(opts.maxBytes) } : {}),
+    // `!= null`, never truthiness: 0 is the uncapped sentinel and has to travel, while undefined/
+    // null still mean "the caller supplied none" and leave the configured knob alone.
+    ...(opts.maxBytes != null ? { promptMaxBytes: Number(opts.maxBytes) } : {}),
   };
   return assertOverrideFits(
     applyOverride(composeSeedanceJobPrompt(job, spec, settings, opts), opts.override ?? null, settings),

@@ -63,7 +63,8 @@ Shot 1: Wide, eye level. <your scene body> Camera: slow pan. Marie says: "…" (
 Shot 2: …
 ```
 
-The whole document is capped once (`SEEDANCE_PROMPT_MAX_BYTES`, default 5000) rather than per shot.
+The whole document is sent as written — there is no per-shot budget on Seedance, and no whole-prompt
+one either unless you set `SEEDANCE_PROMPT_MAX_BYTES` yourself.
 
 ---
 
@@ -76,8 +77,16 @@ instead of on screen.
 | Backend | Budget | Counted over | Knob |
 |---|---|---|---|
 | `kling-o3@fal` | **500 B per shot segment** (≤6 segments per job) | each segment separately | `KLING_SEGMENT_MAX_BYTES` |
-| `seedance-2.0@fal` · `@segmind` | **5000 B** | the whole job prompt | `SEEDANCE_PROMPT_MAX_BYTES` |
-| `seedance-2.5@fal` · `@segmind` | **5000 B** | the whole job prompt | `SEEDANCE_PROMPT_MAX_BYTES` |
+| `seedance-2.0@fal` · `@segmind` | **none** | the whole job prompt | `SEEDANCE_PROMPT_MAX_BYTES` |
+| `seedance-2.5@fal` · `@segmind` | **none** | the whole job prompt | `SEEDANCE_PROMPT_MAX_BYTES` |
+
+Seedance ships **uncapped**: no provider documents a prompt-length limit for these models (Segmind's
+2.0/2.5 API pages state none), so a long multi-shot prompt reaches the model whole. ByteDance, the
+model's owner, *recommends* keeping a prompt under about 1000 words — that is quality guidance about
+what the model attends to, not an API limit, and the pipeline does not enforce it. Set
+`SEEDANCE_PROMPT_MAX_BYTES` to a number if a provider ever answers 422 on prompt length; unset, empty
+and `0` all mean uncapped. Kling's per-segment cap is the opposite kind of number: fal's Kling o3
+schema really rejects a 512-byte segment, so it is enforced.
 
 The meter you edit against is **not** the raw cap. It is:
 
@@ -89,6 +98,9 @@ where `pinBytes` is what the system's share already owns in that job — front m
 speech clauses, frame pins. The server measures it with the same composer the render uses
 (`pinBytesOf`), so the number in the editor and the number the render enforces cannot disagree. On
 Kling you get one meter per shot, because the cap is per shot; on Seedance, one for the job.
+
+Where there is no cap, there is no denominator: the meter shows the byte **count** alone and Save
+never refuses on length. An editor that invented a limit would be the cap again, wearing a meter.
 
 **Nothing is ever truncated for you when you edit.** Over budget, every byte you typed stays in the
 box, Save refuses, and the message says by how much. Text cut behind your back is text you cannot

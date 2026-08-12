@@ -1,9 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { neutralizeDotenv } from '../helpers/env.js';
-import { loadGoldenSpec } from '../helpers/fixtures.js';
+import { ROOT, loadGoldenSpec } from '../helpers/fixtures.js';
 neutralizeDotenv();
+// This file pins the DEFAULT whole-prompt path, which is now uncapped. config.js snapshots the
+// environment at import, so an inherited shell value would silently re-cap it and the assertions
+// below would pass for the wrong reason. The env-SET half lives in seedance-prompt-cap.test.js:
+// one process can only snapshot one value.
+delete process.env.SEEDANCE_PROMPT_MAX_BYTES;
 const { buildSeedanceJobPrompt, seedanceConfigFor, clampBytes, HOOK_PREFIX, TRANSITION_WORDS } = await import('../../src/lib/seedance.js');
 
 const REFS = [{ name: 'keeper', refs: ['@Image1', '@Image2'] }];
@@ -150,6 +157,63 @@ test('clampBytes never splits a multibyte char and is a no-op under budget', () 
   assert.ok(!out.includes('�'));
 });
 
+// ── The whole-prompt clamp is OFF by default ────────────────────────────────────────────────────
+// No provider documents a prompt-length limit for Seedance (Segmind's 2.0/2.5 API pages state none;
+// ByteDance only RECOMMENDS staying under ~1000 words), so the 5000-byte default was self-imposed
+// and long multi-shot prompts were being shortened before anyone could see it. Uncapped is now the
+// default; SEEDANCE_PROMPT_MAX_BYTES remains the lever for anyone who meets a provider 422.
+
+/** The golden spec's K1 with ~7 KB of scene prose per shot — a prompt no 5000-byte cap survives. */
+function hugeSpec() {
+  const spec = loadGoldenSpec();
+  for (const shot of spec.shots) {
+    shot.kling.content_prompt = `${shot.kling.content_prompt} ${'The rain keeps coming in off the water. '.repeat(175)}`.trim();
+  }
+  return spec;
+}
+
+test('UNCAPPED by default: a ~20 KB multi-shot prompt reaches the wire byte for byte', () => {
+  const spec = hugeSpec();
+  const { prompt, front, shotPrompts } = buildSeedanceJobPrompt(spec.kling.jobs[0], spec, { refGroups: REFS });
+
+  // The exact document the composer assembles — front matter, blank line, the shot blocks joined by
+  // their connectors. Nothing between that and the provider may re-cut it.
+  assert.equal(prompt, `${front}\n\n${shotPrompts.join('\nCut to: ')}`, 'the prompt IS the assembled document, unclamped');
+  assert.ok(Buffer.byteLength(prompt, 'utf8') > 20000, `a 20 KB prompt survives whole (got ${Buffer.byteLength(prompt, 'utf8')} B)`);
+  // The clamp's marker only ever lands at the END — the speech rule quotes a literal `says: "…"`, so
+  // an `includes` here would report a cut that never happened.
+  assert.ok(!prompt.endsWith('…'), 'nothing was cut, so nothing marks a cut');
+  for (const block of shotPrompts) assert.ok(prompt.includes(block), 'every shot body is present verbatim');
+});
+
+test('docs/PROMPTS.md does not still publish a Seedance byte cap the code no longer applies', () => {
+  // A number in the docs outlives the code that produced it, and this one is the whole promise:
+  // a user who reads "capped at 5000" writes short prompts for a limit that is not there.
+  const doc = fs.readFileSync(path.join(ROOT, 'docs/PROMPTS.md'), 'utf8');
+  const seedanceRows = doc.split('\n').filter((l) => /^\|\s*`seedance-/.test(l));
+  assert.ok(seedanceRows.length >= 2, 'the byte-budget table still has a row per Seedance model');
+  for (const row of seedanceRows) {
+    assert.ok(!/\d+\s*B\b/.test(row), `a Seedance row still quotes a byte budget: ${row.trim()}`);
+    assert.match(row, /SEEDANCE_PROMPT_MAX_BYTES/, 'and the knob is still named — it is the lever for a provider 422');
+  }
+  // Kling's row is a REAL cap (fal's o3 schema) and must survive untouched.
+  const klingRow = doc.split('\n').find((l) => /^\|\s*`kling-o3@fal`/.test(l));
+  assert.match(klingRow ?? '', /500 B per shot segment/);
+  assert.match(klingRow ?? '', /KLING_SEGMENT_MAX_BYTES/);
+  assert.ok(!/`SEEDANCE_PROMPT_MAX_BYTES`,?\s*default 5000/.test(doc), 'the removed default is not still described as one');
+});
+
+test('clampBytes with NO cap is a no-op — 0 or a missing budget must never empty a paid prompt', () => {
+  // Belt and braces behind promptCapOf: 0 is the uncapped sentinel now, and the old arithmetic
+  // turned it into a lone ellipsis. clampBytes is re-exported publicly (src/lib/seedance.js), so a
+  // caller outside this repo can hand it either shape.
+  const long = 'x'.repeat(9000);
+  for (const noCap of [0, undefined, null, NaN, -1, '', 'nonsense']) {
+    assert.equal(clampBytes(long, noCap), long, `clampBytes(s, ${JSON.stringify(noCap)}) must return s untouched`);
+  }
+  assert.equal(clampBytes('short', 0), 'short');
+});
+
 // ── shot syntax: 'connectors' (Seedance 2.0) vs 'numbered' (Seedance 2.5, BOTH providers) ────────
 // Seedance 2.5's documented prompt form numbers its shots ("Shot 1: …", "Shot 2: …") instead of
 // joining them with transition connectors. Which form a model wants is DATA (caps.shotSyntax) that
@@ -217,9 +281,10 @@ test('throws on unknown shot id / missing content_prompt', () => {
   assert.throws(() => buildSeedanceJobPrompt(spec2.kling.jobs[0], spec2), /missing kling\.content_prompt/);
 });
 
-// The whole prompt is 1353 B against a 5000 B cap, so a saved edit is only ever endangered by front
-// matter the SAVE could not see coming. `--take`/`--feedback` are exactly that: they are re-render
-// knobs, so the editor's byte meter (a full render from the plan) never charged for them.
+// Only a cap that is SET can endanger a saved edit, and then only through front matter the SAVE
+// could not see coming — so this case pins its own cap (MAX) rather than leaning on a default.
+// `--take`/`--feedback` are exactly that unseeable growth: they are re-render knobs, so the editor's
+// byte meter (a full render from the plan) never charged for them.
 test('an edit that fills the plan render\'s budget is REFUSED on a re-render that grows the front matter', () => {
   const spec = loadGoldenSpec();
   const job = spec.kling.jobs[0];

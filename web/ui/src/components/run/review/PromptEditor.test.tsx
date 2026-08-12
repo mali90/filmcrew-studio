@@ -1,9 +1,12 @@
-// The editor's two promises, asserted rather than assumed:
+// The editor's three promises, asserted rather than assumed:
 // · the meter is in UTF-8 BYTES against the room left for YOUR words (`maxBytes − pinBytes`), so an
 //   em dash costs 3 and an emoji 4 — counting characters is how a 480-character edit sails past a
 //   500-byte cap and dies at the provider instead of here.
 // · nothing is ever truncated for you. Over budget, the textarea keeps every byte you typed and Save
 //   refuses out loud with the number (Don't #7).
+// · where there is NO budget (`maxBytes: null` — Seedance's whole-prompt clamp ships off), the meter
+//   degrades to a count and the editor gets out of the way. It may never refuse a save the renderer
+//   would accept, and a missing denominator may never be shown as 0, NaN or Infinity.
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
@@ -96,6 +99,53 @@ describe('PromptEditor', () => {
     expect(save).toBeDisabled();
     await userEvent.click(save);
     expect(submitted).toHaveLength(0);
+  });
+
+  // Seedance ships with NO whole-prompt cap (no provider documents one), so the server sends
+  // `maxBytes: null` and there is no denominator to meter against. `Math.max(0, 0 − pinBytes)` made
+  // that read as room 0: every non-empty draft painted red, Save disabled, and a long prompt became
+  // unsaveable — the exact opposite of removing the cap. With no limit the meter shows the COUNT.
+  it('with no cap the meter is a plain byte COUNT, and a very long draft still saves', async () => {
+    const view = seedance({ maxBytes: null, bytes: 1139, pinBytes: 1120 });
+    expect(roomFor(view)).toEqual([null]);
+    const bodies: string[] = [];
+    server.use(http.put('/api/runs/:id/prompt', async ({ request }) => {
+      const body = await request.json() as { job: string; prompt?: string };
+      bodies.push(body.prompt ?? '');
+      return HttpResponse.json({ ...view, source: 'override' });
+    }));
+    mount(view);
+
+    const box = screen.getByRole('textbox', { name: 'Prompt for K2' }) as HTMLTextAreaElement;
+    const readout = screen.getByTestId('prompt-editor-bytes-K2');
+    const text = () => (readout.textContent ?? '').replace(/\s+/g, ' ').trim();
+    expect(text()).toBe('19 B');
+
+    const long = 'z'.repeat(20000);
+    await userEvent.clear(box);
+    await userEvent.paste(long);
+    await waitFor(() => expect(text()).toBe('20,000 B'));
+
+    // No denominator invented, and no arithmetic leaking out of one that does not exist.
+    expect(text()).toMatch(/^[\d,]+ B$/);
+    expect(text()).not.toContain('/');
+    expect(text()).not.toMatch(/NaN|Infinity/);
+    // No limit means nothing to be near, or over.
+    expect(readout.className).not.toContain('text-status-warn');
+    expect(readout.className).not.toContain('text-status-failed');
+    expect(screen.queryByTestId('prompt-editor-over-K2')).not.toBeInTheDocument();
+
+    // And the editor never blocks a save the renderer would accept.
+    const save = screen.getByRole('button', { name: 'Save' });
+    expect(save).toBeEnabled();
+    await userEvent.click(save);
+    await waitFor(() => expect(bodies).toEqual([long]));
+  });
+
+  it('with no cap an empty draft is still refused — uncapped is not unvalidated', async () => {
+    mount(seedance({ maxBytes: null, pinBytes: 1120 }));
+    await userEvent.clear(screen.getByRole('textbox', { name: 'Prompt for K2' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled());
   });
 
   it('saves the WORDS, not the composed prompt — and says nothing was sent', async () => {

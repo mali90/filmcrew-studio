@@ -52,7 +52,8 @@ function promptDefaults(get) {
     resolution: get('SEEDANCE_RESOLUTION') || '480p',
     generateAudio: voices.audioOn,
     voiceMode: voices.voiceMode,
-    promptMaxBytes: num('SEEDANCE_PROMPT_MAX_BYTES', 5000),
+    // 0 = uncapped, the shipped default (no provider documents a Seedance prompt-length limit).
+    promptMaxBytes: num('SEEDANCE_PROMPT_MAX_BYTES', 0),
     style: get('SEEDANCE_STYLE') || '',
     avoid: get('SEEDANCE_AVOID') || '',
     textRule: get('SEEDANCE_TEXT_RULE') || '',
@@ -154,7 +155,7 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
   ]);
   const { capsFor, normalizeBackend, refLabel } = models;
   const { cappedAudioRefs, cappedCombinedRefs, fitAudioRef, voiceRefSpeakers } = seedanceArgs;
-  const { composeKlingStoryboard, composeSeedanceJobPrompt, applyOverride, pinBytesOf, promptFingerprint, chooseSeamMode, planSeamRefs, appliedSeamModes } = compose;
+  const { composeKlingStoryboard, composeSeedanceJobPrompt, applyOverride, pinBytesOf, promptCapOf, promptFingerprint, chooseSeamMode, planSeamRefs, appliedSeamModes } = compose;
   const { klingPromptSettings, seedancePromptSettings } = promptSettings;
   const { characterGroups, jobSpeakers } = castGroups;
   const { slug } = text;
@@ -407,7 +408,10 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
       shotPrompts,
       refs,
       bytes: utf8(prompt),
-      maxBytes: Number(settings.promptMaxBytes),
+      // "No cap" travels as null, never 0: the editor's denominator is `maxBytes − pinBytes`, and a
+      // 0 there goes negative and meters every draft as instantly over — refusing saves the renderer
+      // would happily accept. The wire shape already carries null for a past take's unrecorded budget.
+      maxBytes: promptCapOf(settings) || null,
       segmentMaxBytes: null,
       pinBytes,
       // What the render will really APPLY, not what it wished for: a soft pin whose reference lost
@@ -455,7 +459,9 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
     } catch (e) {
       // One unbuildable job (a shot id the plan lost, a missing content_prompt) must not take the
       // whole prompt sheet down — the render would fail on exactly this message, so show it.
-      return { ...head, prompt: '', segments: null, shotPrompts: null, refs: [], bytes: 0, maxBytes: 0, segmentMaxBytes: null, pinBytes: 0, error: e.message };
+      // No budget is on RECORD for a job that cannot be composed, and null is how every other
+      // absence travels — a 0 would read as "your words have no room", which is a different claim.
+      return { ...head, prompt: '', segments: null, shotPrompts: null, refs: [], bytes: 0, maxBytes: null, segmentMaxBytes: null, pinBytes: 0, error: e.message };
     }
   }
 
@@ -638,13 +644,15 @@ const badRequest = (message, hint) => Object.assign(new Error(message), { status
  * How many bytes of a job's budget the user's own words may spend: the model's cap minus what the
  * SYSTEM already owns. Measured from the same composer the render uses, so the meter in the editor
  * and the check here can never disagree.
- * @returns {{perSegment:number[]}|{whole:number}}
+ * @returns {{perSegment:number[]}|{whole:number|null}} `whole: null` when the model has no cap
+ *   (Seedance ships uncapped) — there is nothing to be over, so nothing to refuse.
  */
 function budgetOf(view) {
   if (Array.isArray(view.segments)) {
     return { perSegment: view.segments.map((s) => Math.max(0, Number(s.maxBytes ?? 0) - Number(s.pinBytes ?? 0))) };
   }
-  return { whole: Math.max(0, Number(view.maxBytes ?? 0) - Number(view.pinBytes ?? 0)) };
+  if (view.maxBytes == null) return { whole: null };
+  return { whole: Math.max(0, Number(view.maxBytes) - Number(view.pinBytes ?? 0)) };
 }
 
 /**
@@ -688,7 +696,9 @@ export async function savePromptOverride({ root, envRoot, childEnv, runDir, spec
   } else {
     if (hasSegments) throw badRequest(`job ${jobId} renders as ONE prompt on this model`, 'send "prompt" — the whole job in one document');
     const bytes = utf8(prompt);
-    if (bytes > budget.whole) throw badRequest(`the edit is ${bytes} bytes; the room left for your words is ${budget.whole} bytes (over by ${bytes - budget.whole})`, 'trim it — nothing is truncated for you, because you would not see what went');
+    // A save may only be refused where a limit EXISTS. With none (`whole: null`) the words go
+    // through untouched — refusing here would block an edit the renderer accepts word for word.
+    if (budget.whole != null && bytes > budget.whole) throw badRequest(`the edit is ${bytes} bytes; the room left for your words is ${budget.whole} bytes (over by ${bytes - budget.whole})`, 'trim it — nothing is truncated for you, because you would not see what went');
   }
 
   writeOverrides(runDir, (next) => {

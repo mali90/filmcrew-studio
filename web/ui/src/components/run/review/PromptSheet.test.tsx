@@ -199,6 +199,34 @@ describe('PromptSheet', () => {
     expect(readout.className).toContain('text-status-warn');
   });
 
+  // Seedance's whole-prompt clamp ships OFF (no provider documents a prompt-length limit), so the
+  // server sends no denominator. Reading correctly here is currently true only by accident — the
+  // null branch was written for a past take's unrecorded budget — so it is pinned as a promise.
+  it('with no cap the readout is the count alone: no denominator, no invented one', async () => {
+    const uncapped = promptView('K2', {
+      backend: 'seedance-2.0@fal',
+      endpointLabel: 'fal.ai Seedance 2.0',
+      segments: null,
+      segmentMaxBytes: null,
+      prompt: 'Shot 1: the lamp goes dark.',
+      bytes: 21400, // a rich multi-shot prompt that a 5000-byte default would have shortened
+      maxBytes: null,
+      pinBytes: 1120,
+    });
+    servePrompts({ K2: uncapped });
+    renderRunPage(makeRun('review'));
+    await screen.findByRole('region', { name: 'Review stage' });
+    await openFromStrip('K2');
+
+    const readout = await screen.findByTestId('prompt-bytes-K2');
+    const text = (readout.textContent ?? '').replace(/\s+/g, ' ').trim();
+    expect(text).toBe('21,400 B');
+    expect(text).not.toContain('/');
+    expect(text).not.toMatch(/NaN|Infinity/);
+    expect(readout.className).not.toContain('text-status-warn');
+    expect(readout.className).not.toContain('text-status-failed');
+  });
+
   it('a Kling run meters every segment separately, against the 500 B the model really enforces', async () => {
     renderRunPage(makeRun('review'));
     await screen.findByRole('region', { name: 'Review stage' });

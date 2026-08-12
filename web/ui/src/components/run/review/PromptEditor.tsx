@@ -7,6 +7,10 @@
 // your words, not the whole budget. The server hands both numbers over, and `view.draft` is the
 // exact text that — saved back untouched — re-composes to the same bytes.
 //
+// Where a model declares NO cap (Seedance's whole-prompt clamp ships off), there is no denominator
+// to meter against: the readout falls back to the byte count and the editor stops standing in the
+// way. Refusing a save the renderer would accept is the cap again, just moved into the browser.
+//
 // Two rules are load-bearing here (spec D21, Don't #7):
 // · nothing is ever auto-truncated. Over budget, Save refuses and SAYS by how much. Text cut behind
 //   your back is text you cannot fix, and the bytes that go are the ones you cared about most.
@@ -27,10 +31,17 @@ export const utf8Bytes = (s: string) => new TextEncoder().encode(s).length;
 
 const int = (n: number) => n.toLocaleString('en-US');
 
-/** The room a job's own words may spend, per textarea: the cap minus what the system already owns. */
-export function roomFor(view: PromptView): number[] {
-  if (view.segments) return view.segments.map((s) => Math.max(0, (s.maxBytes ?? 0) - (s.pinBytes ?? 0)));
-  return [Math.max(0, (view.maxBytes ?? 0) - (view.pinBytes ?? 0))];
+/**
+ * The room a job's own words may spend, per textarea: the cap minus what the system already owns.
+ * `null` where the model has NO cap (Seedance ships uncapped) — subtracting the pins from a missing
+ * denominator gave room 0, which painted every draft red and disabled Save on a prompt the renderer
+ * would have sent whole. A missing limit is not a limit of zero.
+ */
+export function roomFor(view: PromptView): (number | null)[] {
+  const room = (maxBytes: number | null, pinBytes: number | null) =>
+    (maxBytes == null ? null : Math.max(0, maxBytes - (pinBytes ?? 0)));
+  if (view.segments) return view.segments.map((s) => room(s.maxBytes, s.pinBytes));
+  return [room(view.maxBytes, view.pinBytes)];
 }
 
 /**
@@ -86,32 +97,38 @@ export function StalePromptBanner({ jobId, canRefresh = true, onRefresh, onDisca
   );
 }
 
-/** One draft's size against the room left for it. Determinate because bytes are MEASURED (Don't #1). */
+/**
+ * One draft's size against the room left for it. Determinate because bytes are MEASURED (Don't #1).
+ * With no room to measure against (`room == null`) there is nothing to fill and nothing to be near:
+ * the bar goes away and the readout degrades to the count, rather than inventing a denominator.
+ */
 function DraftMeter({ used, room, dirty, testId }: {
   used: number;
-  room: number;
+  room: number | null;
   /** Untouched drafts rest in grey; the accent says "these are your words now". */
   dirty: boolean;
   testId: string;
 }) {
-  const over = used > room;
-  const warn = !over && room > 0 && used / room >= 0.9;
-  const pct = room > 0 ? Math.max(0, Math.min(100, (used / room) * 100)) : 0;
+  const over = room != null && used > room;
+  const warn = !over && room != null && room > 0 && used / room >= 0.9;
+  const pct = room != null && room > 0 ? Math.max(0, Math.min(100, (used / room) * 100)) : 0;
   return (
     <span className="flex shrink-0 items-center gap-2">
-      <span className="flex h-[2px] w-20 overflow-hidden rounded-full bg-surface-2" aria-hidden>
-        {/* Whole class names, never interpolated — Tailwind only ships what it can read here. */}
-        <span
-          className={clsx('block h-full',
-            over ? 'bg-status-failed' : warn ? 'bg-status-warn' : dirty ? 'bg-accent' : 'bg-line-strong')}
-          style={{ width: `${pct}%` }}
-        />
-      </span>
+      {room != null && (
+        <span className="flex h-[2px] w-20 overflow-hidden rounded-full bg-surface-2" aria-hidden>
+          {/* Whole class names, never interpolated — Tailwind only ships what it can read here. */}
+          <span
+            className={clsx('block h-full',
+              over ? 'bg-status-failed' : warn ? 'bg-status-warn' : dirty ? 'bg-accent' : 'bg-line-strong')}
+            style={{ width: `${pct}%` }}
+          />
+        </span>
+      )}
       <span
         data-testid={testId}
         className={clsx('tnum text-caption', over ? 'text-status-failed' : warn ? 'text-status-warn' : 'text-ink-muted')}
       >
-        {int(used)} / {int(room)} B
+        {room == null ? `${int(used)} B` : `${int(used)} / ${int(room)} B`}
       </span>
     </span>
   );
@@ -165,7 +182,9 @@ export function PromptEditor({ runId, view, openWith = null, onClose }: {
   const perSegment = Boolean(view.segments);
   const room = roomFor(view);
   const used = bodies.map(utf8Bytes);
-  const over = used.map((u, i) => u - (room[i] ?? 0));
+  // A textarea with no cap is never over: `?? 0` here would make "no limit" mean "no room" and
+  // refuse the save (Seedance ships uncapped, so that is the ordinary case, not an edge one).
+  const over = used.map((u, i) => (room[i] == null ? 0 : u - (room[i] as number)));
   const firstOver = over.findIndex((o) => o > 0);
   const blank = !bodies.some((b) => b.trim());
 
@@ -196,7 +215,9 @@ export function PromptEditor({ runId, view, openWith = null, onClose }: {
 
   const setBody = (i: number, next: string) => setBodies((cur) => cur.map((b, j) => (j === i ? next : b)));
   const usedTotal = used.reduce((a, b) => a + b, 0);
-  const roomTotal = room.reduce((a, b) => a + b, 0);
+  // One unmetered segment makes the TOTAL unmetered too — summing the rest would quote a budget the
+  // job does not have.
+  const roomTotal = room.some((r) => r == null) ? null : (room as number[]).reduce((a, b) => a + b, 0);
 
   return (
     <div className="mt-2" data-testid={`prompt-editor-${view.jobId}`}>
@@ -215,7 +236,7 @@ export function PromptEditor({ runId, view, openWith = null, onClose }: {
       {perSegment ? (
         <>
           <p className="tnum mt-3 text-caption text-ink-muted" data-testid={`prompt-editor-total-${view.jobId}`}>
-            {bodies.length} segment{bodies.length === 1 ? '' : 's'} · {int(usedTotal)} / {int(roomTotal)} B
+            {bodies.length} segment{bodies.length === 1 ? '' : 's'} · {roomTotal == null ? `${int(usedTotal)} B` : `${int(usedTotal)} / ${int(roomTotal)} B`}
           </p>
           {view.segmentMaxBytes != null && (
             <p className="text-caption text-ink-muted">
@@ -230,7 +251,7 @@ export function PromptEditor({ runId, view, openWith = null, onClose }: {
                   <p className="tnum font-mono text-caption text-ink-muted">#{i + 1}{shotId ? ` · ${shotId}` : ''}</p>
                   <DraftMeter
                     used={used[i]}
-                    room={room[i] ?? 0}
+                    room={room[i] ?? null}
                     dirty={body !== initial[i]}
                     testId={`prompt-editor-bytes-${view.jobId}-${i}`}
                   />
@@ -250,7 +271,7 @@ export function PromptEditor({ runId, view, openWith = null, onClose }: {
             <p className="font-mono text-caption text-ink-muted">Your words</p>
             <DraftMeter
               used={used[0]}
-              room={room[0] ?? 0}
+              room={room[0] ?? null}
               dirty={bodies[0] !== initial[0]}
               testId={`prompt-editor-bytes-${view.jobId}`}
             />

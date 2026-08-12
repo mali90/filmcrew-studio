@@ -34,6 +34,9 @@ const { renderSeedanceJob } = await import('../../src/lib/render-seedance.js');
 const { buildPromptViews, savePromptOverride } = await import('../../web/server/lib/prompt-service.js');
 
 const BACKEND = 'seedance-2.0@fal'; // no native frame slots: both pins ride as reference + sentence
+/** The cap each run below SETS for itself — the whole-prompt clamp ships uncapped, and a meter
+ *  without a denominator has no room to fill. See fillTheMeter. */
+const PROMPT_MAX_BYTES = 5000;
 const assets = mkTmp('prompt-budget-assets');
 const CAST_PNG = path.join(assets.dir, 'cast.png');
 const SEAM_PNG = path.join(assets.dir, 'seam.png');
@@ -65,7 +68,12 @@ function stubAdapter() {
 
 /** Save an edit that spends the editor's WHOLE offered budget, ending on a marker we can look for. */
 async function fillTheMeter(runDir, spec, jobId) {
-  const envRoot = mkTmp('prompt-budget-env'); // no .env ⇒ prompt-service's own defaults, config.js's
+  // This file is about a meter, so it needs a DENOMINATOR: the whole-prompt clamp now ships
+  // uncapped, and an uncapped view has no room to fill. The cap is written into this run's own .env
+  // — the same lever a user reaches for after a provider 422 — so the case still asks its question:
+  // does the room the editor offers survive every render the saved words can reach?
+  const envRoot = mkTmp('prompt-budget-env');
+  fs.writeFileSync(path.join(envRoot.dir, '.env'), `SEEDANCE_PROMPT_MAX_BYTES=${PROMPT_MAX_BYTES}\n`);
   try {
     const args = { root: ROOT, envRoot: envRoot.dir, childEnv: {}, runDir, spec, backend: BACKEND, voicesDir: voices.dir };
     const view = (await buildPromptViews(args)).prompts.find((p) => p.jobId === jobId);
@@ -124,6 +132,7 @@ test('room is held back only for a pin some render could really apply', async ()
   // a closing frame there would be a cap cut paid by every user for a render that cannot happen.
   const runDir = mkTmp('prompt-budget-plan');
   const envRoot = mkTmp('prompt-budget-plan-env');
+  fs.writeFileSync(path.join(envRoot.dir, '.env'), `SEEDANCE_PROMPT_MAX_BYTES=${PROMPT_MAX_BYTES}\n`); // see fillTheMeter
   const pinsOf = async (spec) => {
     const views = (await buildPromptViews({
       root: ROOT, envRoot: envRoot.dir, childEnv: {}, runDir: runDir.dir, spec, backend: BACKEND, voicesDir: voices.dir,

@@ -181,7 +181,12 @@ export function buildConfig(env = process.env) {
       //     words, no timbre consistency). The fallback if 'reference' still garbles. Kling's voice_id
       //     is the only guaranteed-consistent voice path (see docs/PROVIDERS.md).
       voiceMode: env.SEEDANCE_VOICE_MODE || 'reference',
-      promptMaxBytes: numEnv('SEEDANCE_PROMPT_MAX_BYTES', 5000),    // whole-prompt byte clamp (no documented model cap; 5000 carries a rich 6-shot prompt)
+      // Whole-prompt byte clamp, OFF by default (0). No provider documents a prompt-length limit for
+      // Seedance — Segmind's 2.0/2.5 API pages state none, and ByteDance only recommends staying
+      // under ~1000 words (quality guidance, not an API limit) — so a default here would shorten a
+      // rich multi-shot prompt where nobody could see it. Set it to a number if a provider ever
+      // answers 422 on prompt length; unset/empty/0 all mean uncapped.
+      promptMaxBytes: numEnv('SEEDANCE_PROMPT_MAX_BYTES', 0),
       // Optional global style directive prepended to every Seedance prompt (e.g. "Rendered in
       // a glossy 3D-animation style — soft rounded surfaces…"). Empty = the look lives in each
       // shot's content_prompt, exactly as it does for Kling.

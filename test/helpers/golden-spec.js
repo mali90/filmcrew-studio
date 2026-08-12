@@ -41,6 +41,9 @@ export function pinPromptEnv() {
     KLING_RESOLUTION: '1080p',
     // seedance.js reads: promptMaxBytes, generateAudio (+ style/avoid/textRule, which must stay
     // EMPTY so the builder's own defaults are what the fixture pins).
+    // The whole-prompt clamp ships UNCAPPED; this pin is a cap the golden deliberately SETS, both to
+    // freeze the fixture against default drift and to keep proving that a set cap composes the same
+    // bytes it always did (the `clamped-900` case is what exercises the clamp itself).
     SEEDANCE_PROMPT_MAX_BYTES: '5000',
     SEEDANCE_GENERATE_AUDIO: 'true',
     SEEDANCE_STYLE: '',

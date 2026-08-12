@@ -50,6 +50,8 @@ const KLING_DEFAULTS = {
 };
 const SEEDANCE_DEFAULTS = {
   generateAudio: true,
+  // The value pinPromptEnv() pins, which is a cap the golden matrix SETS — not the shipped default
+  // (uncapped). Both sides of the parity check must read the same number or the fixture moves.
   promptMaxBytes: 5000,
   defaultShotSeconds: 5,
   style: '',
@@ -318,11 +320,70 @@ test('kling.js and seedance.js still export everything their importers use today
 });
 
 test('prompt-compose re-exports the shared helpers both renderers import', P_COMPOSE, () => {
-  for (const name of ['utf8Bytes', 'trimToBytes', 'clampBytes', 'lineForShot', 'speakerName', 'SHOT_SIZE_WORDS', 'HOOK_PREFIX', 'TRANSITION_WORDS', 'identityClause', 'shotBlock']) {
+  for (const name of ['utf8Bytes', 'trimToBytes', 'clampBytes', 'promptCapOf', 'lineForShot', 'speakerName', 'SHOT_SIZE_WORDS', 'HOOK_PREFIX', 'TRANSITION_WORDS', 'identityClause', 'shotBlock']) {
     assert.notEqual(compose[name], undefined, `prompt-compose.js must export ${name}`);
   }
   // The helpers must be the SAME implementations the shims serve, not a second copy that can drift.
   assert.equal(compose.HOOK_PREFIX, seedance.HOOK_PREFIX);
   assert.deepEqual(compose.TRANSITION_WORDS, seedance.TRANSITION_WORDS);
   assert.deepEqual(compose.SHOT_SIZE_WORDS, kling.SHOT_SIZE_WORDS);
+});
+
+// ── 7. The whole-prompt cap: one normalizer, uncapped by default, no bleed into Kling ───────────
+//
+// `Number(settings.promptMaxBytes) || DEFAULT` lived at three Seedance sites and collapsed an
+// explicit 0 back into the ambient default — with 0 as the uncapped sentinel that is the difference
+// between sending a prompt and silently shortening it. So the decision lives in ONE exported
+// function and the sites read it, which is what these cases hold in place.
+
+test('promptCapOf is the one place a Seedance cap is decided — 0 and absent both mean uncapped', P_COMPOSE, () => {
+  assert.equal(compose.DEFAULT_PROMPT_MAX_BYTES, 0, 'no provider documents a Seedance prompt-length limit');
+  for (const v of [undefined, null, '', 0, '0', -1, -1200, NaN, Infinity, 'nonsense', {}, []]) {
+    assert.equal(compose.promptCapOf({ promptMaxBytes: v }), 0, `${JSON.stringify(v) ?? String(v)} is not a cap`);
+  }
+  assert.equal(compose.promptCapOf({}), 0);
+  assert.equal(compose.promptCapOf(null), 0);
+  assert.equal(compose.promptCapOf(undefined), 0);
+  assert.equal(compose.promptCapOf({ promptMaxBytes: 1200 }), 1200);
+  assert.equal(compose.promptCapOf({ promptMaxBytes: '1200' }), 1200, 'a knob read from a run\'s .env arrives as text');
+});
+
+test('an uncapped composer neither clamps the plan nor overflows an override', P_COMPOSE, () => {
+  const spec = goldenSpec();
+  const job = spec.kling.jobs.find((j) => j.job_id === 'K2'); // the byte-trim shots (~740 B + multibyte)
+  const settings = { ...settingsMod.seedancePromptSettings(spec, null, SEEDANCE_DEFAULTS), promptMaxBytes: 0 };
+  const opts = { refGroups: [{ name: 'keeper', refs: ['@Image1'] }], startFrameRef: '@Image2' };
+
+  const planned = compose.composeSeedanceJobPrompt(job, spec, settings, opts);
+  // Byte equality is the real proof; `endsWith` names the failure. Never `includes('…')` — the
+  // speech rule quotes a literal `says: "…"`, so it is in every audio-on prompt by design.
+  assert.equal(planned.prompt, `${planned.front}\n\n${planned.shotPrompts.join('\nWhip pan to: ')}`,
+    'the prompt is the assembled document, byte for byte');
+  assert.ok(!planned.prompt.endsWith('…'), 'nothing was cut, so nothing marks a cut');
+
+  const mine = 'z'.repeat(30000);
+  const got = compose.applyOverride(planned, { prompt: mine }, settings);
+  assert.ok(got.prompt.endsWith(mine), 'a 30 KB edit rides whole');
+  assert.equal(got.overflowBytes, 0);
+  assert.equal(compose.assertOverrideFits(got, 'K2'), got);
+});
+
+test('trimToBytes keeps its Kling semantics — the no-cap rule belongs to clampBytes alone', P_COMPOSE, () => {
+  // klingSegmentPrompt budgets the authored body with trimToBytes. Giving IT an uncapped escape
+  // would hand a 500-byte segment an unlimited body, and fal rejects the render at 512.
+  assert.equal(compose.trimToBytes('abcdef', 0), '', 'a zero budget still trims to nothing');
+  assert.equal(compose.trimToBytes('abcdef', 3), 'abc');
+  assert.equal(compose.trimToBytes('abcdef', 99), 'abcdef');
+});
+
+test('a model\'s OWN promptMaxBytes of 0 stays uncapped — `||` would swallow it', P_SETTINGS, () => {
+  const spec = goldenSpec();
+  const bag = { seedance: SEEDANCE_DEFAULTS, seedance25: { resolution: '720p', promptMaxBytes: 0 } };
+  const s = settingsMod.seedancePromptSettings(spec, { knobsKey: 'seedance25' }, { ...SEEDANCE_DEFAULTS, knobs: bag });
+  assert.equal(s.promptMaxBytes, 0, "a model that declares itself uncapped must not inherit the shared cap");
+  // …and a model that redeclares nothing still inherits, exactly as before.
+  const shared = settingsMod.seedancePromptSettings(spec, { knobsKey: 'seedance25' }, {
+    ...SEEDANCE_DEFAULTS, knobs: { seedance25: { resolution: '720p' } },
+  });
+  assert.equal(shared.promptMaxBytes, 5000);
 });

@@ -27,6 +27,8 @@ const KLING_DEFAULTS = {
   nativeAudio: true, segmentMaxBytes: 500, maxStoryboards: 6, maxJobSeconds: 15,
   defaultShotSeconds: 5, model: 'kling-v3-omni', resolution: '1080p', aspectRatio: '9:16',
 };
+// `promptMaxBytes: 5000` is a cap this file SETS, not the shipped default (which is uncapped): the
+// refuse-don't-truncate contract only has anything to say when a cap exists.
 const SEEDANCE_DEFAULTS = {
   generateAudio: true, promptMaxBytes: 5000, defaultShotSeconds: 5,
   style: 'Cinematic, natural light.', avoid: 'No extra limbs.', textRule: '', resolution: '480p', aspectRatio: '9:16',
@@ -117,6 +119,39 @@ test('an oversized override is MEASURED, never clamped — the plan\'s own text 
   const stored = { prompt: 'x'.repeat(4000) };
   compose.applyOverride(planned, stored, settings);
   assert.equal(stored.prompt.length, 4000, 'the user\'s own text was not truncated behind their back');
+});
+
+test('UNCAPPED: a ~20 KB override is sent whole — nothing to overflow, nothing to refuse', PENDING, () => {
+  const s = spec();
+  const mine = 'A held shot of the lamp, the beam turning over the water. '.repeat(350).trim(); // ~20 KB
+  // 0 and an ABSENT value both mean "no cap": 0 is the shipped default, and a caller that never set
+  // the knob must not fall back to a number nobody chose.
+  for (const promptMaxBytes of [0, undefined]) {
+    const settings = { ...seedanceSettings(s), promptMaxBytes };
+    const planned = compose.composeSeedanceJobPrompt(jobOf(s, 'K1'), s, settings, SEEDANCE_OPTS);
+    assert.ok(!planned.prompt.endsWith('…'), `promptMaxBytes ${promptMaxBytes}: the plan path has no cap to clamp against`);
+
+    const got = compose.applyOverride(planned, { prompt: mine }, settings);
+    assert.ok(got.prompt.includes(mine), 'every byte the user wrote is what gets sent');
+    assert.ok(utf8(got.prompt) > 20000, `the whole edit is on the wire (got ${utf8(got.prompt)} B)`);
+    assert.equal(got.overflowBytes, 0, 'no cap ⇒ no overrun to measure');
+    assert.equal(compose.assertOverrideFits(got, 'K1'), got, 'and the render path hands the build straight back');
+  }
+});
+
+test('an uncapped Seedance setting does NOT uncap Kling — 500 B per segment is fal\'s own limit', PENDING, () => {
+  const s = spec();
+  // The two budgets are different KINDS of number and live in different fields for that reason:
+  // Seedance's whole-prompt clamp was a house rule and is off by default; Kling's per-segment cap is
+  // the o3 schema's (fal rejects at 512). A bag carrying both must keep them apart.
+  const settings = { ...klingSettings(s), promptMaxBytes: 0 };
+  const opts = { lowercaseSpeech: true, leadRef: '@Element1', voiceTokenFor: () => '@Element1' };
+  const planned = compose.composeKlingStoryboard(jobOf(s, 'K1'), s, settings, opts);
+  for (const seg of planned.segments) assert.ok(utf8(seg.prompt) <= 500, `the plan segment still fits (got ${utf8(seg.prompt)})`);
+
+  const got = compose.applyOverride(planned, { segments: ['y'.repeat(4000)] }, settings);
+  assert.equal(got.overflowBytes, utf8(got.segments[0].prompt) - 500, 'a Kling override is still measured against 500 B/segment');
+  assert.throws(() => compose.assertOverrideFits(got, 'K1'), /K1: the saved prompt edit no longer fits/);
 });
 
 test('an override that fits reports no overrun, and the render path lets it through', PENDING, () => {

@@ -50,8 +50,15 @@ export const DEFAULT_TEXT_RULE = 'No on-screen text, letters, captions, or signs
 // silently turning every shot into 1s rather than throwing somewhere far away.
 export const DEFAULT_SHOT_SECONDS = 5;
 
-// Same idea for the whole-prompt clamp: no documented model cap, and 5000 carries a rich 6-shot prompt.
-export const DEFAULT_PROMPT_MAX_BYTES = 5000;
+// The Seedance whole-prompt clamp ships OFF. No provider documents a prompt-length limit for these
+// models (Segmind's 2.0/2.5 API pages state none; ByteDance only RECOMMENDS staying under ~1000
+// words, which is a quality note, not an API limit), so the old 5000 was a house rule that shortened
+// long multi-shot prompts where nobody could see it. 0 is the uncapped sentinel throughout, and the
+// value config.js and web/server's mirror both default SEEDANCE_PROMPT_MAX_BYTES to — that knob is
+// still the lever for anyone who meets a provider 422 in the wild. It is stated here rather than
+// used as promptCapOf's fallback on purpose: a fallback would swallow an explicit 0 the day someone
+// put a number back, which is the exact bug this change exists to remove.
+export const DEFAULT_PROMPT_MAX_BYTES = 0;
 
 // Capitalize a speaker id for the spoken-line clause (e.g. a future line.speaker); default neutral.
 export const speakerName = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : 'The character');
@@ -74,12 +81,32 @@ export function trimToBytes(s, maxBytes) {
   return out;
 }
 
-/** Clamp to ≤ maxBytes UTF-8 bytes (reserving room for the ellipsis) without splitting a multibyte char. */
+/**
+ * The Seedance whole-prompt cap a settings bag asks for, or 0 for "no cap". ONE normalizer, because
+ * the three sites that used to write `Number(x) || DEFAULT` each collapsed an explicit 0 back into
+ * an ambient default — and with 0 meaning uncapped that is the difference between sending a prompt
+ * and silently shortening it. Anything that is not a positive finite number is not a cap: a knob
+ * read from a run's .env arrives as text, an unset one as '' or undefined.
+ * @param {{promptMaxBytes?:number|string}|null} [settings]
+ * @returns {number} the cap in UTF-8 bytes, or 0 when there is none
+ */
+export function promptCapOf(settings) {
+  const n = Number(settings?.promptMaxBytes);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/**
+ * Clamp to ≤ maxBytes UTF-8 bytes (reserving room for the ellipsis) without splitting a multibyte
+ * char. A budget that is not a positive finite number means NO cap and returns the string untouched
+ * — the old arithmetic turned a 0 budget into a lone ellipsis, i.e. an emptied paid prompt.
+ */
 export function clampBytes(s, maxBytes) {
+  const cap = Number(maxBytes);
+  if (!Number.isFinite(cap) || cap <= 0) return s;
   const buf = Buffer.from(s, 'utf8');
-  if (buf.length <= maxBytes) return s;
+  if (buf.length <= cap) return s;
   const ELL = '…';
-  let end = Math.max(0, maxBytes - Buffer.byteLength(ELL, 'utf8')); // leave room so the result never exceeds maxBytes
+  let end = Math.max(0, cap - Buffer.byteLength(ELL, 'utf8')); // leave room so the result never exceeds the cap
   while (end > 0 && (buf[end] & 0xc0) === 0x80) end--; // back off a UTF-8 continuation byte
   return `${buf.slice(0, end).toString('utf8').trimEnd()}${ELL}`;
 }
@@ -322,7 +349,8 @@ function seedanceFrontMatter(job, spec, settings, opts = {}) {
  * @param {object} job   spec.kling.jobs[i]
  * @param {object} spec  the full Production Spec
  * @param {{audioOn:boolean, promptMaxBytes:number, defaultShotSeconds:number, style?:string,
- *          avoid?:string, textRule?:string}} settings  from seedancePromptSettings()
+ *          avoid?:string, textRule?:string}} settings  from seedancePromptSettings().
+ *   `promptMaxBytes` 0 or absent = no whole-prompt clamp, which is what ships (promptCapOf).
  * @param {{
  *   refGroups?: {name:string, refs:string[]}[],   // character → its @ImageN labels, prompt order (from the renderer)
  *   audioRefFor?: (speaker:string) => string|null,// speaker → its @AudioN label (uploaded voice ref), or null
@@ -357,8 +385,9 @@ export function composeSeedanceJobPrompt(job, spec, settings, opts = {}) {
   }).join('');
 
   const front = seedanceFrontMatter(job, spec, settings, opts);
-  const maxBytes = Number(settings?.promptMaxBytes) || DEFAULT_PROMPT_MAX_BYTES;
-  const prompt = clampBytes(`${front}\n\n${joined}`, maxBytes);
+  // Uncapped unless a caller SETS promptMaxBytes; a cap that is set still re-cuts the agents' own
+  // text (nobody promised them otherwise), which is the asymmetry applyOverride documents below.
+  const prompt = clampBytes(`${front}\n\n${joined}`, promptCapOf(settings));
   // Same duration derivation as composeKlingStoryboard, so both backends agree with the job planner.
   const totalDuration = shots.reduce((a, s) => a + shotSeconds(s, defaultShotSeconds), 0);
   return { prompt, shotPrompts: blocks, totalDuration, speakers: jobSpeakers(job, spec, audioOn), front };
@@ -378,7 +407,8 @@ export function composeSeedanceJobPrompt(job, spec, settings, opts = {}) {
  *
  * Pure, and shape-preserving: hand it what a composer returned and it returns the same shape.
  *
- * THE ONE ASYMMETRY WITH THE PLAN PATH: the agents' own text is CLAMPED to the model's cap (see
+ * THE ONE ASYMMETRY WITH THE PLAN PATH, wherever a cap is set at all (Seedance ships uncapped;
+ * Kling's 500 B per segment is fal's own o3 limit): the agents' own text is CLAMPED to it (see
  * composeSeedanceJobPrompt and klingSegmentPrompt's `trim`) — we wrote it, we may re-cut it. A
  * user's words are not. `savePromptOverride` could only budget the front matter of the render it
  * could see; a re-render adds "Alternate take N" and "Director note: …", and a revise pass can grow
@@ -421,7 +451,7 @@ export function applyOverride(composed, override, settings) {
   // and joined plainly — the connector words belong to the agents' blocks, not to a user's prose.
   const body = (typeof override.prompt === 'string' ? override.prompt : override.segments.join('\n')).trim();
   if (!body) return composed;
-  const maxBytes = Number(settings?.promptMaxBytes) || DEFAULT_PROMPT_MAX_BYTES;
+  const cap = promptCapOf(settings);
   const prompt = `${composed.front}\n\n${body}`;
   return {
     ...composed,
@@ -430,7 +460,8 @@ export function applyOverride(composed, override, settings) {
     // one body (or the user's own per-shot split), and claiming the plan's blocks would be a lie.
     shotPrompts: Array.isArray(override.segments) ? override.segments.map((s) => String(s).trim()) : [body],
     promptSource: 'override',
-    overflowBytes: Math.max(0, utf8Bytes(prompt) - maxBytes),
+    // No cap ⇒ nothing to overflow, and assertOverrideFits therefore never fires.
+    overflowBytes: cap ? Math.max(0, utf8Bytes(prompt) - cap) : 0,
   };
 }
 
@@ -543,6 +574,7 @@ export default {
   pinBytesOf,
   promptFingerprint,
   clampBytes,
+  promptCapOf,
   trimToBytes,
   utf8Bytes,
   lineForShot,

@@ -596,6 +596,21 @@
   still still points nowhere, and the pin stays on the one segment it brackets.
 
 ### Changed
+- **Long Seedance prompts are no longer silently shortened.** The whole-prompt byte clamp defaulted
+  to 5000 bytes, so a rich multi-shot prompt — the kind Seedance is best at — was cut off mid-sentence
+  and sent with an ellipsis where the last shots used to be, with nothing on screen saying so. That
+  number was a house rule, not a provider limit: no provider documents a prompt-length ceiling for
+  these models (Segmind's Seedance 2.0/2.5 API pages state none; ByteDance only *recommends* staying
+  under about 1000 words, which is quality advice about what the model attends to, not an API
+  limit). It now ships **off**, and your prompt reaches fal/Segmind byte for byte. Because there is
+  no cap, the prompt editor's meter has no denominator to draw: it shows the byte **count** alone,
+  and Save no longer refuses on length — an editor that invented a limit would just be the cap
+  again, moved into the browser. `SEEDANCE_PROMPT_MAX_BYTES` is still the lever if a provider ever
+  answers 422 on prompt length: set it to a number and the old behaviour comes back exactly as it
+  was — the agents' own text is re-cut to fit, a saved edit that no longer fits is *refused* rather
+  than trimmed behind your back, and the meter gets its denominator back. Unset, empty and `0` all
+  mean uncapped. **Kling is untouched**: its 500 bytes per shot segment is fal's own Kling o3 schema
+  limit (it rejects at 512), so it is still measured, still metered per shot, and still enforced.
 - **Segmind's prices are on file — and they are roughly half fal's for the same model.** Every
   Segmind surface used to say the rate was "not on file yet", because it genuinely wasn't: the price
   table shipped three `PRICE CHECK REQUIRED` rows and the interface refused to guess. Those rows are

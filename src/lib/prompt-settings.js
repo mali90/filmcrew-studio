@@ -75,8 +75,10 @@ export function seedancePromptSettings(spec, caps, defaults = {}) {
     aspectRatio: k.aspect_ratio || defaults.aspectRatio,
     generateAudio: audioOn,
     audioOn,
-    // Prompt front matter + budgets. A model that does not redeclare one keeps the shared value.
-    promptMaxBytes: own.promptMaxBytes || defaults.promptMaxBytes,
+    // Prompt front matter + budgets. A model that does not redeclare one keeps the shared value —
+    // `??`, never `||`: 0 is the uncapped sentinel, so a model that declares itself uncapped must
+    // not silently inherit the shared cap.
+    promptMaxBytes: own.promptMaxBytes ?? defaults.promptMaxBytes,
     defaultShotSeconds: defaults.defaultShotSeconds,
     style: own.style ?? defaults.style ?? '',
     avoid: own.avoid ?? defaults.avoid ?? '',

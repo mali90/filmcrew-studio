@@ -23,7 +23,8 @@ them back together in order (with a faded audio seam and last-frame continuity) 
 - at most **9 reference images** (one slot is reserved for the seam frame on chained jobs)
 - at most **3 voice-ref clips**, combined ≤ 15s (they're auto-trimmed to fit)
 - at most **2 starred cast members**
-- no per-shot character squeeze — the whole job is one rich prompt (byte-clamped at ~5000)
+- no per-shot character squeeze — the whole job is one rich prompt, sent uncapped (no provider
+  documents a prompt-length limit; `SEEDANCE_PROMPT_MAX_BYTES` clamps it only if you set one)
 
 ## Seedance 2.5's hard limits (per single generation — a "job")
 

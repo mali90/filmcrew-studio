@@ -117,14 +117,38 @@ for (const backend of ['kling', 'seedance-2.0@fal', 'seedance-2.5@fal']) {
 
 // The byte-parity above only catches a default that MOVES A BYTE. These two are budgets: a drift in
 // either silently changes what the editor's meter allows before the composed bytes ever change.
+//
+// The Seedance assertion is deliberately a MAPPING rather than raw equality, and the reason is the
+// wire contract: config.js says "uncapped" with 0, the PromptView says it with `null` (0 would meter
+// every edit as instantly over, and `maxBytes − pinBytes` would go negative). The lockstep is
+// unchanged in force — config.js and prompt-service.js must still agree about whether a cap exists
+// at all — only its shape moved.
 test('the byte budgets themselves come from config.js, not from a second opinion', async () => {
   const seedance = (await view(bareRoot, 'seedance-2.0@fal')).prompts[0];
-  assert.equal(seedance.maxBytes, cfg.seedance.promptMaxBytes,
-    'the Seedance whole-prompt budget must be config.js\'s SEEDANCE_PROMPT_MAX_BYTES default');
+  assert.equal(cfg.seedance.promptMaxBytes, 0,
+    'config.js ships the Seedance whole-prompt clamp OFF — no provider documents a prompt-length limit');
+  assert.equal(seedance.maxBytes, null,
+    'and prompt-service.js must mirror "no cap" as null, never as 0 or NaN');
+  assert.equal(typeof seedance.pinBytes, 'number',
+    'the system\'s own share is still a measured number — it just has no budget to be subtracted from');
 
   const kling = (await view(bareRoot, 'kling')).prompts[0];
   assert.equal(kling.segmentMaxBytes, cfg.kling.segmentMaxBytes,
     'the Kling per-segment budget must be config.js\'s KLING_SEGMENT_MAX_BYTES default');
+  assert.equal(kling.segmentMaxBytes, 500, 'fal\'s o3 schema really enforces this one — it does not move');
+});
+
+// The knob is the lever for anyone who meets a provider 422 on a very long prompt. A removed default
+// and a knob that quietly stopped clamping look identical from the outside, so the SET path is
+// pinned through the same mirror.
+test('a run that SETS SEEDANCE_PROMPT_MAX_BYTES gets that number as its meter denominator', async () => {
+  const cappedRoot = path.join(tmpRoot, 'capped');
+  fs.mkdirSync(cappedRoot, { recursive: true });
+  fs.writeFileSync(path.join(cappedRoot, '.env'), 'SEEDANCE_PROMPT_MAX_BYTES=1200\n');
+  const capped = (await view(cappedRoot, 'seedance-2.0@fal')).prompts[0];
+  assert.equal(capped.maxBytes, 1200, "the run's own knob reaches the preview");
+  assert.equal(buildConfig({ SEEDANCE_PROMPT_MAX_BYTES: '1200' }).seedance.promptMaxBytes, 1200,
+    'and config.js reads it the same way — the two mirrors still agree');
 });
 
 // A knob that is NOT env-tunable cannot drift by .env, only by edit — so it is asserted directly.
