@@ -4,13 +4,15 @@
 // cannot host a chip (spec D7). The word comes from `jointFor`, which refuses to say "joined" about
 // a continuation that was reconstructed rather than recorded: a derived answer reads "join unknown".
 import clsx from 'clsx';
-import { HelpCircle, Link2, Scissors, Unlink, X } from 'lucide-react';
+import { Clock, HelpCircle, Link2, Scissors, Unlink, X } from 'lucide-react';
 import type { ContinuityEntry } from '../../../../../shared/api-types';
 import { PILL_CLASS } from '../JobCards';
 import { jointFor, jointKindOf, type JointTone } from './lib';
 
-/** What this segment's clip is doing right now — it outranks the join, which is not yet knowable. */
-export type SegmentClipState = 'done' | 'rendering' | 'failed';
+/** What this segment's clip is doing right now — it outranks the join, which is not yet knowable.
+ *  `queued` is the cascade's own state: several segments are replaced in one take, so the clips
+ *  behind the one on the wire exist neither as the old footage nor as the new. */
+export type SegmentClipState = 'done' | 'queued' | 'rendering' | 'failed';
 
 const ICON = { Link2, Unlink, Scissors, HelpCircle };
 
@@ -35,6 +37,16 @@ export function ContinuityBadge({ entry, clipState = 'done' }: {
       <span className={clsx(PILL_CLASS, 'gap-1.5', TONE.active)}>
         <span className="sweep h-[3px] w-6" role="presentation" />
         rendering
+      </span>
+    );
+  }
+  if (clipState === 'queued') {
+    // No sweep: that belongs to the clip on the wire. The join is not described at all — the clip
+    // this tile will hold has not been rendered yet, and the one it replaces is already spoken for.
+    return (
+      <span className={clsx(PILL_CLASS, 'gap-1', TONE.muted)}>
+        <Clock size={11} aria-hidden />
+        queued
       </span>
     );
   }

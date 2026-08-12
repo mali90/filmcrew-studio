@@ -317,7 +317,11 @@
   segments already done. The banner read "Re-rendering undefined" and the strip collapsed to the
   partial take, hiding the rest of the cut while it was being paid for. The stage now rebuilds the
   strip from the PLAN for the duration of the cascade: every segment stays on screen, the segments
-  this take is replacing read as pending, and the banner names the one really on the wire.
+  this take is replacing read as pending, and the banner names the one really on the wire. Those
+  pending tiles now say so themselves: a clip counts as **done** only once it is really on disk, the
+  first one that is not is the one rendering, and the rest read **queued** — instead of wearing the
+  join badge of the very clip they are about to replace, with a solid connector drawn between two
+  clips that do not exist yet.
 - **The deliver card states the size of the file it is showing.** Approving with the Topaz upscale
   writes a bigger file than the cut it came from, but the card read the approved CUT's short side —
   so a delivered 1080p (or 4K) master was labelled with its 480p/720p source size, on the one line

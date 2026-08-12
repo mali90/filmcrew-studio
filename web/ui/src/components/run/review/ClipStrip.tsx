@@ -113,11 +113,13 @@ export function ClipStrip({ run, jobs, takeCountFor, promptStateFor, isLatestCut
   const entryFor = (job: JobView, i: number): ContinuityEntry | null =>
     (byJobId.size ? byJobId.get(job.jobId) ?? null : entries[i] ?? null);
 
-  // Mirrors JobCards: the first clip that is neither on disk nor failed is the one actually
-  // rendering — the ones behind it are queued, and a sweep on a queued clip would be a lie.
+  // Mirrors JobCards, verdict for verdict: DONE means the clip is really on disk, the first clip
+  // that is neither there nor failed is the one actually on the wire, and everything behind it is
+  // QUEUED. A cascade replaces several segments in one take, so "queued" is a state the strip really
+  // meets — and a queued tile that read as done wore the join of the very clip it is replacing.
   const activeIdx = run.status === 'rendering' ? jobs.findIndex((j) => !j.clipExists && !j.error) : -1;
   const states: SegmentClipState[] = jobs.map((job, i) =>
-    (job.error ? 'failed' : i === activeIdx ? 'rendering' : 'done'));
+    (job.error ? 'failed' : job.clipExists ? 'done' : i === activeIdx ? 'rendering' : 'queued'));
   const kinds = jobs.map((job, i) => (i === 0 ? null : jointKindOf(entryFor(job, i))));
 
   /** The sentence for one tile: how it joins backwards, and how the next clip joins to it. */

@@ -144,6 +144,27 @@ describe('ClipStrip', () => {
     expect(screen.queryByText('joined')).not.toBeInTheDocument();
   });
 
+  // A cascade replaces several segments in ONE take, in plan order: one clip is on the wire and the
+  // rest are queued behind it. ReviewStage synthesizes exactly this shape (the plan's job list, with
+  // the segments this take is replacing marked as not-yet-landed), so a strip that called everything
+  // behind the active clip "done" wore the continuity of the very clips being replaced.
+  it('a queued cascade clip is not done — it claims nothing about its joins', () => {
+    const run = threeSegmentRun({ status: 'rendering' });
+    run.spec!.shots.push({ shot_id: 'S5', beat: 'payoff', duration_s: 3, kling: { content_prompt: 'The light goes out.' } });
+    run.spec!.kling.jobs.push({ job_id: 'K4', shots: ['S5'], elements: ['subject'] });
+    run.continuity = [entry('K2', 1), entry('K3', 2), entry('K4', 3)];
+    const pending = (jobId: string): JobView => ({ ...clip(jobId), clip: null, clipExists: false, clipUrl: null });
+    run.latestRender!.jobs = [clip('K1'), pending('K2'), pending('K3'), pending('K4')];
+    renderStrip(run);
+
+    expect(screen.getAllByText('rendering')).toHaveLength(1); // only the one really on the wire
+    expect(screen.getAllByText('queued')).toHaveLength(2);
+    expect(screen.queryByText('joined')).not.toBeInTheDocument();
+    // …and no connector between two clips that do not exist yet may promise a join either way.
+    expect(screen.getAllByTestId('clip-joint-pending')).toHaveLength(3);
+    expect(screen.queryByTestId('clip-joint-linked')).not.toBeInTheDocument();
+  });
+
   it('picking a segment reveals its actions, and Re-render opens the one paid dialog', async () => {
     const run = threeSegmentRun({ continuity: [entry('K2', 1), entry('K3', 2)] });
     renderReview(
