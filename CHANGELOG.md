@@ -298,6 +298,19 @@
   live stream says so under the spine while paid work is in flight; revising from review says the
   clips, takes and cut are untouched; and *Cancel render* states what cancelling keeps and that
   the clip in flight may still bill.
+- **A cascading re-render no longer loses track of itself halfway through.** A cascade replaces a
+  segment and everything downstream of it in ONE take, writing its record after each clip lands —
+  so from the first landing the take looks finished, and the server's clip list held only the
+  segments already done. The banner read "Re-rendering undefined" and the strip collapsed to the
+  partial take, hiding the rest of the cut while it was being paid for. The stage now rebuilds the
+  strip from the PLAN for the duration of the cascade: every segment stays on screen, the segments
+  this take is replacing read as pending, and the banner names the one really on the wire.
+- **The deliver card states the size of the file it is showing.** Approving with the Topaz upscale
+  writes a bigger file than the cut it came from, but the card read the approved CUT's short side —
+  so a delivered 1080p (or 4K) master was labelled with its 480p/720p source size, on the one line
+  a user is most likely to act on. Each delivery now records the short side measured off the file
+  that was actually written, and the card reads that; the cut (then the latest render, then the
+  run's resolution pick) stands in only for runs delivered before it was recorded.
 - **Starring a cast now sends the character's FULL reference set, not one image each.** A run with
   three starred characters — each carrying seven reference views — could reach a Seedance render
   with a single image per character: the Casting agent's "pick the smallest set" guidance biased it

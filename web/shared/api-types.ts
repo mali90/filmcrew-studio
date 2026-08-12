@@ -70,7 +70,10 @@ export interface Manifest {
   // `provider` (upscale lines only) records which vendor the Topaz job billed — the reviewer's
   // explicit pick, or the same derivation the estimate priced when nothing was picked.
   costLedger: { ts: string; action: string; estUsd: number | null; unpriced?: boolean; provider?: UpscaleProvider; note: string }[];
-  approved: { cut: string | null; final: string; upscaled: boolean; stitcher?: 'seamless' | 'concat'; joints?: number; matched?: number; at: string } | null;
+  // `shortSide` is the DELIVERED file's own measured short side (after any Topaz upscale), so the
+  // deliver card never quotes the source cut's pre-upscale size. Absent on runs delivered before it
+  // was recorded — absence means "not measured", never 0.
+  approved: { cut: string | null; final: string; upscaled: boolean; shortSide?: number | null; stitcher?: 'seamless' | 'concat'; joints?: number; matched?: number; at: string } | null;
   // Delivery lifecycle (WS2-P6), all three ADDITIVE — absent on every run delivered before it
   // existed, and absence means "never reopened, no history", never an error.
   /** When the user reopened a delivered run to make changes. The run is delivered again only once
@@ -78,7 +81,7 @@ export interface Manifest {
   reopenedAt?: string | null;
   /** Every delivery this run has made, oldest first. `replacedBy` names the entry that superseded
    *  it — the file itself is never deleted, so an older final stays downloadable. */
-  finals?: { id: string; cut: string | null; final: string; upscaled: boolean; at: string; replacedBy?: string }[];
+  finals?: { id: string; cut: string | null; final: string; upscaled: boolean; shortSide?: number | null; at: string; replacedBy?: string }[];
   /** Lifecycle markers for the History panel to list beside takes/cuts/revisions: reopens, and the
    *  prompt edits that change which words the NEXT render sends (`job` names the segment). Saving
    *  or discarding an edit is a local file write — these rows record a change of intent, not spend. */

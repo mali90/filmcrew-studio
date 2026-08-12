@@ -273,7 +273,12 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
       const chosenCut = pendingApprove.get(runId) ?? null; // the cut approve() upscaled (null ⇒ latest, the default)
       pendingApprove.delete(runId);
       updateManifest(dir, (m) => recordFinal(m, {
-        cut: chosenCut ?? m.cuts.at(-1)?.id ?? null, final: result.master ?? null, upscaled: true, ...stitchFields(result), at: now().toISOString(),
+        cut: chosenCut ?? m.cuts.at(-1)?.id ?? null, final: result.master ?? null, upscaled: true,
+        // The DELIVERED size, measured off the file that was written (finishRender probes the master
+        // after Topaz ran), not the source cut's — a 480p cut upscaled to 1080p is a 1080p delivery,
+        // and the cut it came from keeps saying 480p forever.
+        shortSide: result.masterShortSide ?? null,
+        ...stitchFields(result), at: now().toISOString(),
       }));
       return;
     }
@@ -662,7 +667,14 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
    */
   function recordFinal(m, approved) {
     m.finals = Array.isArray(m.finals) ? m.finals : [];
-    const entry = (rec) => ({ id: `final-${m.finals.length + 1}`, cut: rec.cut ?? null, final: rec.final, upscaled: !!rec.upscaled, at: rec.at ?? null });
+    // `shortSide` is the delivered file's own measured short side. It travels with each entry
+    // because nothing else can answer for it: the approved CUT records the pre-upscale size, and
+    // the latest render is whatever was assembled last, which after a second delivery is not this
+    // file. Absent (backfilled history, older manifests) means "not recorded", never 0.
+    const entry = (rec) => ({
+      id: `final-${m.finals.length + 1}`, cut: rec.cut ?? null, final: rec.final, upscaled: !!rec.upscaled,
+      ...(rec.shortSide != null ? { shortSide: rec.shortSide } : {}), at: rec.at ?? null,
+    });
     const prev = m.approved;
     if (prev?.final && !m.finals.some((f) => f.final === prev.final && f.at === prev.at)) m.finals.push(entry(prev));
     // A delivery with no file is a broken approval, not a delivery — it replaces nothing and is not
@@ -889,8 +901,11 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
       throw Object.assign(new Error('nothing to approve — no assembled master exists'), { statusCode: 409, hint: 'render and let the stitch finish first (assemble is free)' });
     }
     if (!upscale) {
+      // A free finalize delivers the cut's own master untouched, so its measured size IS the cut's
+      // (the latest render's only when the default — latest — cut is the one being approved).
+      const shortSide = chosen ? chosen.shortSide ?? null : run.latestRender?.masterShortSide ?? null;
       const m = updateManifest(dir, (mm) => recordFinal(mm, {
-        cut: chosen?.id ?? mm.cuts.at(-1)?.id ?? null, final: master, upscaled: false, at: now().toISOString(),
+        cut: chosen?.id ?? mm.cuts.at(-1)?.id ?? null, final: master, upscaled: false, shortSide, at: now().toISOString(),
       }));
       emitStatus(runId);
       return { final: m.approved.final, queued: null };

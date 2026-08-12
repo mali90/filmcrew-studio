@@ -172,6 +172,8 @@ export function reopenedFinal(manifest: Manifest | null | undefined): { path: st
  *  still resolves — an older final is never deleted, so it stays downloadable forever. */
 export interface DeliveredFinal {
   id: string; fileName: string; url: string; upscaled: boolean; at: string; replacedBy?: string;
+  /** The delivered file's own measured short side, when the server recorded one. */
+  shortSide?: number | null;
 }
 
 /** This run's deliveries, oldest first, with the current one last. Empty for a run delivered before
@@ -179,5 +181,5 @@ export interface DeliveredFinal {
 export function deliveredFinals(manifest: Manifest | null | undefined): DeliveredFinal[] {
   return (manifest?.finals ?? [])
     .filter((f) => f?.final)
-    .map((f) => ({ id: f.id, fileName: basename(f.final), url: outMediaUrl(f.final), upscaled: !!f.upscaled, at: f.at, replacedBy: f.replacedBy }));
+    .map((f) => ({ id: f.id, fileName: basename(f.final), url: outMediaUrl(f.final), upscaled: !!f.upscaled, at: f.at, replacedBy: f.replacedBy, shortSide: f.shortSide ?? null }));
 }

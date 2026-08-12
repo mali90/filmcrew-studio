@@ -151,3 +151,28 @@ test('approve WITHOUT a pick keeps the derived provider — fal, where this run 
   assert.ok(falTopazSubmits() > 0, 'the upscale ran on fal\'s Topaz');
   assert.equal(run.manifest.costLedger.findLast((l) => l.action === 'upscale').provider, 'fal', 'the ledger still records who billed');
 });
+
+// U2c — the deliver card quotes the size of the file it is showing, so the DELIVERY has to carry
+// its own measured short side. Nothing else can answer for it: the approved cut records the
+// PRE-upscale size (which is what a 1080p delivery used to be labelled 480p from), and after a
+// second delivery the latest render is no longer this file.
+test('a delivered final records the short side measured off the file that was written', { skip: FF ? false : 'ffmpeg not installed' }, async () => {
+  const { probeDims } = await import(path.join(HOST_ROOT, 'src/lib/upscale.js'));
+
+  // …on the free path, where the cut's own master is what gets delivered
+  const plain = (await makeReviewedRun('a finalize measured on the way out')).runId;
+  assert.equal((await post(`/api/runs/${plain}/approve`, { upscale: false })).statusCode, 200);
+  const free = (await get(`/api/runs/${plain}`)).json().run.manifest;
+  const dims = await probeDims(free.approved.final);
+  assert.equal(free.approved.shortSide, Math.min(dims.width, dims.height), 'measured, not taken from the resolution pick');
+  assert.equal(free.finals.at(-1).shortSide, free.approved.shortSide, 'the history carries it too');
+
+  // …and on the paid path, where the delivered file is the UPSCALE's output, not the cut's master
+  const lifted = (await makeReviewedRun('a finalize measured after topaz')).runId;
+  assert.equal((await post(`/api/runs/${lifted}/approve`, { upscale: true })).statusCode, 202);
+  const m = (await waitForStatus(lifted, 'complete')).manifest;
+  const out = await probeDims(m.approved.final);
+  assert.equal(m.approved.shortSide, Math.min(out.width, out.height), 'the DELIVERED file, after Topaz ran');
+  assert.equal(m.finals.at(-1).shortSide, m.approved.shortSide);
+  assert.notEqual(m.approved.final, m.cuts.at(-1).master, 'an upscale delivers a new file — the cut it came from is untouched');
+});

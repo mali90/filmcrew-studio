@@ -29,13 +29,6 @@ export function FinalCard({ run }: { run: RunDetail }) {
 
   const spendText = spendLabel(run.manifest?.costLedger ?? []);
   const title = run.title ?? 'Your video';
-  // The DELIVERED resolution (U2c): the approved cut's own recorded short side, else the latest
-  // render's; only with no dimension on record does the run's resolution PICK stand in for it.
-  const approvedCut = run.manifest?.cuts.find((c) => c.id === run.manifest?.approved?.cut);
-  const shortSide = approvedCut?.shortSide ?? run.latestRender?.masterShortSide;
-  // the on-disk basename ("<slug>-<id>-final.mp4") is the download's filename
-  const fileName = run.finalFsPath?.split('/').pop() ?? `${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.mp4`;
-
   // Every delivery this run has made. One entry is the normal case and says nothing worth a line;
   // more than one means an earlier final was replaced, and the card owes the user proof that it is
   // still there (spec D24).
@@ -43,6 +36,18 @@ export function FinalCard({ run }: { run: RunDetail }) {
   const current = finals.at(-1) ?? null;
   const earlier = finals.slice(0, -1);
   const replaced = current ? finals.find((f) => f.replacedBy === current.id) ?? null : null;
+
+  // The DELIVERED resolution (U2c) — measured off the file on screen, never a target or a source.
+  // An approve WITH an upscale writes a bigger file than the cut it came from, so the approved cut's
+  // shortSide is the pre-upscale size and would report a delivered 1080p master as its 480p source;
+  // the delivery record carries the master's own measured short side. The cut (and then the latest
+  // render) stand in only for a run delivered before that was recorded, and the run's resolution
+  // PICK only when nothing was ever measured.
+  const approvedCut = run.manifest?.cuts.find((c) => c.id === run.manifest?.approved?.cut);
+  const shortSide = current?.shortSide ?? run.manifest?.approved?.shortSide
+    ?? approvedCut?.shortSide ?? run.latestRender?.masterShortSide;
+  // the on-disk basename ("<slug>-<id>-final.mp4") is the download's filename
+  const fileName = run.finalFsPath?.split('/').pop() ?? `${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.mp4`;
 
   // The status event the server emits on reopen refreshes the page through useRunEvents; invalidating
   // here as well means the card also turns over when the socket is closed (or never opened).
