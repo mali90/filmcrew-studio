@@ -18,6 +18,7 @@
 //     silently overridden by the developer's real keys.
 import fs from 'node:fs';
 import path from 'node:path';
+import { isSafeSegment } from './paths.js';
 
 /**
  * The prompt-relevant knobs, mirrored from config.js (the `kling`, `seedance` and `seedance25`
@@ -499,7 +500,13 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
 }
 
 const TAKE_DIR_RE = /^(t\d+|render)$/;
-const JOB_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+// A job id is whatever the PLAN called it, and a take's sidecar sits in a directory of that name, so
+// the only question worth asking here is whether it is safe to join onto a path (isSafeSegment). It
+// used to be asked as a charset whitelist, which quietly answered a different one: `__proto__` is a
+// job id this build supports end to end — the spec accepts it, the override maps are null-prototype
+// so an edit for it saves, the renderers write its prompts.json — yet a leading underscore made its
+// version picker permanently empty and its as-sent prompt unreachable.
+const isJobId = (jobId) => isSafeSegment(String(jobId));
 
 /** Newest take first: t12 before t3, and the legacy unnumbered `render` dir last. */
 function byTakeNewestFirst(a, b) {
@@ -535,7 +542,7 @@ function submittedSidecarAt(file) {
  * and the only take ids `?take=` will answer for. Ids only: no path leaves this function.
  */
 function takesWithPrompts(runDir, jobId) {
-  if (!runDir || !JOB_ID_RE.test(String(jobId))) return [];
+  if (!runDir || !isJobId(jobId)) return [];
   const found = new Set();
   // Web runs keep takes under renders/; a CLI run keeps them beside the spec (takeView reads both).
   for (const base of [path.join(runDir, 'renders'), runDir]) {
@@ -567,7 +574,7 @@ async function labelForRecordedBackend(root, backend, endpoint) {
  * Returns null when that take never wrote a sidecar for this job — or wrote one it never sent.
  */
 async function takeView({ root, runDir, take, jobId }) {
-  if (!TAKE_DIR_RE.test(String(take)) || !JOB_ID_RE.test(String(jobId))) return null;
+  if (!TAKE_DIR_RE.test(String(take)) || !isJobId(jobId)) return null;
   const candidates = [
     path.join(runDir, 'renders', String(take), String(jobId), 'prompts.json'),
     path.join(runDir, String(take), String(jobId), 'prompts.json'), // CLI runs keep their take beside the spec

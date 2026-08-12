@@ -307,3 +307,36 @@ test('a take that composed a prompt but never sent it is not offered, and cannot
   const view = (await get(`/api/runs/${RUN_ID}/prompt?job=${jobId}&take=t3`)).json();
   assert.equal(view.sentAt, acceptedAt, 'the recorded submission time, not the file mtime we just moved');
 });
+
+// A job id is whatever the plan called it (the spec asks only for a non-empty string), and this
+// build supports `__proto__` everywhere else: the edit saves, the render sends it, the sidecar lands.
+// Gating the take history on a charset whitelist therefore hid a real job's history — its picker was
+// permanently empty and its immutable as-sent prompt unreachable — for a job that renders fine.
+test('a take history is offered for EVERY job id the plan can name, `__proto__` included', async () => {
+  const runId = await plannedRun();
+  const jobId = '__proto__';
+  const specFile = path.join(runsDir, runId, 'spec.json');
+  const spec = JSON.parse(fs.readFileSync(specFile, 'utf8'));
+  spec.kling.jobs[0].job_id = jobId;
+  fs.writeFileSync(specFile, JSON.stringify(spec, null, 2));
+
+  const sent = 'the words this oddly named job really sent';
+  const takeDir = path.join(runsDir, runId, 'renders', 't1', jobId);
+  fs.mkdirSync(takeDir, { recursive: true });
+  fs.writeFileSync(path.join(takeDir, 'prompts.json'), JSON.stringify({
+    job_id: jobId, schema: 3, submitted_at: '2026-02-03T04:05:06.000Z', request_id: 'req_proto',
+    backend: 'seedance-2.0@fal', prompt: sent,
+  }));
+
+  const plan = (await get(`/api/runs/${runId}/prompt?job=${encodeURIComponent(jobId)}`)).json();
+  assert.deepEqual(plan.availableTakes, ['t1'], 'the version picker offers the take this job really sent');
+  const asSent = await get(`/api/runs/${runId}/prompt?job=${encodeURIComponent(jobId)}&take=t1`);
+  assert.equal(asSent.statusCode, 200, asSent.body);
+  assert.equal(asSent.json().prompt, sent);
+  assert.equal(asSent.json().source, 'take');
+
+  // …and the gate is still a PATH gate: a job id that is a path, or names the run dir itself, misses.
+  for (const bad of ['../../etc', 'a/b', '.', '..']) {
+    assert.equal((await get(`/api/runs/${runId}/prompt?job=${encodeURIComponent(bad)}&take=t1`)).statusCode, 404, bad);
+  }
+});
