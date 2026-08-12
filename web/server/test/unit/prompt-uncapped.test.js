@@ -152,3 +152,39 @@ test('an edit that FITS a set cap still saves', async () => {
   assert.equal(saved.source, 'override');
   assert.ok(saved.prompt.endsWith(body));
 });
+
+// ── a knob nobody can read reaches the PREVIEW as an error, not as silence ───────────────────────
+// promptCapOf refuses an unreadable cap rather than reading it as "no cap", and its docstring makes
+// a claim about this half specifically: the preview reports it as that job's error, in the place the
+// number would otherwise have been drawn. Untested, that is just a comment — and the failure it
+// guards against is silent by construction (the sheet would render a normal-looking prompt against
+// a budget the render refuses). The whole sheet must also survive it: one unreadable knob is a
+// broken setup to REPORT, not a 500 that takes every other job's preview down with it.
+
+const nanRoot = path.join(tmpRoot, 'nan');
+fs.mkdirSync(nanRoot, { recursive: true });
+fs.writeFileSync(path.join(nanRoot, '.env'), 'SEEDANCE_PROMPT_MAX_BYTES=5,000\n'); // a thousands separator is the likely typo
+
+test('an unreadable SEEDANCE_PROMPT_MAX_BYTES previews as the job\'s error, with no cap invented', async () => {
+  const views = await buildPromptViews(argsFor(nanRoot, mkRun()));
+  const view = views.prompts[0];
+  assert.match(view.error ?? '', /SEEDANCE_PROMPT_MAX_BYTES is not a number of bytes/, 'the sheet says what is wrong');
+  assert.equal(view.prompt, '', 'and shows no prompt, because none was composed');
+  // NOT 0 and NOT a number: the two readings that would quietly resume metering against a budget
+  // this run cannot resolve.
+  assert.equal(view.maxBytes, null);
+  assert.equal(view.segmentMaxBytes, null);
+  assert.equal(view.pinBytes, 0);
+});
+
+test('and a save under that knob is REFUSED, never stored against a budget nobody could resolve', async () => {
+  const runDir = mkRun();
+  const args = argsFor(nanRoot, runDir);
+  const jobId = (await buildPromptViews(args)).prompts[0].jobId;
+  await assert.rejects(
+    () => savePromptOverride({ ...args, jobId, prompt: 'a held shot of the lamp' }),
+    /SEEDANCE_PROMPT_MAX_BYTES is not a number of bytes/,
+    'the save path resolves the cap through the same refusal the render does',
+  );
+  assert.ok(!fs.existsSync(path.join(runDir, 'prompt-overrides.json')), 'and nothing was written');
+});
