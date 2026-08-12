@@ -102,23 +102,34 @@ export function seamStrengthWords(strength: PinStrength): string {
  *
  * A neighbour that does not exist is never named (an end of the cut cannot be pinned to anything),
  * and a pin strength of 'none' is described as a scene cut rather than as a weak seam.
+ *
+ * The two ends are answered SEPARATELY. They really can land differently — a model with a native
+ * first-frame slot and no last-frame one, or a reference budget that keeps the opening pin and drops
+ * the closing one — and reporting a single collapsed strength lies in both directions at once: it
+ * hides the surviving pin's reference-guided caveat, and it calls a reference-guided opening a
+ * scene cut. `pinStrength` therefore takes either one strength for both ends or the pair.
  */
 export function boundaryPlanSentence({ jobId, prev, next, boundaries, pinStrength }: {
   jobId: string;
   prev?: { jobId: string } | null;
   next?: { jobId: string } | null;
   boundaries: BoundaryChoice;
-  pinStrength: PinStrength;
+  pinStrength: PinStrength | { in: PinStrength; out: PinStrength };
 }): string {
   const prevId = prev?.jobId ?? null;
   const nextId = next?.jobId ?? null;
   if (!prevId && !nextId) return `${jobId} is the only segment in this cut — there's nothing to join.`;
 
-  const pins = pinStrength !== 'none';
-  const wantStart = Boolean(prevId) && pins && (boundaries === 'auto' || boundaries === 'both' || boundaries === 'start');
-  const wantEnd = Boolean(nextId) && pins && (boundaries === 'auto' || boundaries === 'both' || boundaries === 'end');
-  const words = seamStrengthWords(pinStrength);
-  const verb = pinStrength === 'native' ? 'will start from' : 'will aim to start on';
+  const strength = typeof pinStrength === 'string' ? { in: pinStrength, out: pinStrength } : pinStrength;
+  const asked = (end: 'start' | 'end') =>
+    boundaries === 'auto' || boundaries === 'both' || boundaries === end;
+  // An end is only described as pinned when it was asked for AND the renderer would really pin it.
+  const wantStart = Boolean(prevId) && strength.in !== 'none' && asked('start');
+  const wantEnd = Boolean(nextId) && strength.out !== 'none' && asked('end');
+  const startWords = seamStrengthWords(strength.in);
+  const endWords = seamStrengthWords(strength.out);
+  const opens = strength.in === 'native' ? 'will start from' : 'will aim to start on';
+  const closes = strength.out === 'native' ? 'end on' : 'aim to end on';
 
   // Nothing pinned at either end: say which joins become scene cuts, naming only real neighbours.
   if (!wantStart && !wantEnd) {
@@ -131,23 +142,28 @@ export function boundaryPlanSentence({ jobId, prev, next, boundaries, pinStrengt
   }
 
   if (wantStart && wantEnd) {
-    return pinStrength === 'native'
-      ? `${jobId} will start from ${prevId}'s last frame and end on ${nextId}'s opening frame — both joins stay ${words}.`
-      : `${jobId} will aim to start on ${prevId}'s last frame and end on ${nextId}'s opening frame — ${words}.`;
+    if (strength.in === strength.out) {
+      return strength.in === 'native'
+        ? `${jobId} will start from ${prevId}'s last frame and end on ${nextId}'s opening frame — both joins stay ${startWords}.`
+        : `${jobId} will aim to start on ${prevId}'s last frame and end on ${nextId}'s opening frame — ${startWords}.`;
+    }
+    // Pinned differently at each end — one sentence each, so neither join borrows the other's promise.
+    return `${jobId} ${opens} ${prevId}'s last frame — that join is ${startWords}.`
+      + ` It will ${closes} ${nextId}'s opening frame — that join is ${endWords}.`;
   }
 
   if (wantStart) {
     const tail = nextId
       ? ` Nothing pins its ending, so the cut into ${nextId} stays a scene cut.`
       : ' Nothing pins its ending — it is the last segment in the cut.';
-    return `${jobId} ${verb} ${prevId}'s last frame — that join is ${words}.${tail}`;
+    return `${jobId} ${opens} ${prevId}'s last frame — that join is ${startWords}.${tail}`;
   }
 
   // Only the ending is pinned: either the head of the cut, or an explicit end-only plan.
   const head = prevId
     ? `Nothing pins its start, so the join from ${prevId} stays a scene cut.`
     : `${jobId} opens the cut, so nothing pins its start.`;
-  return `${head} It will ${pinStrength === 'native' ? 'end on' : 'aim to end on'} ${nextId}'s opening frame — that join is ${words}.`;
+  return `${head} It will ${closes} ${nextId}'s opening frame — that join is ${endWords}.`;
 }
 
 // ── Delivery lifecycle (WS2-P6) ──────────────────────────────────────────────────────────────────

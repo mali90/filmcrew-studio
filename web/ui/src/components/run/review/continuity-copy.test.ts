@@ -75,6 +75,21 @@ describe('SegmentRerenderDialog boundary sentence (plain words, recomputed live)
     expect(s).toMatch(/near-seamless \(reference-guided\)|reference-guided/);
   });
 
+  // The two ends can land differently — a reference budget that keeps the opening pin and drops the
+  // closing one, a model with a native first-frame slot and no last-frame one. One collapsed
+  // strength lies in both directions: it downgrades the join that IS pinned and upgrades the one
+  // that is not.
+  it('both ends, mixed: each join is described by its own strength', () => {
+    const kept = boundaryPlanSentence({ ...base, boundaries: 'both', pinStrength: { in: 'soft', out: 'none' } });
+    expect(kept).toMatch(/K1's last frame — that join is near-seamless \(reference-guided\)/);
+    expect(kept).toMatch(/cut into K3 stays a scene cut/);
+    expect(kept).not.toMatch(/rendered on its own/);
+
+    const strongerStart = boundaryPlanSentence({ ...base, boundaries: 'both', pinStrength: { in: 'native', out: 'soft' } });
+    expect(strongerStart).toMatch(/will start from K1's last frame — that join is seamless\./);
+    expect(strongerStart).toMatch(/aim to end on K3's opening frame — that join is near-seamless \(reference-guided\)/);
+  });
+
   it('start only: says plainly that the cut into the next segment stays a scene cut', () => {
     const s = boundaryPlanSentence({ ...base, boundaries: 'start', pinStrength: 'soft' });
     expect(s).toContain('K1');

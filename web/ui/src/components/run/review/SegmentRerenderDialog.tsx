@@ -26,11 +26,6 @@ import { useToast } from '../../ui/Toast';
 import { boundaryPlanSentence, seamStrengthWords, type BoundaryChoice } from './lib';
 import { PaidButton } from './PaidButton';
 
-/** Both ends pinned but not equally strongly? Say the weaker one — a plan is only as good as its
- *  worst join. */
-const RANK: Record<PinStrength, number> = { none: 0, soft: 1, native: 2 };
-const weaker = (a: PinStrength, b: PinStrength) => (RANK[a] <= RANK[b] ? a : b);
-
 /** The neighbour's still, next to its clip: `…/K1/clip.mp4` → `…/K1/last_frame.png`. */
 const frameUrl = (clipUrl: string | null | undefined, file: string) =>
   (clipUrl ? clipUrl.replace(/[^/]+$/, file) : null);
@@ -140,11 +135,11 @@ export function SegmentRerenderDialog({ run, jobId, open, onClose }: {
   // drops a paid identity reference. Asking per end, budget-free, is how a dropped pin gets sold as
   // "near-seamless (reference-guided)" and delivered as a scene cut.
   const strengths = pinStrengthsFor(backend, { castRefCount, hasSeamIn: wantStart, hasSeamOut: wantEnd });
+  // Each end keeps ITS OWN answer all the way to the copy. The budget can preserve one pin and drop
+  // the other ({ in: 'soft', out: 'none' } at a full cast), and collapsing that to the weaker one
+  // told the reviewer both joins were scene cuts while hiding the surviving pin's caveat.
   const startStrength: PinStrength = wantStart ? strengths.in : 'none';
   const endStrength: PinStrength = wantEnd ? strengths.out : 'none';
-  const pinStrength: PinStrength = wantStart && wantEnd
-    ? weaker(startStrength, endStrength)
-    : wantStart ? startStrength : endStrength;
 
   const resolved: BoundaryChoice = wantStart && wantEnd ? 'both' : wantStart ? 'start' : wantEnd ? 'end' : 'none';
   const sentence = boundaryPlanSentence({
@@ -152,7 +147,7 @@ export function SegmentRerenderDialog({ run, jobId, open, onClose }: {
     prev: prevId ? { jobId: prevId } : null,
     next: nextId ? { jobId: nextId } : null,
     boundaries: resolved,
-    pinStrength,
+    pinStrength: { in: startStrength, out: endStrength },
   });
 
   // Can this backend end a segment on a given frame at all? A model with no closing anchor and no
@@ -303,7 +298,9 @@ export function SegmentRerenderDialog({ run, jobId, open, onClose }: {
           </div>
         )}
 
-        {pinStrength === 'soft' && (
+        {/* Either end being reference-guided earns the caveat: a plan that pins one end softly and
+            leaves the other to the budget is still selling a pin that is not frame-exact. */}
+        {(startStrength === 'soft' || endStrength === 'soft') && (
           <WarnRow testId="soft-pin-warning">
             Frame pinning here is reference-guided — close, but not guaranteed frame-perfect.
           </WarnRow>
@@ -324,7 +321,9 @@ export function SegmentRerenderDialog({ run, jobId, open, onClose }: {
           <WarnRow testId="downstream-seam-warning">
             <p>
               {nextId} starts on {jobId}&rsquo;s current last frame.{' '}
-              {wantEnd
+              {/* Asked-for is not delivered: an ending pin the reference budget drops leaves the
+                  downstream join exactly as broken as never asking for one. */}
+              {endStrength !== 'none'
                 ? `Ending ${jobId} on ${nextId}'s opening frame keeps that join ${seamStrengthWords(endStrength)} — re-rendering ${nextId} too is the exact fix.`
                 : `Re-rendering ${jobId} changes that frame, so ${nextId}'s join will break.`}
             </p>

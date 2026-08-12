@@ -60,6 +60,15 @@ function onBackend(run: RunDetail, backend: Backend, { castLess = false } = {}):
   return run;
 }
 
+/** Give every segment `count` cast references — the input the reference budget has to spend before
+ *  it can afford a boundary pin (castRefCountFor counts a job's own elements first). */
+function withCast(run: RunDetail, count: number): RunDetail {
+  const elements = Array.from({ length: count }, (_, i) => ({ id: `cast${i}`, role: 'subject', image: `elements/references/cast${i}.png` }));
+  run.spec!.kling.elements = elements;
+  for (const j of run.spec!.kling.jobs) j.elements = elements.map((e) => e.id);
+  return run;
+}
+
 /** An in-memory localStorage for the one test that needs the first-paid confirm to be reachable. */
 function withLocalStorage() {
   const store = new Map<string, string>();
@@ -159,6 +168,34 @@ describe('SegmentRerenderDialog — the boundary plan, in plain words (D14/D15)'
     }
     open(onBackend(threeSegmentRun(), 'seedance-2.0@segmind', { castLess: true }));
     expect(promisesSeamless(sentence())).toBe(true);
+  });
+
+  // Both ends asked for, only one affordable: seedance-2.0@fal carries 9 images, so eight cast
+  // references leave room for a single pin and SEAM_PRIORITY gives up the CLOSING one —
+  // { in: 'soft', out: 'none' }. Reporting the weaker of the two for both ends lied twice over: it
+  // called a reference-guided opening a scene cut, and it hid the soft pin's caveat entirely.
+  it('a budget that can afford only one pin reports each end on its own terms', () => {
+    expect(pinStrengthsFor('seedance-2.0@fal', { castRefCount: 8, hasSeamIn: true, hasSeamOut: true }))
+      .toEqual({ in: 'soft', out: 'none' });
+
+    open(withCast(onBackend(threeSegmentRun(), 'seedance-2.0@fal'), 8));
+    const s = sentence();
+    expect(s).toContain("K2 will aim to start on K1's last frame — that join is near-seamless (reference-guided).");
+    expect(s).toContain('Nothing pins its ending, so the cut into K3 stays a scene cut.');
+    expect(s).not.toContain('rendered on its own');
+    expect(promisesSeamless(s)).toBe(false);
+    // the surviving pin keeps its caveat on screen
+    expect(screen.getByTestId('soft-pin-warning')).toBeInTheDocument();
+    // and the ending nobody could pin is predicted to break downstream, not to hold
+    expect(screen.getByTestId('downstream-seam-warning')).toHaveTextContent("K3's join will break");
+  });
+
+  it('a budget that can afford neither pin still promises nothing at all', () => {
+    expect(pinStrengthsFor('seedance-2.0@fal', { castRefCount: 14, hasSeamIn: true, hasSeamOut: true }))
+      .toEqual({ in: 'none', out: 'none' });
+    open(withCast(onBackend(threeSegmentRun(), 'seedance-2.0@fal'), 14));
+    expect(sentence()).toBe('K2 will be rendered on its own. The joins on both sides become scene cuts.');
+    expect(screen.queryByTestId('soft-pin-warning')).not.toBeInTheDocument();
   });
 
   it('Custom re-computes the sentence live, and opens on exactly what Auto would have done', () => {
