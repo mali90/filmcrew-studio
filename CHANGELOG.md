@@ -238,6 +238,29 @@
   install commands.
 
 ### Fixed
+- **The prompt sheet keeps up with the run: a finished re-render and a revise both refresh it.**
+  It stays open through the whole review while everything in it is composed by the server, and it
+  was only ever refreshed when *you* edited a prompt. So the take you had just paid for was missing
+  from the version picker until you reloaded the page, and a revise that rewrote the plan left the
+  sheet quoting the words from before it — with the "edited before the plan changed" banner
+  measured against them. Both now refresh it.
+- **Switching to a past take closes the editor instead of carrying your draft onto it.** Opening a
+  take you had already viewed once reused the editor that was open on the current plan, so a page
+  whose own footer says past takes can't be edited showed a draft box, Save, and a byte meter
+  reading zero — and saving from there would have written that text over the *current* plan.
+  Changing versions now always lands on a clean read of the version you picked.
+- **An edit is marked stale when the CAST changes, not only when the shots do.** Re-casting a
+  segment — a different reference set, an element handed to another character, a job's cast
+  re-picked — rewrites the identity line and the speaker mapping in the prompt we send, but a
+  saved edit went on reporting itself as up to date, so the banner that offers "Refresh from plan"
+  or "Discard" never appeared. Changing the picture behind an element still doesn't stale an edit:
+  it changes which image is uploaded, not a word of the prompt.
+- **A plan can no longer be approved with more references than the model will actually send.** When
+  casting attached a full reference set *and* a segment had a voiced line, the plan validated at the
+  image limit and then the renderer refused it — one reference over the combined budget, after the
+  first upload had already begun. Over-budget reference sets are now trimmed to what the model
+  carries, the same way undersized ones are topped up: evenly, from the biggest set first, and never
+  below one reference per character.
 - **Approving a reopened run again really does write a new final beside the old one.** When nothing
   had been re-rendered and no upscale was asked for, the second approval delivered the *same file*:
   the delivery history grew a second row pointing at the first row's path, the genuine first
