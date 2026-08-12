@@ -20,7 +20,7 @@ import { buildKlingStoryboard, klingConfigFor } from './kling.js';
 import { chooseSeamMode } from './prompt-compose.js';
 import { readJobOverride } from './prompt-overrides.js';
 import { capsFor } from './render-models.js';
-import { generateKling, toFalInput, falRef, isValidationError, isTransientFalError } from './fal.js';
+import { generateKling, toFalInput, falRef, paidClipOf, isValidationError, isTransientFalError } from './fal.js';
 import { characterGroups, jobSpeakers } from './cast-groups.js';
 import { resolveImage } from './elements.js';
 import { getVoiceId } from './voices.js';
@@ -32,8 +32,6 @@ export { characterGroups, jobSpeakers };
 
 const MAX_REFS_PER_ELEMENT = 3; // schema: 1-3 additional reference images per element
 const MAX_VOICES_PER_JOB = 2;   // Kling hard cap: at most two bound voices per task (runbook §5)
-
-const oneMp4 = (outs) => outs.find((p) => /\.(mp4|mov|webm)$/i.test(p)) ?? outs[0];
 
 /** A local image as a fal input (cached across runs in storage mode) — shared falRef, config mode. */
 const falRefFor = (absPath) => falRef(absPath, config.fal.uploadMode);
@@ -195,7 +193,8 @@ export async function renderKlingJobFal({ job, spec, runDir, seed, lowRes = fals
     writeSidecar();
     outs = await submit(withoutEndFrame);
   }
-  const clip = oneMp4(outs);
+  // By ROLE (see queue-transport.paidClipOf), not by suffix: an extensionless CDN url is a video too.
+  const clip = paidClipOf(outs);
   log.info(`[${job.job_id}] fal Kling clip -> ${clip}`);
   return { jobId: job.job_id, clip, totalDuration, segments: segments.length, seamIn: sidecar.seam_in, seamOut: sidecar.seam_out, providerLastFrame: null };
 }

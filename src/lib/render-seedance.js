@@ -39,9 +39,8 @@ import { characterGroups, jobSpeakers } from './cast-groups.js';
 import { resolveImage } from './elements.js';
 import { getVoiceRefClip } from './voices.js';
 import { probeClip, extractAudio } from './assemble.js';
+import { paidClipOf, LAST_FRAME_FILE } from './queue-transport.js';
 import { slug } from './util.js';
-
-const oneMp4 = (outs) => outs.find((p) => /\.(mp4|mov|webm)$/i.test(p)) ?? outs[0];
 
 /**
  * Resolve one of the caps' route KEY NAMES against the provider's config block. The registry stores
@@ -363,11 +362,13 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
       writeSidecar();
     },
   });
-  const clip = oneMp4(outs);
+  // By ROLE, not by suffix: a provider is free to serve the video from an extensionless CDN url, and
+  // reading the courtesy still as the clip would stitch a PNG into the cut.
+  const clip = paidClipOf(outs);
   // The provider's own closing still, if we asked for one and it came back. The transport saves it
   // AS last_frame.png (queue-transport's `saveAs`), never under the CDN's own content-hashed name —
   // that is what makes this match hold against a real provider and not just against the mocks.
-  const providerLastFrame = outs.find((p) => path.basename(p) === 'last_frame.png') ?? null;
+  const providerLastFrame = outs.find((p) => path.basename(p) === LAST_FRAME_FILE) ?? null;
   log.info(`[${job.job_id}] clip -> ${clip}`);
   return {
     jobId: job.job_id, clip, totalDuration, segments: shotPrompts.length,

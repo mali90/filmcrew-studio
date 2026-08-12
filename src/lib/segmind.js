@@ -32,7 +32,7 @@ import config from '../../config.js';
 import log from './logger.js';
 import { fetchRetry, pollUntil, sleep, debugBody } from './util.js';
 import {
-  fileToDataUri, downloadResultFiles,
+  fileToDataUri, downloadResultFiles, paidClipOf,
   isContentPolicyError, contentPolicyError,
 } from './queue-transport.js';
 
@@ -294,9 +294,10 @@ export async function generateSegmind(args, { slug = SG.seedance25Slug, destDir,
  */
 export async function topazUpscaleSegmind(args, { destDir, slug = SG.topazSlug, timeoutMs, onMeta } = {}) {
   const outs = await generateSegmind(args, { slug, destDir, timeoutMs: timeoutMs ?? 1800000, onMeta });
-  const mp4 = outs.find((p) => /\.mp4$/i.test(p)) ?? outs[0];
-  if (!mp4) throw new Error(`Segmind ${slug}: the upscale produced no output file.`);
-  return mp4;
+  // By ROLE, not by suffix — Segmind serves outputs off a CDN path that need not end in .mp4.
+  const upscaled = paidClipOf(outs);
+  if (!upscaled) throw new Error(`Segmind ${slug}: the upscale produced no output file.`);
+  return upscaled;
 }
 
 /**

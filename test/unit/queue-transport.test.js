@@ -135,6 +135,43 @@ test('an undownloadable last_frame is skipped, not fatal — the clip still land
   }
 });
 
+// A real CDN serves a video from whatever path it likes — `…/videos/9f3ac` with no suffix is
+// ordinary — while the courtesy still always lands under last_frame.png. So the ROLE has to be
+// readable without the filename: the renderers take the first output (fal-kling, render-seedance,
+// topazUpscaleSegmind), and handing them the PNG would put a still where the paid clip belongs and
+// only blow up later, in the stitch.
+test('the paid video comes back FIRST and is identifiable by role, even with an extensionless url', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-qt-order-'));
+  const server = http.createServer((req, res) => {
+    const png = req.url.endsWith('.png');
+    res.writeHead(200, { 'content-type': png ? 'image/png' : 'video/mp4' });
+    return res.end(Buffer.from(png ? 'FAKE-PNG' : 'FAKE-MP4'));
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const paths = await qt.downloadResultFiles(
+      { url: `${base}/videos/9f3ac`, last_frame: { url: `${base}/frames/8b2de.png` } },
+      dir, 'Segmind seedance',
+    );
+    assert.deepEqual(paths.map((p) => path.basename(p)), ['9f3ac', 'last_frame.png'],
+      'the courtesy still never precedes the artifact the job billed for');
+    assert.equal(path.basename(qt.paidClipOf(paths)), '9f3ac', 'and the role reader agrees with the order');
+    assert.equal(fs.readFileSync(qt.paidClipOf(paths), 'utf8'), 'FAKE-MP4', 'the bytes are the video, not the still');
+  } finally {
+    await new Promise((r) => server.close(r));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('paidClipOf reads the role, never the suffix', () => {
+  assert.equal(qt.paidClipOf(['/j/K1/last_frame.png', '/j/K1/9f3ac']), '/j/K1/9f3ac');
+  assert.equal(qt.paidClipOf(['/j/K1/out.mp4', '/j/K1/last_frame.png']), '/j/K1/out.mp4');
+  assert.equal(qt.paidClipOf(['/j/K1/out.mp4']), '/j/K1/out.mp4');
+  assert.equal(qt.paidClipOf([]), null, 'nothing downloaded is nothing to claim');
+  assert.equal(qt.paidClipOf(undefined), null);
+});
+
 // The mirror image: a VIDEO that will not download is still fatal. Nothing about the optional path
 // may soften the required one.
 test('an undownloadable VIDEO is still fatal', async () => {

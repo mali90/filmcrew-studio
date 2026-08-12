@@ -17,13 +17,13 @@ import { getCloudRef, setCloudRef } from './cloud-refs.js';
 // historic name `isTransientFalError`) so every existing `from './fal.js'` import is unchanged.
 import {
   mimeFor, fileToDataUri,
-  resultFileUrls, downloadResultFiles,
+  resultFileUrls, downloadResultFiles, paidClipOf,
   isValidationError, isTransientError as isTransientFalError, isContentPolicyError, contentPolicyError,
 } from './queue-transport.js';
 
 export {
   fileToDataUri,
-  resultFileUrls, downloadResultFiles,
+  resultFileUrls, downloadResultFiles, paidClipOf,
   isValidationError, isTransientFalError, isContentPolicyError, contentPolicyError,
 };
 
@@ -208,4 +208,4 @@ export async function topazUpscale(videoPath, { destDir, upscaleFactor = 2, mode
   return writeBuffer(path.join(destDir, base.replace(/[/\\]/g, '_')), Buffer.from(await res.arrayBuffer()));
 }
 
-export default { fileToDataUri, uploadToStorage, toFalInput, toFalInputAs, falRef, mintVoice, generateKling, generateSeedance, topazUpscale, topazArgs, validateFal, isValidationError, isTransientFalError, isContentPolicyError };
+export default { fileToDataUri, uploadToStorage, toFalInput, toFalInputAs, falRef, mintVoice, generateKling, generateSeedance, topazUpscale, topazArgs, paidClipOf, validateFal, isValidationError, isTransientFalError, isContentPolicyError };
