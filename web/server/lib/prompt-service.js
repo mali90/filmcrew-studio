@@ -550,6 +550,12 @@ function takesWithPrompts(runDir, jobId) {
       if (submittedSidecarAt(path.join(base, name, String(jobId), 'prompts.json'))) found.add(name);
     }
   }
+  // …and a CLI render given the run dir itself (`render.js --out <runDir>`) has no take dir at all:
+  // renderSpec writes <runDir>/<jobId>/prompts.json beside the run's own render.json, the layout
+  // run-scan reads that run's status from. It is the unnumbered take under a third spelling, so it
+  // answers to the same id — and a nested `render/` take, being the more specific one, wins the id
+  // in takeView below.
+  if (submittedSidecarAt(path.join(runDir, String(jobId), 'prompts.json'))) found.add('render');
   return [...found].sort(byTakeNewestFirst);
 }
 
@@ -575,6 +581,10 @@ async function takeView({ root, runDir, take, jobId }) {
   const candidates = [
     path.join(runDir, 'renders', String(take), String(jobId), 'prompts.json'),
     path.join(runDir, String(take), String(jobId), 'prompts.json'), // CLI runs keep their take beside the spec
+    // …and a CLI render pointed at the run dir has no take dir: <runDir>/<jobId>/prompts.json. Only
+    // the unnumbered id can mean it (takesWithPrompts offers it under that name), and it is read
+    // LAST so a run that also has a real `render/` take keeps answering with the take dir.
+    ...(String(take) === 'render' ? [path.join(runDir, String(jobId), 'prompts.json')] : []),
   ];
   const file = candidates.find((p) => fs.existsSync(p));
   if (!file) return null;

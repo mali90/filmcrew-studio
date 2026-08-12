@@ -249,6 +249,12 @@
   on references that survived — including characters the casting pass never starred — and a job
   that named only props falls back to a single surviving stand-in, with a log line saying so rather
   than swapping it in silently.
+- **A run rendered from the CLI keeps its prompt history in the web UI.** `render.js --out <dir>`
+  writes each job's sidecar beside the spec rather than inside a take directory, and the version
+  picker only knew the two nested layouts — so for those runs it was permanently empty and the
+  immutable "what we actually sent" view could not be opened at all, even though the same run's
+  status was read off that very layout. It is now offered as the unnumbered take, under the same
+  rule as every other: only if that job really reached a provider.
 - **The prompt preview reads your `.env` the way the render will.** Settings written in perfectly
   ordinary dotenv syntax reached the preview differently than they reach the renderer: a trailing
   `# note` stayed inside the value, an `export ` prefix made the line invisible, and a key assigned

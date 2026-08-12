@@ -340,3 +340,39 @@ test('a take history is offered for EVERY job id the plan can name, `__proto__` 
     assert.equal((await get(`/api/runs/${runId}/prompt?job=${encodeURIComponent(bad)}&take=t1`)).statusCode, 404, bad);
   }
 });
+
+// A CLI render writes its take AT the run dir (`src/cli/render.js --out <runDir>` → <runDir>/render.json
+// and <runDir>/<jobId>/prompts.json) — the layout run-scan already reads a run's status from. The
+// history scan only knew the two nested layouts, so a run rendered that way had an empty version
+// picker and no way to open the words it really sent.
+test('a CLI render that wrote its take at the run root still has a prompt history', async () => {
+  const runId = await plannedRun();
+  const spec = JSON.parse(fs.readFileSync(path.join(runsDir, runId, 'spec.json'), 'utf8'));
+  const jobId = spec.kling.jobs[0].job_id;
+  const sent = 'the words the CLI render sent, at the run root where it left them';
+  fs.mkdirSync(path.join(runsDir, runId, jobId), { recursive: true });
+  fs.writeFileSync(path.join(runsDir, runId, jobId, 'prompts.json'), JSON.stringify({
+    job_id: jobId, schema: 3, submitted_at: '2026-03-04T05:06:07.000Z', request_id: 'req_cli',
+    backend: 'seedance-2.0@fal', prompt: sent,
+  }));
+
+  const plan = (await get(`/api/runs/${runId}/prompt?job=${encodeURIComponent(jobId)}`)).json();
+  assert.deepEqual(plan.availableTakes, ['render'], 'the unnumbered take a CLI render leaves behind');
+  const asSent = await get(`/api/runs/${runId}/prompt?job=${encodeURIComponent(jobId)}&take=render`);
+  assert.equal(asSent.statusCode, 200, asSent.body);
+  assert.equal(asSent.json().prompt, sent);
+  assert.equal(asSent.json().sentAt, '2026-03-04T05:06:07.000Z');
+
+  // The submission gate rules this layout too: a sidecar written before a render that died is not
+  // a version, and must not be offered as one.
+  const other = await plannedRun();
+  const otherSpec = JSON.parse(fs.readFileSync(path.join(runsDir, other, 'spec.json'), 'utf8'));
+  const otherJob = otherSpec.kling.jobs[0].job_id;
+  fs.mkdirSync(path.join(runsDir, other, otherJob), { recursive: true });
+  fs.writeFileSync(path.join(runsDir, other, otherJob, 'prompts.json'), JSON.stringify({
+    job_id: otherJob, schema: 3, submitted_at: null, backend: 'seedance-2.0@fal', prompt: 'never left the machine',
+  }));
+  const unsent = (await get(`/api/runs/${other}/prompt?job=${encodeURIComponent(otherJob)}`)).json();
+  assert.deepEqual(unsent.availableTakes, [], 'composed, never submitted — not a version');
+  assert.equal((await get(`/api/runs/${other}/prompt?job=${encodeURIComponent(otherJob)}&take=render`)).statusCode, 404);
+});
