@@ -5,8 +5,8 @@
 // references that share it, capped by Kling's per-element ceiling, split evenly across the starred
 // cast. Seam pins reserve nothing (they are dropped before a cast ref) and voice clips reserve
 // everything they will spend (nothing drops them — the renderer throws instead).
-// Un-starred elements are never touched. Symptom this pins down: three casts starred, ONE image
-// each sent to a Seedance render.
+// Un-starred elements are never topped up, and only given back when the trim has nothing else left.
+// Symptom this pins down: three casts starred, ONE image each sent to a Seedance render.
 //
 // Fixtures are SYNTHETIC (inventory arrays ride ctx.inventory) — no real profiles/references.
 import test from 'node:test';
@@ -234,6 +234,46 @@ test('a subset keeps every character it cast, not only the one whose reference s
   assert.ok(cast.some((id) => id.startsWith('keeper-')), 'J1 was cast with Keeper — a trim re-seats them, never uncasts them');
   assert.ok(cast.some((id) => id.startsWith('gull-')), 'and Gull still rides');
   for (const id of cast) assert.ok(spec.kling.elements.some((e) => e.id === id), `${id} is not in the roster`);
+});
+
+// The trim's floor is one reference per starred character, so an excess made of UN-STARRED pins used
+// to stop the loop with the list still over budget. The final gate only counts images against
+// maxImages, so that plan was marked passed — and refused at submit for 51 combined refs.
+test('an over-budget roster whose excess is UN-STARRED gives back the un-starred slots', () => {
+  const props = Array.from({ length: 49 }, (_, i) => `prop-${String(i + 1).padStart(2, '0')}`);
+  const inv = [...refsFor('keeper', 60), ...props.map((id) => ref(id))];
+  const spec = {
+    spec_version: '1.0',
+    kling: {
+      elements: [el('keeper-01', 'Keeper'), ...props.map((id) => el(id, null, 'object'))],
+      jobs: [{ job_id: 'J1', shots: ['S1'], elements: ['keeper-01', ...props] }],
+    },
+    audio: { voice: { lines: [line('S1', 'Keeper')] } },
+  };
+  topUpStarredElements(spec, ctxFor('seedance-2.5@fal', ['keeper'], inv, voiced('Keeper')));
+  const caps = capsFor('seedance-2.5@fal');
+  assert.equal(spec.kling.elements.length, 49, '50 images beside one voice clip is 51 combined — the renderer refuses it');
+  assert.ok(Math.min(spec.kling.elements.length, caps.maxImages) + 1 <= caps.maxCombinedRefs,
+    `the roster still cannot ride beside its voice clip in ${nameOf(caps)}'s combined budget`);
+  assert.equal(countFor(spec, 'keeper'), 1, 'the starred floor holds — identity is never what yields');
+  assert.ok(!spec.kling.elements.some((e) => e.id === 'prop-49'), 'the last un-starred pin is what gives');
+  assert.ok(spec.kling.jobs[0].elements.length <= 49, 'and the job that named them all comes with it');
+});
+
+test('un-starred pins are the LAST resort — a cast that can still give one back keeps them all', () => {
+  const inv = [...refsFor('keeper', 60), ref('prop-net'), ref('prop-lamp')];
+  const spec = {
+    spec_version: '1.0',
+    kling: {
+      elements: [...refsFor('keeper', 48).map((r) => el(r.id, 'Keeper')), el('prop-net', null, 'object'), el('prop-lamp', null, 'object')],
+      jobs: [{ job_id: 'J1', shots: ['S1'] }],
+    },
+    audio: { voice: { lines: [line('S1', 'Keeper')] } },
+  };
+  topUpStarredElements(spec, ctxFor('seedance-2.5@fal', ['keeper'], inv, voiced('Keeper')));
+  assert.equal(spec.kling.elements.length, 49);
+  assert.equal(countFor(spec, 'keeper'), 47, 'the 48th keeper view is what gave way, not a prop');
+  assert.deepEqual(spec.kling.elements.filter((e) => e.role === 'object').map((e) => e.id), ['prop-net', 'prop-lamp']);
 });
 
 test('two voiced speakers reserve two slots; an unregistered speaker reserves none', () => {

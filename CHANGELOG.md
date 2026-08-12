@@ -269,7 +269,9 @@
   image limit and then the renderer refused it — one reference over the combined budget, after the
   first upload had already begun. Over-budget reference sets are now trimmed to what the model
   carries, the same way undersized ones are topped up: evenly, from the biggest set first, and never
-  below one reference per character.
+  below one reference per character. When that floor is reached and the plan is *still* over — the
+  excess being un-starred relevance pins rather than cast images — the pins are what give way, from
+  the end of the list: a reference the model is never sent is worth less than a plan it refuses.
 - **Giving a reference back no longer writes a character out of the segment that cast them.** A job
   that names its own reference subset renders exactly what it names, and when the one image it
   carried for a character was the image the trim gave back, the job simply went on with whoever was

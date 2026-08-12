@@ -381,7 +381,8 @@ function stampResolution(spec, ctx) {
  * renderers enforce: per-model maxImages, tightened by a declared combined-refs cap (fal 2.5's 50)
  * minus what that job's VOICE references will spend out of it, and capped at Kling's per-element
  * ceiling (frontal + maxRefsPerElement — extra views are sliced off at render).
- * The budget splits evenly across the starred cast; un-starred elements are never touched.
+ * The budget splits evenly across the starred cast; un-starred elements are never topped up, and
+ * only ever given back as the LAST resort of the trim below (see trimToBudget).
  *
  * The same budget is enforced in the other direction: a Casting agent that attached MORE references
  * than the model will carry (50 images plus a voice clip is 51 combined on fal Seedance 2.5) writes
@@ -452,15 +453,26 @@ export function topUpStarredElements(spec, ctx) {
    * own `els.length >= budget` guard only stops it from making an over-budget set WORSE. Removed
    * from the biggest starred set each time, so the trim lands where the crowding is, and never below
    * one reference per character: WHICH characters ride is Casting's call, and this layer only sizes
-   * their reference sets. Un-starred elements are not ours to take (the same rule as the split).
+   * their reference sets. Once every starred set is down to that floor the excess is UN-STARRED, and
+   * that is where the list finally gives: a relevance pin is worth less than a plan no renderer will
+   * take. Stopping at the floor instead left the list OVER budget, and the final gate only counts
+   * images against maxImages — so the engine passed a plan seedance-args refuses at submit for its
+   * combined count, the exact class of failure this trim exists to end. The un-starred pin goes from
+   * the tail, the same end the cast trim takes. Below that floor there is nothing left to give, and
+   * nothing needs to be: every registered model budgets more images than its own castLimit.
    * @returns {object[]} the elements removed, so a job naming one by id can be repaired
    */
   const trimToBudget = (list, budget, slugs, ownedIn = (l, cs) => l.filter((e) => ownedBy(e, cs))) => {
     const cut = [];
     for (let over = list.length - budget; over > 0; over--) {
       const biggest = slugs.map((cs) => ownedIn(list, cs)).reduce((a, b) => (b.length > a.length ? b : a), []);
-      if (biggest.length <= 1) break;
-      const [gone] = list.splice(list.indexOf(biggest.at(-1)), 1);
+      let victim = biggest.length > 1 ? biggest.at(-1) : undefined;
+      if (victim === undefined) {
+        const starred = new Set(slugs.flatMap((cs) => ownedIn(list, cs)));
+        victim = list.findLast((x) => !starred.has(x));
+      }
+      if (victim === undefined) break;
+      const [gone] = list.splice(list.indexOf(victim), 1);
       cut.push(gone);
     }
     return cut;
