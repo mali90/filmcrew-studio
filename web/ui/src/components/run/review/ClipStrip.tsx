@@ -71,13 +71,20 @@ function Connector({ kind, size }: { kind: ConnectorKind; size: TileSize }) {
   );
 }
 
-export function ClipStrip({ run, jobs, takeCountFor, promptStateFor, onSeek }: {
+export function ClipStrip({ run, jobs, takeCountFor, promptStateFor, isLatestCut, onSeek }: {
   run: RunDetail;
   jobs: JobView[];
   takeCountFor: (jobId: string) => number;
   /** Whether this segment's prompt carries an edit, and whether the plan has since moved under it
    *  (spec D8). Absent — a strip rendered without the prompt read — simply wears no pen. */
   promptStateFor?: (jobId: string) => { edited: boolean; stale: boolean };
+  /** Whether the cut switcher is showing the LATEST cut. A re-render has no way to build on any
+   *  other: `rerender-job` resolves both neighbours and the composition it writes from the
+   *  manifest's current clips, which are the latest cut's, so on an older cut the paid action would
+   *  change a composition that is not the master playing above. Off ⇒ the action says so and
+   *  refuses. Required, not defaulted: a caller that forgets it would sell a paid re-render of the
+   *  wrong cut. */
+  isLatestCut: boolean;
   onSeek: (index: number) => void;
 }) {
   // The shared explanation line mirrors whichever tile is hovered or focused (spec D9) — one line
@@ -131,6 +138,16 @@ export function ClipStrip({ run, jobs, takeCountFor, promptStateFor, onSeek }: {
   };
 
   const selectedJob = selected == null ? null : jobs[selected] ?? null;
+  // Why the paid action is withheld, in the words the button wears — null when it is offered.
+  // The older-cut reason is a fact about the SERVER's contract, not a UI convenience: the endpoint
+  // takes a job id and nothing else, and resolves the neighbouring frames and the composition it
+  // writes from the manifest's current clips. Confirming it here would spend on rebuilding the
+  // latest cut while the reviewer watches an older master.
+  const rerenderBlock = run.status === 'rendering'
+    ? 'One render at a time — wait for the current one to finish.'
+    : !isLatestCut
+      ? 'You’re watching an older cut. A re-render always rebuilds the latest one, so switch back to it first.'
+      : null;
 
   return (
     <div
@@ -181,14 +198,15 @@ export function ClipStrip({ run, jobs, takeCountFor, promptStateFor, onSeek }: {
           <PromptButton target={selectedJob.jobId} ariaLabel={`Prompt for ${selectedJob.jobId}`} />
           {/* Opens the paid dialog; the price and the one-time confirm live on ITS PaidButton, so
               nothing here spends and the strip stays free of money buttons it cannot price.
-              While a render is in flight only the prompt stays actionable — one render at a time,
-              and the reason rides on the disabled button itself (U1). */}
+              Two states withhold it, and each says why on the button itself rather than going
+              quietly grey (U1): one render at a time, and — because a re-render can only ever build
+              on the latest cut — not while an older one is on the stage. */}
           <Button
             variant="ghost"
             size="sm"
             icon={<Film size={13} aria-hidden />}
-            disabled={run.status === 'rendering'}
-            title={run.status === 'rendering' ? 'One render at a time — wait for the current one to finish.' : undefined}
+            disabled={Boolean(rerenderBlock)}
+            title={rerenderBlock ?? undefined}
             onClick={() => setRerendering(selectedJob.jobId)}
           >
             Re-render {selectedJob.jobId}

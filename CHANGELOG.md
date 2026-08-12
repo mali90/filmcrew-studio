@@ -311,6 +311,14 @@
   a user is most likely to act on. Each delivery now records the short side measured off the file
   that was actually written, and the card reads that; the cut (then the latest render, then the
   run's resolution pick) stands in only for runs delivered before it was recorded.
+- **The re-render offer is withheld while you are watching an older cut, and says why.** The cut
+  switcher changes the video on the stage, but a segment re-render has no way to build on anything
+  except the latest cut: the endpoint takes a segment id and resolves both neighbouring frames — and
+  the composition it writes — from the run's current clips. Offered on an older cut, confirming it
+  spent real money rebuilding a composition that was not the master playing above. The button now
+  refuses with the reason on it ("You're watching an older cut. A re-render always rebuilds the
+  latest one, so switch back to it first"), the same way it already refuses while a render is in
+  flight. Reading a prompt stays free from either cut.
 - **Starring a cast now sends the character's FULL reference set, not one image each.** A run with
   three starred characters — each carrying seven reference views — could reach a Seedance render
   with a single image per character: the Casting agent's "pick the smallest set" guidance biased it

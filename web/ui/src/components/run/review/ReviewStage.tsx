@@ -240,6 +240,7 @@ export function ReviewStage({ run, cutId, setCutId }: {
           jobs={jobs}
           takeCountFor={jobTakeCount}
           promptStateFor={promptStateFor}
+          isLatestCut={isLatest}
           onSeek={seekToJob}
         />
       )}

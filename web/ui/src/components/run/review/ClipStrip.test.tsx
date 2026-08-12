@@ -28,7 +28,7 @@ function threeSegmentRun(over: Partial<RunDetail> = {}): RunDetail {
 
 function renderStrip(run: RunDetail, onSeek = vi.fn()) {
   const jobs = run.latestRender!.jobs;
-  const view = render(<ClipStrip run={run} jobs={jobs} takeCountFor={() => 1} onSeek={onSeek} />);
+  const view = render(<ClipStrip run={run} jobs={jobs} takeCountFor={() => 1} isLatestCut onSeek={onSeek} />);
   return { ...view, onSeek };
 }
 
@@ -147,7 +147,7 @@ describe('ClipStrip', () => {
   it('picking a segment reveals its actions, and Re-render opens the one paid dialog', async () => {
     const run = threeSegmentRun({ continuity: [entry('K2', 1), entry('K3', 2)] });
     renderReview(
-      <ClipStrip run={run} jobs={run.latestRender!.jobs} takeCountFor={() => 1} onSeek={vi.fn()} />,
+      <ClipStrip run={run} jobs={run.latestRender!.jobs} takeCountFor={() => 1} isLatestCut onSeek={vi.fn()} />,
     );
     // Nothing is selected: no money affordance is on screen at all (spec D11).
     expect(screen.queryByRole('button', { name: /Re-render/ })).not.toBeInTheDocument();
@@ -164,7 +164,7 @@ describe('ClipStrip', () => {
     const run = threeSegmentRun({ status: 'rendering', continuity: null });
     run.latestRender!.jobs = [clip('K1'), { ...clip('K2'), clip: null, clipExists: false, clipUrl: null }, clip('K3')];
     renderReview(
-      <ClipStrip run={run} jobs={run.latestRender!.jobs} takeCountFor={() => 1} onSeek={vi.fn()} />,
+      <ClipStrip run={run} jobs={run.latestRender!.jobs} takeCountFor={() => 1} isLatestCut onSeek={vi.fn()} />,
     );
     fireEvent.click(screen.getByRole('button', { name: 'Play from K1' }));
     const rerender = screen.getByRole('button', { name: 'Re-render K1' });
@@ -172,6 +172,29 @@ describe('ClipStrip', () => {
     expect(rerender).toHaveAttribute('title', 'One render at a time — wait for the current one to finish.');
     // the free affordance stays live
     expect(screen.getByRole('button', { name: 'Prompt for K1' })).toBeEnabled();
+  });
+
+  // The re-render endpoint takes a job id and nothing else: it resolves both neighbours and the
+  // composition it writes from the manifest's CURRENT clips, which are the latest cut's. Offered on
+  // an older cut, confirming it would spend on rebuilding a composition that is not the master
+  // playing above — so the strip withholds it and the button says which cut it would have changed.
+  it('withholds Re-render while an older cut is on the stage, and says why', () => {
+    const run = threeSegmentRun({ continuity: [entry('K2', 1), entry('K3', 2)] });
+    renderReview(
+      <ClipStrip run={run} jobs={run.latestRender!.jobs} takeCountFor={() => 1} isLatestCut={false} onSeek={vi.fn()} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Play from K2' }));
+    const rerender = screen.getByRole('button', { name: 'Re-render K2' });
+    expect(rerender).toBeDisabled();
+    expect(rerender).toHaveAttribute(
+      'title',
+      'You’re watching an older cut. A re-render always rebuilds the latest one, so switch back to it first.',
+    );
+    // and no paid dialog can be reached from here
+    fireEvent.click(rerender);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    // reading stays free, exactly as it does mid-render
+    expect(screen.getByRole('button', { name: 'Prompt for K2' })).toBeEnabled();
   });
 
   // No legend: the strip explains itself with the drawing and one sentence (Don't #9).
