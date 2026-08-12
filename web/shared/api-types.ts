@@ -302,7 +302,9 @@ export interface PromptView {
   /** 'plan' = the agents' text; 'override' = a saved edit (P4); 'take' = immutable, as sent. */
   source: 'plan' | 'override' | 'take';
   take: string | null;
-  /** When a 'take' view's prompts.json was written — i.e. when this text was sent. */
+  /** When the provider ACCEPTED this take's job — the recorded submission time, never the moment
+   *  the render finished. Falls back to the sidecar's mtime only for takes rendered before that was
+   *  recorded. */
   sentAt: string | null;
   /** True when the plan moved under a saved override (fingerprint mismatch). It changes nothing
    *  about what is sent — a stale override still renders word for word — only what is SAID. */

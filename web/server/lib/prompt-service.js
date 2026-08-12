@@ -558,8 +558,12 @@ async function takeView({ root, runDir, take, jobId }) {
   const prompt = typeof sidecar.prompt === 'string'
     ? sidecar.prompt
     : (segments ?? []).map((s) => String(s?.prompt ?? '')).join('\n\n');
-  let sentAt = null;
-  try { sentAt = fs.statSync(file).mtime.toISOString(); } catch { /* raced */ }
+  // The recorded SUBMISSION time, which is the answer to "when was this sent". The file's mtime is
+  // only a fallback for sidecars written before that was recorded, and it is a poor one: the
+  // renderer rewrites the sidecar when the receipt lands, so on Segmind it dates a long job to the
+  // moment it FINISHED.
+  let sentAt = sidecar.submitted_at ?? null;
+  if (!sentAt) { try { sentAt = fs.statSync(file).mtime.toISOString(); } catch { /* raced */ } }
   // Ids and labels only — `audio_refs[].clip` and `seam_*.frame` are absolute host paths and must
   // never leave the server (the same contract serializeRun/serializeContinuity keep).
   const refs = [

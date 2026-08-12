@@ -18,13 +18,14 @@ import { generateSegmind, segmindAssetUrl } from './segmind.js';
  * named last_frame.png, so caching by basename would hand job 3 job 2's frame.
  *
  * `generate` maps the renderer's neutral `endpoint` onto Segmind's model SLUG (the registry stores
- * it as `slugKey`), and forwards `onMeta` so the run's prompts.json can record the receipt —
- * request id, what the job cost, credits left.
+ * it as `slugKey`), and forwards both callbacks: `onSubmit` when Segmind ACCEPTS the request (what
+ * makes the sidecar's "sent" honest — the poll after it can run for twenty minutes) and `onMeta`
+ * with the completion receipt — request id, what the job cost, credits left.
  */
 export const segmindAdapter = {
   assetUrl: (absPath, _mode, { cache = true } = {}) => segmindAssetUrl(absPath, undefined, { cache }),
-  generate: (args, { endpoint, destDir, timeoutMs, onMeta }) =>
-    generateSegmind(args, { slug: endpoint, destDir, timeoutMs, onMeta }),
+  generate: (args, { endpoint, destDir, timeoutMs, onMeta, onSubmit }) =>
+    generateSegmind(args, { slug: endpoint, destDir, timeoutMs, onMeta, onSubmit }),
 };
 
 export default { segmindAdapter };

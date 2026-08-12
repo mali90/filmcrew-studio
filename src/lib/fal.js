@@ -77,7 +77,7 @@ export async function falRef(absPath, mode = FAL.uploadMode) {
 }
 
 /** Submit one queued job and resolve its result object (polls status_url → response_url). */
-async function submitAndWait(endpoint, args, { timeoutMs } = {}) {
+async function submitAndWait(endpoint, args, { timeoutMs, onSubmit } = {}) {
   const submit = await fetchJson(
     `${FAL.baseUrl}/${endpoint}`,
     { method: 'POST', headers: falHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify(args) },
@@ -88,6 +88,10 @@ async function submitAndWait(endpoint, args, { timeoutMs } = {}) {
   const responseUrl = submit?.response_url || `${FAL.baseUrl}/${endpoint}/requests/${requestId}`;
   if (!requestId) throw new Error(`fal ${endpoint}: submit returned no request_id: ${JSON.stringify(submit).slice(0, 200)}`);
   log.info(`Queued fal job ${requestId} on ${endpoint}; polling status…`);
+  // ACCEPTED — the provider owns a job now. This is the moment a caller may record as "sent"; every
+  // line above it is still a request that might never have left. Best-effort by construction: a
+  // bookkeeping failure must never sink a job the provider has already taken (and may bill for).
+  try { onSubmit?.({ requestId, endpoint }); } catch { /* the receipt is a record, not a dependency */ }
 
   const status = await pollUntil(
     () => fetchJson(statusUrl, { headers: falHeaders() }, { retries: 2 }),
@@ -101,12 +105,12 @@ async function submitAndWait(endpoint, args, { timeoutMs } = {}) {
 }
 
 /** Submit with a small resubmit loop for transient (non-validation) failures. */
-async function runFal(endpoint, args, { timeoutMs } = {}) {
+async function runFal(endpoint, args, { timeoutMs, onSubmit } = {}) {
   const maxTries = Math.max(1, FAL.maxRetries ?? 3);
   let lastErr;
   for (let attempt = 1; attempt <= maxTries; attempt++) {
     try {
-      return await submitAndWait(endpoint, args, { timeoutMs });
+      return await submitAndWait(endpoint, args, { timeoutMs, onSubmit });
     } catch (e) {
       lastErr = e;
       // A content-policy flag never auto-retries (a resubmit is a fresh paid generation) — surface a
@@ -164,9 +168,11 @@ export async function validateFal(apiKey) {
  * arguments object (prompt|multi_prompt, elements[{frontal_image_url, reference_image_urls, voice_id}],
  * aspect_ratio, generate_audio, duration, …) — built by fal-kling.js and verified against the
  * endpoint's fal "API" tab. fal result URLs EXPIRE, so we download immediately. Returns local paths.
+ * `onSubmit({requestId, endpoint})` fires the instant fal ACCEPTS the job — the caller's only
+ * evidence that this render really left the machine (fal issues no completion receipt).
  */
-export async function generateKling(args, { endpoint = FAL.klingEndpoint, destDir, timeoutMs } = {}) {
-  const result = await runFal(endpoint, args, { timeoutMs: timeoutMs ?? 1200000 });
+export async function generateKling(args, { endpoint = FAL.klingEndpoint, destDir, timeoutMs, onSubmit } = {}) {
+  const result = await runFal(endpoint, args, { timeoutMs: timeoutMs ?? 1200000, onSubmit });
   return downloadResultFiles(result, destDir, 'fal Kling');
 }
 
@@ -178,8 +184,8 @@ export async function generateKling(args, { endpoint = FAL.klingEndpoint, destDi
  * (and 422s are deterministic, so runFal surfaces them without retrying). `endpoint` switches
  * between the standard and mini (probe) tiers. fal result URLs EXPIRE → downloaded immediately.
  */
-export async function generateSeedance(args, { endpoint = FAL.seedanceEndpoint, destDir, timeoutMs } = {}) {
-  const result = await runFal(endpoint, args, { timeoutMs: timeoutMs ?? 1200000 });
+export async function generateSeedance(args, { endpoint = FAL.seedanceEndpoint, destDir, timeoutMs, onSubmit } = {}) {
+  const result = await runFal(endpoint, args, { timeoutMs: timeoutMs ?? 1200000, onSubmit });
   return downloadResultFiles(result, destDir, 'fal Seedance');
 }
 

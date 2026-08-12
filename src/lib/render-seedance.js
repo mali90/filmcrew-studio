@@ -9,7 +9,8 @@
 //     NOT caps — they stay config-sourced here, exactly as they were.
 //   - `adapter` carries the provider TRANSPORT: `assetUrl(absPath, mode, {cache})` turns a local
 //     file into something the provider can fetch, and `generate(args, {endpoint, destDir,
-//     timeoutMs, onMeta})` runs the job and returns downloaded output paths, optionally reporting a
+//     timeoutMs, onSubmit, onMeta})` runs the job and returns downloaded output paths, calling
+//     `onSubmit` the instant the provider ACCEPTS the request and optionally reporting a completion
 //     receipt (request id, cost, credits left) through `onMeta`. Adapters are DEFINED BY THE
 //     PROVIDER BINDING, not here — fal's lives in fal-seedance.js, Segmind's in
 //     segmind-seedance.js — so this file imports no transport and `import('./render-seedance.js')`
@@ -302,10 +303,15 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
   const sidecarPath = path.join(dir, 'prompts.json');
   const sidecar = {
     job_id: job.job_id,
-    // schema:2 adds the seam lineage below. Continuity has to be a RECORDED FACT: knowing that a
+    // schema:2 added the seam lineage below. Continuity has to be a RECORDED FACT: knowing that a
     // seam frame was used says nothing about WHICH CLIP it came from, and a cut that mixes take 2's
     // K1 with take 1's K2 looks exactly like an intact chain without it.
-    schema: 2,
+    // schema:3 adds `submitted_at` — see below.
+    schema: 3,
+    // Stamped only when the provider ACCEPTS the request, and never rewritten. Its absence on a
+    // schema-3 sidecar is the record that this take was composed but never sent (a missing key, a
+    // rejected payload), which is what keeps "sent" out of the prompt sheet for a take nobody sent.
+    submitted_at: null,
     backend: caps.id, // the canonical `<model>@<provider>` — same vocabulary as spec.render_backend
     // and render.json, so the sidecar answers "which MODEL produced this clip?" once two Seedance
     // models ship (the family token could not).
@@ -346,6 +352,13 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
   };
   writeSidecar();
 
+  // `onSubmit` is the provider ACCEPTING the request — the only moment at which this take can
+  // honestly be called sent. It is stamped ONCE and never moved: on Segmind the receipt below
+  // arrives when the job COMPLETES, so writing the time there would date a twenty-minute render to
+  // its finish; a resubmit after a transient failure is this take's second attempt, not a new
+  // sending. Its absence is meaningful too — that is how the prompt sheet tells a take that reached
+  // the provider from one that died on a missing key with its prompt already on disk.
+  //
   // `onMeta` is the provider's receipt for a PAID job — Segmind returns a request id plus the
   // cost/credits ledger, which lands in the sidecar as soon as the job completes (before the output
   // download, so a failed download still leaves the record of what was bought). fal issues no
@@ -354,6 +367,12 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
     endpoint,
     destDir: dir,
     timeoutMs: 1200000,
+    onSubmit: (meta) => {
+      // The id follows the attempt that is actually running; the TIME does not move.
+      sidecar.request_id = meta?.requestId ?? null;
+      if (!sidecar.submitted_at) sidecar.submitted_at = new Date().toISOString();
+      writeSidecar();
+    },
     onMeta: (meta) => {
       if (!meta) return;
       sidecar.request_id = meta.requestId ?? null;

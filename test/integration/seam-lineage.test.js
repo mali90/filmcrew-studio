@@ -60,6 +60,9 @@ const twoJobSpec = (backend) => {
 };
 const sidecar = (dir, job) => JSON.parse(fs.readFileSync(path.join(dir, job, 'prompts.json'), 'utf8'));
 const renderJson = (dir) => JSON.parse(fs.readFileSync(path.join(dir, 'render.json'), 'utf8'));
+// The seam lineage below arrived at schema 2; `submitted_at` (when the provider accepted the
+// job) took it to 3. Both renderers write the same number — one reader serves both.
+const SIDECAR_SCHEMA = 3;
 
 // Probe for readiness ONCE, on the cheapest possible render, so the whole file arms together.
 let READY = false;
@@ -67,7 +70,7 @@ if (FF) {
   const probe = mkTmp('seam-probe');
   try {
     await renderSpec(twoJobSpec('seedance'), { runDir: probe.dir });
-    READY = sidecar(probe.dir, 'K2').schema === 2 && sidecar(probe.dir, 'K2').seam_in !== undefined;
+    READY = sidecar(probe.dir, 'K2').schema >= 2 && sidecar(probe.dir, 'K2').seam_in !== undefined;
   } catch { READY = false; } finally { probe.cleanup(); }
 }
 const PENDING = FF
@@ -84,7 +87,7 @@ test('a 2-job Seedance render records seam_in.from on K2 and seam_out.to on K1',
     const k2Clip = r.jobs.find((j) => j.jobId === 'K2').clip;
 
     const s2 = sidecar(dir, 'K2');
-    assert.equal(s2.schema, 2, 'the sidecar declares its shape');
+    assert.equal(s2.schema, SIDECAR_SCHEMA, 'the sidecar declares its shape');
     assert.equal(s2.seam_in.mode, 'soft', 'fal Seedance always SOFT-pins — it has no frame anchors');
     assert.equal(path.basename(s2.seam_in.frame), 'last_frame.png');
     assert.deepEqual(s2.seam_in.from, { take, job: 'K1', clip: k1Clip },
@@ -93,7 +96,7 @@ test('a 2-job Seedance render records seam_in.from on K2 and seam_out.to on K1',
     assert.equal(s2.seam_out.to, null);
 
     const s1 = sidecar(dir, 'K1');
-    assert.equal(s1.schema, 2);
+    assert.equal(s1.schema, SIDECAR_SCHEMA);
     assert.equal(s1.seam_in.mode, 'none');
     assert.equal(s1.seam_in.from, null, 'the first job chains from nothing');
     // K1's sidecar is written BEFORE K2 exists — it must be re-stamped once the next clip is known.
@@ -189,7 +192,7 @@ test('the Kling sidecar is normalized to the Seedance superset (one reader for b
     // endpoint takes none — a sidecar claiming a tier for Kling would be the record lying.
     assert.ok('resolution' in sSide, 'Seedance records the tier it transmitted');
     assert.ok(!('resolution' in kSide), 'Kling records no tier — nothing was sent');
-    assert.equal(kSide.schema, 2);
+    assert.equal(kSide.schema, SIDECAR_SCHEMA);
     assert.equal(kSide.backend, 'kling-o3@fal');
     assert.equal(kSide.transport, 'fal', 'Kling keeps its own extra keys — existing readers must not break');
     // Every key Kling writes TODAY is still there.

@@ -133,12 +133,16 @@ export async function renderKlingJobFal({ job, spec, runDir, seed, lowRes = fals
 
   log.step(`[${job.job_id}] fal Kling ${textToVideo ? 'text-to-video' : 'reference-to-video'} — ${segments.length} shot(s), ${totalDuration}s, ${elements.length} element(s)${voiced ? `, ${voiced} voice(s)` : ''}${lowRes ? ' (probe)' : ''}`);
 
-  // Effective prompts/elements → sidecar for review. Normalized to the SEEDANCE SUPERSET (schema:2)
+  // Effective prompts/elements → sidecar for review. Normalized to the SEEDANCE SUPERSET (schema:3)
   // so one reader serves both renderers, while every key Kling wrote before is still here.
   const elementLegend = textToVideo ? [] : groups.map((g, i) => ({ ref: `@Element${i + 1}`, character: g.name, images: g.els.map((e) => e.id), voice_id: getVoiceId(g.name) ?? null }));
   const sidecar = {
     job_id: job.job_id,
-    schema: 2,
+    schema: 3,
+    // Stamped only when fal ACCEPTS the job, and never rewritten (see the submit below). The sidecar
+    // itself is written before anything leaves, so its existence proves only that we composed a
+    // prompt; this is what proves the prompt was sent.
+    submitted_at: null,
     backend, transport: 'fal', endpoint,
     // No resolution recorded: the endpoint takes none (fixed native output), so a sidecar claiming
     // a tier would be the manifest lying about what was bought — the master's measured shortSide is
@@ -179,7 +183,15 @@ export async function renderKlingJobFal({ job, spec, runDir, seed, lowRes = fals
   // rejection, a CDN race on the closing frame would permanently write `seam_out.mode:'unsupported'`
   // (a lie the lineage and the stitcher then act on) AND buy a second render. generateKling's own
   // retry loop pairs the two predicates the same way.
-  const submit = (body) => generateKling(body, { endpoint, destDir: dir, timeoutMs: 1200000 });
+  // The end-frame fallback below submits a SECOND time; `submitted_at` keeps the first acceptance,
+  // because that is when this take reached fal — a retry is the same take trying again, and the
+  // request id follows the attempt that is actually running.
+  const onSubmit = (meta) => {
+    sidecar.request_id = meta?.requestId ?? null;
+    if (!sidecar.submitted_at) sidecar.submitted_at = new Date().toISOString();
+    writeSidecar();
+  };
+  const submit = (body) => generateKling(body, { endpoint, destDir: dir, timeoutMs: 1200000, onSubmit });
   let outs;
   try {
     outs = await submit(payload);

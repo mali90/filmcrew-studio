@@ -285,6 +285,13 @@
   outgrown it, the render stops before it submits and says how many bytes over it is and what to do
   (shorten it, or discard it), and the prompt sheet's byte meter shows it over budget beforehand.
   The agents' own text is still trimmed to fit — nobody promised *them* word for word.
+- **"sent 20 minutes ago" now dates the moment the provider *took* the job, not the moment it
+  finished.** The time came from the prompt file's last-modified stamp, and that file is rewritten
+  when the completion receipt lands — so a long Segmind render read as though it had been sent the
+  instant it was done, and a queue that sat for ten minutes left no trace of the wait at all. Each
+  take now records its own submission time, written once when the provider accepts the request and
+  never moved again (a retry after a transient failure is the same take trying again, not a new
+  sending). Takes rendered before this was recorded read exactly as they always did.
 - **The starred-cast top-up no longer holds a reference slot back for the seam frame** — seam pins
   yield to cast references at render (a pin is a nicety, identity is not), so reserving the slot
   only starved a starred character of one view without saving the pin. Voice references are the

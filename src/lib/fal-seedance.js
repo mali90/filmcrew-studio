@@ -22,7 +22,7 @@ const CAPS = capsFor('seedance-2.0@fal');
  */
 export const falAdapter = {
   assetUrl: (absPath, mode, { cache = true } = {}) => (cache ? falRef(absPath, mode) : toFalInputAs(absPath, mode)),
-  generate: (args, { endpoint, destDir, timeoutMs }) => generateSeedance(args, { endpoint, destDir, timeoutMs }),
+  generate: (args, { endpoint, destDir, timeoutMs, onSubmit }) => generateSeedance(args, { endpoint, destDir, timeoutMs, onSubmit }),
 };
 
 /** The one-argument builder the fal Seedance 2.0 callers (and the byte-compat gate) still use. */
