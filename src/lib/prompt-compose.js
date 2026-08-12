@@ -161,21 +161,28 @@ export function composeKlingStoryboard(job, spec, settings, opts = {}) {
   return { segments, totalDuration, parts };
 }
 
+/** The bytes of one Kling segment left for the authored scene body: the cap minus the scaffolding. */
+const klingBodyBudget = ({ leadPrefix, head, say, tail }, cap) =>
+  cap - utf8Bytes(leadPrefix) - utf8Bytes(head) - utf8Bytes(say) - utf8Bytes(tail);
+
 /**
  * One Kling segment: the system scaffolding wrapped around ONE scene body, clamped to the
  * per-segment byte cap. Shared by the plan path and `applyOverride`, so a hand-edited body is
- * fitted by exactly the rules the agents' body is fitted by — there is no second trimmer.
+ * wrapped by exactly the rules the agents' body is wrapped by — there is no second composer.
+ *
+ * `trim` is the ONE thing the two callers do not share: the agents' body is re-cut to fit (nobody
+ * promised them otherwise), a user's is not — see applyOverride.
  */
-function klingSegmentPrompt(parts, sceneBody, cap) {
+function klingSegmentPrompt(parts, sceneBody, cap, { trim = true } = {}) {
   const { leadPrefix, head, say, tail, who, lineText, hit } = parts;
   let body = String(sceneBody ?? '').trim();
   // fal enforces the 512 cap in UTF-8 BYTES, not JS characters. The SPOKEN clause is protected:
   // reserve its full length (+ lead/framing/camera) and trim only the SCENE body to fit — the words
   // are never cut here (the old blanket end-trim lopped the dialogue off the end → mid-word gibberish).
-  const budget = cap - utf8Bytes(leadPrefix) - utf8Bytes(head) - utf8Bytes(say) - utf8Bytes(tail);
-  if (utf8Bytes(body) > budget) body = budget > 3 ? trimToBytes(body, budget - 3).trimEnd() + '...' : '';
+  const budget = klingBodyBudget(parts, cap);
+  if (trim && utf8Bytes(body) > budget) body = budget > 3 ? trimToBytes(body, budget - 3).trimEnd() + '...' : '';
   let prompt = leadPrefix + head + body + say + tail;
-  if (utf8Bytes(prompt) > cap) {
+  if (trim && utf8Bytes(prompt) > cap) {
     // Words + lead/framing alone exceed the cap (a very long line — QC's length guard should stop
     // this upstream). Drop scene framing/camera to keep the words; only if the words ALONE are still
     // over cap, clip the quoted text at a byte boundary and RE-CLOSE the quote — never leave it
@@ -371,11 +378,21 @@ export function composeSeedanceJobPrompt(job, spec, settings, opts = {}) {
  *
  * Pure, and shape-preserving: hand it what a composer returned and it returns the same shape.
  *
+ * THE ONE ASYMMETRY WITH THE PLAN PATH: the agents' own text is CLAMPED to the model's cap (see
+ * composeSeedanceJobPrompt and klingSegmentPrompt's `trim`) — we wrote it, we may re-cut it. A
+ * user's words are not. `savePromptOverride` could only budget the front matter of the render it
+ * could see; a re-render adds "Alternate take N" and "Director note: …", and a revise pass can grow
+ * the identity or lip-sync clauses, so words that fitted at save time need not fit at submit time.
+ * Clamping them here would delete the tail of a PAID prompt where nobody could see it went, against
+ * an editor that promises an edit is sent word for word. So the overrun is measured into
+ * `overflowBytes` and `assertOverrideFits` refuses on the render path instead.
+ *
  * @param {object} composed  a `composeKlingStoryboard` or `composeSeedanceJobPrompt` result
  * @param {{prompt?:string, segments?:string[]}|null} override  the sidecar entry for this job
  * @param {object} settings  the same settings the composer was given (byte budgets live here)
- * @returns {object} the composed result with the user's words in it (the input, untouched, when
- *   there is nothing to apply — an absent, empty or blank override changes nothing)
+ * @returns {object} the composed result with the user's words in it, plus `overflowBytes` — how
+ *   many bytes of them no longer fit (0 when they do). The input, untouched, when there is nothing
+ *   to apply: an absent, empty or blank override changes nothing.
  */
 export function applyOverride(composed, override, settings) {
   if (!composed || !override) return composed;
@@ -389,13 +406,15 @@ export function applyOverride(composed, override, settings) {
     const cap = Number(settings?.segmentMaxBytes);
     const bodies = Array.isArray(override.segments) ? override.segments : [override.prompt];
     let touched = false;
+    let overflowBytes = 0;
     const segments = composed.segments.map((s, i) => {
       const body = bodies[i];
       if (typeof body !== 'string' || !body.trim()) return s;
       touched = true;
-      return { ...s, prompt: klingSegmentPrompt(composed.parts[i], body, cap) };
+      overflowBytes += Math.max(0, utf8Bytes(body.trim()) - klingBodyBudget(composed.parts[i], cap));
+      return { ...s, prompt: klingSegmentPrompt(composed.parts[i], body, cap, { trim: false }) };
     });
-    return touched ? { ...composed, segments, promptSource: 'override' } : composed;
+    return touched ? { ...composed, segments, promptSource: 'override', overflowBytes } : composed;
   }
 
   // Seedance: ONE document per job. `segments` is accepted (a per-shot editor may hand them over)
@@ -403,14 +422,40 @@ export function applyOverride(composed, override, settings) {
   const body = (typeof override.prompt === 'string' ? override.prompt : override.segments.join('\n')).trim();
   if (!body) return composed;
   const maxBytes = Number(settings?.promptMaxBytes) || DEFAULT_PROMPT_MAX_BYTES;
+  const prompt = `${composed.front}\n\n${body}`;
   return {
     ...composed,
-    prompt: clampBytes(`${composed.front}\n\n${body}`, maxBytes),
+    prompt,
     // `shotPrompts` is the record of the authored bodies that were SENT. With an override there is
     // one body (or the user's own per-shot split), and claiming the plan's blocks would be a lie.
     shotPrompts: Array.isArray(override.segments) ? override.segments.map((s) => String(s).trim()) : [body],
     promptSource: 'override',
+    overflowBytes: Math.max(0, utf8Bytes(prompt) - maxBytes),
   };
+}
+
+/**
+ * Refuse a saved prompt edit this render can no longer fit — the enforcement half of the
+ * measurement above, and the reason `applyOverride` may leave an over-cap prompt in its result.
+ *
+ * Called by the render-facing shims (kling.js / seedance.js), which is where the money is: the
+ * preview keeps composing so the editor stays usable and its byte meter can SHOW the overrun, and
+ * nothing reaches a provider without passing through here first. Worded like the editor's own
+ * over-budget 400, because it is the same promise being kept a second time.
+ *
+ * @param {object} built  an `applyOverride` result
+ * @param {string} jobId  the job whose edit this is — the fix is per job, so the message names it
+ * @returns {object} `built`, so a shim can `return assertOverrideFits(…)`
+ */
+export function assertOverrideFits(built, jobId) {
+  const over = Number(built?.overflowBytes) || 0;
+  if (over <= 0) return built;
+  throw new Error(
+    `job ${jobId}: the saved prompt edit no longer fits — it is ${over} byte(s) over the room this render leaves for your words. `
+    + 'Something the SYSTEM owns has grown since it was saved: a re-render adds an "Alternate take"/"Director note" line the editor could not budget for, '
+    + 'and a revise can lengthen the identity or voice clauses. Nothing was sent — shorten the edit in the prompt editor, or discard it. '
+    + 'Trimming it here would drop the end of words you are paying to send, without showing you what went.',
+  );
 }
 
 // ── The byte meter's denominator ────────────────────────────────────────────────────────────────
@@ -476,6 +521,7 @@ export default {
   composeKlingStoryboard,
   composeSeedanceJobPrompt,
   applyOverride,
+  assertOverrideFits,
   chooseSeamMode,
   planSeamRefs,
   seamPinSentence,

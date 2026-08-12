@@ -216,3 +216,29 @@ test('throws on unknown shot id / missing content_prompt', () => {
   delete spec2.shots[1].kling.content_prompt;
   assert.throws(() => buildSeedanceJobPrompt(spec2.kling.jobs[0], spec2), /missing kling\.content_prompt/);
 });
+
+// The whole prompt is 1353 B against a 5000 B cap, so a saved edit is only ever endangered by front
+// matter the SAVE could not see coming. `--take`/`--feedback` are exactly that: they are re-render
+// knobs, so the editor's byte meter (a full render from the plan) never charged for them.
+test('an edit that fills the plan render\'s budget is REFUSED on a re-render that grows the front matter', () => {
+  const spec = loadGoldenSpec();
+  const job = spec.kling.jobs[0];
+  const MAX = 1200;
+  const base = { refGroups: REFS, maxBytes: MAX };
+  const utf8 = (s) => Buffer.byteLength(s, 'utf8');
+
+  // An edit written right up to the room the editor showed for a full render from the plan.
+  const room = MAX - utf8(buildSeedanceJobPrompt(job, spec, base).front) - utf8('\n\n');
+  const override = { prompt: 'z'.repeat(room) };
+
+  const fits = buildSeedanceJobPrompt(job, spec, { ...base, override });
+  assert.equal(utf8(fits.prompt), MAX, 'it fits the cap exactly');
+  assert.ok(fits.prompt.endsWith('z'.repeat(room)), 'and every byte of it is what gets sent');
+
+  // The SAME words on an "Alternate take 2" with a director note: the front matter grew underneath
+  // them. Clamping would drop the tail of a paid prompt, so the render refuses before it submits.
+  assert.throws(
+    () => buildSeedanceJobPrompt(job, spec, { ...base, override, nonce: 2, feedback: 'hold the last beat longer' }),
+    /K1: the saved prompt edit no longer fits — it is \d+ byte\(s\) over/,
+  );
+});

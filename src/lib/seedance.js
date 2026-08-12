@@ -18,7 +18,7 @@
 // server's static graph. THIS module is the config-bound shim; call sites are unchanged.
 import config from '../../config.js';
 import { seedancePromptSettings, knobsFor } from './prompt-settings.js';
-import { applyOverride, composeSeedanceJobPrompt, clampBytes, HOOK_PREFIX, TRANSITION_WORDS } from './prompt-compose.js';
+import { applyOverride, assertOverrideFits, composeSeedanceJobPrompt, clampBytes, HOOK_PREFIX, TRANSITION_WORDS } from './prompt-compose.js';
 
 export { clampBytes, HOOK_PREFIX, TRANSITION_WORDS };
 
@@ -45,7 +45,9 @@ export const seedanceSettingsFor = (spec, caps) =>
  * @param {object} job   spec.kling.jobs[i]
  * @param {object} spec  the full Production Spec
  * `opts.override` (optional): this job's saved prompt-override entry — the user's own words, with
- * the front matter, the seam pins and the byte clamp re-composed on top (applyOverride).
+ * the front matter and the seam pins re-composed on top (applyOverride). An edit that front matter
+ * has outgrown since it was saved is REFUSED, not clamped: this is the renderer's path, so the
+ * bytes that would go are bytes the user is paying to send (assertOverrideFits).
  * @param {object} [opts]  see composeSeedanceJobPrompt(); plus style/avoidClause/textClause/maxBytes
  * @returns {{ prompt:string, shotPrompts:string[], totalDuration:number, speakers:string[] }}
  */
@@ -57,7 +59,10 @@ export function buildSeedanceJobPrompt(job, spec, opts = {}) {
     ...(opts.textClause !== undefined ? { textRule: opts.textClause } : {}),
     ...(Number(opts.maxBytes) ? { promptMaxBytes: Number(opts.maxBytes) } : {}),
   };
-  return applyOverride(composeSeedanceJobPrompt(job, spec, settings, opts), opts.override ?? null, settings);
+  return assertOverrideFits(
+    applyOverride(composeSeedanceJobPrompt(job, spec, settings, opts), opts.override ?? null, settings),
+    job?.job_id,
+  );
 }
 
 /**

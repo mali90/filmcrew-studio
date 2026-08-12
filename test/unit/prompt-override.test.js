@@ -100,18 +100,32 @@ test('the SAME stored text under DIFFERENT reference layouts pins different labe
   assert.ok(!two.prompt.includes('@Image4'), 'a render with no closing pin must not inherit one from a stored sentence');
 });
 
-test('the byte clamp still applies — an oversized override is clamped, never sent over cap', PENDING, () => {
+test('an oversized override is MEASURED, never clamped — the plan\'s own text still is', PENDING, () => {
   const s = spec();
   const settings = { ...seedanceSettings(s), promptMaxBytes: 900 };
   const planned = compose.composeSeedanceJobPrompt(jobOf(s, 'K1'), s, settings, SEEDANCE_OPTS);
   const got = compose.applyOverride(planned, { prompt: 'x'.repeat(4000) }, settings);
 
-  assert.ok(utf8(got.prompt) <= 900, `clamped to the model's cap (got ${utf8(got.prompt)})`);
-  assert.ok(got.prompt.endsWith('…'), 'the clamp marks where it cut, exactly as it does on the plan path');
+  // The agents' body IS clamped (nobody promised them word-for-word) — that is what `planned` shows.
+  assert.ok(utf8(planned.prompt) <= 900, 'the plan path still clamps to the model\'s cap');
+  assert.ok(planned.prompt.endsWith('…'), 'and still marks where it cut');
+  // The user's is not: every byte they wrote is still there, and the overrun is reported instead.
+  assert.ok(got.prompt.includes('x'.repeat(4000)), 'the edit survives whole — a clamp here would delete words on a paid render');
+  assert.equal(got.overflowBytes, utf8(got.prompt) - 900, 'the overrun is measured, in the bytes the meter counts');
+  assert.throws(() => compose.assertOverrideFits(got, 'K1'), /K1: the saved prompt edit no longer fits/, 'and the render path refuses it');
   // …and the STORED value is untouched: applyOverride is pure, the sidecar is the caller's.
   const stored = { prompt: 'x'.repeat(4000) };
   compose.applyOverride(planned, stored, settings);
   assert.equal(stored.prompt.length, 4000, 'the user\'s own text was not truncated behind their back');
+});
+
+test('an override that fits reports no overrun, and the render path lets it through', PENDING, () => {
+  const s = spec();
+  const settings = seedanceSettings(s);
+  const planned = compose.composeSeedanceJobPrompt(jobOf(s, 'K1'), s, settings, SEEDANCE_OPTS);
+  const got = compose.applyOverride(planned, { prompt: 'one held shot of the lamp' }, settings);
+  assert.equal(got.overflowBytes, 0);
+  assert.equal(compose.assertOverrideFits(got, 'K1'), got, 'it hands the build straight back');
 });
 
 test('a blank or absent override changes nothing at all', PENDING, () => {
@@ -147,16 +161,18 @@ test('a Kling override replaces the scene body per segment, keeping framing, lin
   assert.ok(got.segments[0].prompt.endsWith(tail), `the system tail survives (${JSON.stringify(tail.slice(0, 60))})`);
 });
 
-test('a Kling override obeys the per-segment cap through the same trim the plan path uses', PENDING, () => {
+test('an oversized Kling override is measured per segment, not trimmed to the cap', PENDING, () => {
   const s = spec();
   const settings = klingSettings(s);
   const opts = { lowercaseSpeech: true, leadRef: '@Element1', voiceTokenFor: () => '@Element1' };
   const planned = compose.composeKlingStoryboard(jobOf(s, 'K1'), s, settings, opts);
   const got = compose.applyOverride(planned, { segments: ['y'.repeat(4000)] }, settings);
 
-  assert.ok(utf8(got.segments[0].prompt) <= 500, `≤500 bytes (got ${utf8(got.segments[0].prompt)})`);
-  assert.ok(got.segments[0].prompt.includes('...'), 'the scene body was trimmed with the plan path\'s marker');
-  assert.ok(!got.segments[0].prompt.includes('�'), 'never split a multi-byte character');
+  // The plan path still trims its own body to 500 B; the user's is kept whole and reported.
+  assert.ok(utf8(planned.segments[0].prompt) <= 500, `the plan segment still fits (got ${utf8(planned.segments[0].prompt)})`);
+  assert.ok(got.segments[0].prompt.includes('y'.repeat(4000)), 'the edit survives whole');
+  assert.equal(got.overflowBytes, utf8(got.segments[0].prompt) - 500, 'the overrun is measured against the per-segment cap');
+  assert.throws(() => compose.assertOverrideFits(got, 'K1'), /K1: the saved prompt edit no longer fits/);
 });
 
 test('a single-shot Kling job accepts a whole-job override', PENDING, () => {

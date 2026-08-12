@@ -276,6 +276,15 @@
   "exactly what we send, word for word". The meter now reserves room for the widest pin set any
   render of that segment can really apply (a segment with no neighbour to join to reserves nothing
   for a join), so what the editor accepts is what the wire carries.
+- **And where the meter cannot see it coming, the render now refuses instead of quietly cutting.**
+  Some of what the system writes ahead of your words is only decided at render time: *Alternate
+  take N* on a re-roll, *Director note:* when you send feedback, a longer voice or identity clause
+  after a revise. None of it existed when the editor measured your budget, so an edit saved near
+  the limit could still be clamped mid-render — the tail of it gone, on a render you paid for, with
+  nothing on screen saying so. A saved edit is now sent whole or not at all: if the contract has
+  outgrown it, the render stops before it submits and says how many bytes over it is and what to do
+  (shorten it, or discard it), and the prompt sheet's byte meter shows it over budget beforehand.
+  The agents' own text is still trimmed to fit — nobody promised *them* word for word.
 - **The starred-cast top-up no longer holds a reference slot back for the seam frame** — seam pins
   yield to cast references at render (a pin is a nicety, identity is not), so reserving the slot
   only starved a starred character of one view without saving the pin. Voice references are the
