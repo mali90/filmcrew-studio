@@ -485,6 +485,13 @@
   single image. Explicit element lists are now filled from the roster whichever way the plan was
   written, in equal shares of that shot's own reference budget. Which characters a shot contains is
   still the plan's call: nobody is cast into a shot they were not in.
+- **The re-render dialog stops selling a downstream cascade it has already prevented.** When the
+  ending is pinned to the next segment's opening frame, that join is kept — the clip is rendered to
+  arrive there and the joint is recorded — yet the dialog still called re-rendering every later clip
+  "the exact fix" and offered it, pre-priced, as a paid extra. It was charging to replace footage
+  nothing had changed, for a chain no stronger than the pin already bought. The offer now appears
+  only where it repairs something real: an ending left unpinned, or one the reference budget
+  dropped. Ticking it and then pinning the ending withdraws the offer and the charge with it.
 
 ### Changed
 - **Segmind's prices are on file — and they are roughly half fal's for the same model.** Every

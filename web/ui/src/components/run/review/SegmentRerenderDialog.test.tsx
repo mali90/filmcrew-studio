@@ -281,6 +281,31 @@ describe('SegmentRerenderDialog — what it warns about (D16)', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: /End on K3/ }));
     expect(screen.getByTestId('downstream-seam-warning')).toHaveTextContent("K3's join will break");
   });
+
+  // …and it stops SELLING the fix, too. An applied ending pin renders K2 against the K3 that is in
+  // the cut and records that it lands there — the joint src/lib/seam-rule.js then reads as intact,
+  // which is why renderJob lists nothing stale behind it. Offering to re-render every downstream
+  // clip on top of that is charging for footage nothing changed.
+  it('a pinned ending is not sold a downstream cascade', () => {
+    open(onBackend(threeSegmentRun(), 'seedance-2.0@fal'));
+    const warn = screen.getByTestId('downstream-seam-warning');
+    expect(warn).toHaveTextContent(/K3 and everything after it can stay exactly as they are/);
+    expect(warn.textContent ?? '').not.toMatch(/exact fix/);
+    expect(screen.queryByRole('checkbox', { name: /Also re-render K3/ })).not.toBeInTheDocument();
+  });
+
+  it('…and the offer returns the moment the ending is left unpinned', () => {
+    open(onBackend(threeSegmentRun(), 'seedance-2.0@fal'));
+    fireEvent.click(screen.getByRole('radio', { name: 'Custom' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /End on K3/ }));
+    expect(screen.getByRole('checkbox', { name: /Also re-render K3/ })).toBeInTheDocument();
+  });
+
+  it('a pin the reference budget drops is no pin at all — the cascade is still offered', () => {
+    // eight cast references leave room for one pin, and SEAM_PRIORITY gives up the CLOSING one
+    open(withCast(onBackend(threeSegmentRun(), 'seedance-2.0@fal'), 8));
+    expect(screen.getByRole('checkbox', { name: /Also re-render K3/ })).toBeInTheDocument();
+  });
 });
 
 describe('SegmentRerenderDialog — the frames it shows (D14.2)', () => {
@@ -360,10 +385,39 @@ describe('SegmentRerenderDialog — the money (D13/D17)', () => {
     );
     open(onBackend(threeSegmentRun(), 'seedance-2.0@fal'));
     await screen.findByLabelText('estimated cost $4.16');
+    // The cascade is offered for the ending nobody pins — which, with an intact joint on that side,
+    // is Custom with "End on K3" unticked.
+    fireEvent.click(screen.getByRole('radio', { name: 'Custom' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /End on K3/ }));
     fireEvent.click(screen.getByRole('checkbox', { name: /Also re-render K3/ }));
     await screen.findByLabelText('estimated cost $9.50');
     fireEvent.click(screen.getByRole('button', { name: /^Re-render K2/ }));
-    await waitFor(() => expect(bodies).toEqual([{ jobId: 'K2', boundaries: 'auto', cascade: true }]));
+    await waitFor(() => expect(bodies).toEqual([{ jobId: 'K2', boundaries: 'start', cascade: true }]));
+  });
+
+  it('a cascade ticked and then pinned away is neither priced nor charged', async () => {
+    markPaidConfirmed();
+    const bodies: unknown[] = [];
+    server.use(
+      http.get('/api/runs/:id/estimate', ({ request }) => {
+        const cascade = new URL(request.url).searchParams.get('cascade');
+        return HttpResponse.json({ perJob: [], totalUsd: cascade ? 9.5 : 4.16, currency: 'USD', label: 'estimate' });
+      }),
+      http.post('/api/runs/:id/rerender-job', async ({ request }) => {
+        bodies.push(await request.json());
+        return HttpResponse.json({ takeId: 't2', estUsd: 4.16, cascadeJobs: [], boundaries: { mode: 'both' } });
+      }),
+    );
+    open(onBackend(threeSegmentRun(), 'seedance-2.0@fal'));
+    await screen.findByLabelText('estimated cost $4.16');
+    fireEvent.click(screen.getByRole('radio', { name: 'Custom' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /End on K3/ }));      // unpinned → the offer appears
+    fireEvent.click(screen.getByRole('checkbox', { name: /Also re-render K3/ }));
+    await screen.findByLabelText('estimated cost $9.50');
+    fireEvent.click(screen.getByRole('checkbox', { name: /End on K3/ }));      // pinned again → offer withdrawn
+    await screen.findByLabelText('estimated cost $4.16');
+    fireEvent.click(screen.getByRole('button', { name: /^Re-render K2/ }));
+    await waitFor(() => expect(bodies).toEqual([{ jobId: 'K2', boundaries: 'both' }]));
   });
 
   it('an unpriced backend says "rate not on file" and still fires — no figure anywhere else', async () => {

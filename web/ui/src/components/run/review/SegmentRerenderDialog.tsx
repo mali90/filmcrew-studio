@@ -156,6 +156,16 @@ export function SegmentRerenderDialog({ run, jobId, open, onClose }: {
   const supportsEndFrame = pinStrengthFor(backend, { castRefCount, end: 'out' }) !== 'none';
   const feedsNext = Boolean(nextId) && recorded(entryOf(nextId)) && Boolean(entryOf(nextId)?.continuesFromPrev);
   const showSeamWarning = supportsEndFrame && feedsNext;
+  // An APPLIED ending pin renders this segment against the unchanged next clip and records that it
+  // lands there — the joint the shared lineage rule then reads as intact (src/lib/seam-rule.js
+  // closesOnNext, the same answer the stitcher gets). Re-rendering every downstream clip would
+  // replace footage nothing touched, and the chain it rebuilds is no stronger than the pin already
+  // bought. So the cascade is offered for the case it actually repairs: an ending nobody pinned, or
+  // one the reference budget dropped.
+  const offerCascade = showSeamWarning && endStrength === 'none';
+  // Derived, never stored: ticking the box and THEN pinning the ending (Custom) must not post a
+  // cascade this screen has stopped offering.
+  const willCascade = cascade && offerCascade;
 
   // Segmind's native frame slots are mutually exclusive with reference_images, so a segment that
   // carries cast references is pinned by reference instead. We do not silently swallow that: the
@@ -170,13 +180,13 @@ export function SegmentRerenderDialog({ run, jobId, open, onClose }: {
   const refsTradeoff = excludesRefs && castRefCount > 0 && (wantStart || wantEnd);
 
   const estimate = useQuery({
-    queryKey: ['estimate', run.id, 'job', jobId, cascade],
-    queryFn: () => api.estimate(run.id, { mode: 'job', jobId, ...(cascade ? { cascade: true } : {}) }),
+    queryKey: ['estimate', run.id, 'job', jobId, willCascade],
+    queryFn: () => api.estimate(run.id, { mode: 'job', jobId, ...(willCascade ? { cascade: true } : {}) }),
     enabled: open,
   });
 
   const rerender = useMutation({
-    mutationFn: () => api.rerenderJob(run.id, { jobId, boundaries, ...(cascade ? { cascade: true } : {}) }),
+    mutationFn: () => api.rerenderJob(run.id, { jobId, boundaries, ...(willCascade ? { cascade: true } : {}) }),
     // No success toast: the strip's tile starts sweeping, and a toast for a change already on
     // screen is noise (spec D17). A failure has nothing on screen to show, so it still toasts.
     onSuccess: () => onClose(),
@@ -324,18 +334,20 @@ export function SegmentRerenderDialog({ run, jobId, open, onClose }: {
               {/* Asked-for is not delivered: an ending pin the reference budget drops leaves the
                   downstream join exactly as broken as never asking for one. */}
               {endStrength !== 'none'
-                ? `Ending ${jobId} on ${nextId}'s opening frame keeps that join ${seamStrengthWords(endStrength)} — re-rendering ${nextId} too is the exact fix.`
+                ? `Ending ${jobId} on ${nextId}'s opening frame keeps that join ${seamStrengthWords(endStrength)}, so ${nextId} and everything after it can stay exactly as they are.`
                 : `Re-rendering ${jobId} changes that frame, so ${nextId}'s join will break.`}
             </p>
-            <label className="mt-2 flex items-center gap-2 text-dense text-ink-secondary">
-              <input
-                type="checkbox"
-                checked={cascade}
-                onChange={(e) => setCascade(e.target.checked)}
-                className="h-4 w-4 accent-[var(--accent)]"
-              />
-              Also re-render {nextId} and everything after it
-            </label>
+            {offerCascade && (
+              <label className="mt-2 flex items-center gap-2 text-dense text-ink-secondary">
+                <input
+                  type="checkbox"
+                  checked={cascade}
+                  onChange={(e) => setCascade(e.target.checked)}
+                  className="h-4 w-4 accent-[var(--accent)]"
+                />
+                Also re-render {nextId} and everything after it
+              </label>
+            )}
           </WarnRow>
         )}
 
