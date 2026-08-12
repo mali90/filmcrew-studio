@@ -472,6 +472,12 @@
   neighbour's clip is now handed to the renderer instead, which reads its last frame — the very
   image that missing still held. Only when neither the still nor the clip is on disk is there
   nothing to pin, and the reply says so up front rather than selling a join the take cannot have.
+- **Props no longer eat a starred character's reference slots.** The top-up split the whole
+  reference budget between the starred cast, then filled against a limit that also counted the
+  un-starred elements already in the plan — so on a nine-image model with three props and two stars,
+  the first character took four views and the second was left with two. Same plan, different result
+  depending on the order the cast happened to be listed in. The split is now taken over what is
+  actually left after the un-starred elements, so those two characters get three views each.
 
 ### Changed
 - **Segmind's prices are on file — and they are roughly half fal's for the same model.** Every

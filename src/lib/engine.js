@@ -418,13 +418,20 @@ export function topUpStarredElements(spec, ctx) {
     : jobs.length ? Math.max(...jobs.map(budgetFor))
     : Math.max(0, Math.min(imageCap, combinedCap));
   const perElementCap = caps.maxRefsPerElement != null ? 1 + caps.maxRefsPerElement : Infinity;
-  const share = Math.min(Math.floor(rosterBudget / cast.length), perElementCap);
+  // An element belongs to a character by its `character` field when set, else by the same filename
+  // convention the cast routes link with (id === slug, or "<slug>-…").
+  const ownedBy = (e, cslug) => (e?.character ? slug(e.character) === cslug : refBelongsTo(String(e?.id ?? ''), cslug));
+  const castSlugs = cast.map((name) => slug(name));
+  // Split what the cast has LEFT, not the whole budget: un-starred props already sit in the roster
+  // and are never touched, so counting their slots into the split hands the first character seats
+  // the last one then finds taken — an allocation that depended on cast ORDER rather than on the
+  // budget (budget 9, three props, two stars: 4 and 2 instead of 3 each).
+  const nonCast = els.filter((e) => !castSlugs.some((cslug) => ownedBy(e, cslug))).length;
+  const share = Math.min(Math.floor(Math.max(0, rosterBudget - nonCast) / cast.length), perElementCap);
   const added = [];
   for (const name of cast) {
     const cslug = slug(name);
-    // An element belongs to this character by its `character` field when set, else by the same
-    // filename convention the cast routes link with (id === slug, or "<slug>-…").
-    const owns = (e) => (e?.character ? slug(e.character) === cslug : refBelongsTo(String(e?.id ?? ''), cslug));
+    const owns = (e) => ownedBy(e, cslug);
     const avail = characterRefs(inv, name);
     const mine = els.filter(owns);
     const target = Math.min(avail.length, share);

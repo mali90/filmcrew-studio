@@ -60,6 +60,22 @@ test('un-starred elements survive untouched and un-starred inventory is never at
   assert.deepEqual(spec.kling.elements.filter((e) => e.id.startsWith('prop-')), [prop], 'the un-starred pick is untouched; prop-lamp stays on disk');
 });
 
+test('un-starred props do not eat the split — the cast divides what is LEFT of the budget', () => {
+  const inv = [...refsFor('keeper', 9), ...refsFor('gull', 9), ref('prop-cheese'), ref('prop-lamp'), ref('prop-net')];
+  const props = ['prop-cheese', 'prop-lamp', 'prop-net'].map((id) => el(id, null, 'object'));
+  const spec = {
+    spec_version: '1.0',
+    kling: { elements: [...props, el('keeper-01', 'Keeper'), el('gull-01', 'Gull')], jobs: [{ job_id: 'J1', shots: ['S1'] }] },
+  };
+  topUpStarredElements(spec, ctxFor('seedance-2.0@fal', ['keeper', 'gull'], inv));
+  // Three of the nine image slots are already spent on props, so six are the cast's: three each.
+  // Splitting the WHOLE nine promised four apiece, and the second star hit the ceiling at two —
+  // the same plan allocated differently for no reason but the order the cast was listed in.
+  assert.equal(countFor(spec, 'keeper'), 3);
+  assert.equal(countFor(spec, 'gull'), 3);
+  assert.equal(spec.kling.elements.length, 9, 'and the budget is still spent to the last slot');
+});
+
 // ── even split across starred casts ─────────────────────────────────────────
 test('two starred casts split the full budget evenly (no seam reservation — pins yield to cast)', () => {
   const inv = [...refsFor('keeper', 7), ...refsFor('gull', 7)];
