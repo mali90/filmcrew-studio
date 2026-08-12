@@ -84,17 +84,21 @@ function promptDefaults(get) {
  * variable; otherwise the value comes from <envRoot>/.env.
  */
 async function envLookup({ root, envRoot, childEnv }) {
-  const { readEnvFileOrExample, parseEnv, getEnvValue } = await import(path.join(root, 'src/lib/env-file.js'));
+  const { readEnvFileOrExample, dotenvValues } = await import(path.join(root, 'src/lib/env-file.js'));
   const { text, source } = readEnvFileOrExample(envRoot);
   // ONLY a real .env counts. dotenv loads <envRoot>/.env and nothing else, so quoting
   // .env.example's placeholder values here would preview a prompt no child would ever send.
-  const entries = source === '.env' ? parseEnv(text) : [];
+  //
+  // Read with DOTENV's grammar, not the wizard's line editor (parseEnv/getEnvValue): the editor
+  // keeps a trailing `# comment` inside the value, ignores an `export ` prefix and reports the
+  // FIRST assignment, while the child's dotenv strips the comment, accepts the prefix and keeps the
+  // LAST — three ways for an ordinary .env to preview one prompt and pay for another.
+  const values = source === '.env' ? dotenvValues(text) : Object.create(null);
   return (key) => {
     if (childEnv && Object.hasOwn(childEnv, key)) return String(childEnv[key] ?? '').trim();
-    const raw = getEnvValue(entries, key);
-    if (raw === undefined) return '';
-    // parseEnv keeps a value verbatim (quotes included); dotenv strips a matching pair.
-    return String(raw).trim().replace(/^(['"])([\s\S]*)\1$/, '$2');
+    // No trim, no unquoting here: dotenv already did both, and its rule is the one the child got —
+    // a QUOTED value keeps the padding inside its quotes, and trimming it away is a second reading.
+    return values[key] ?? '';
   };
 }
 

@@ -151,6 +151,40 @@ test('a run that SETS SEEDANCE_PROMPT_MAX_BYTES gets that number as its meter de
     'and config.js reads it the same way — the two mirrors still agree');
 });
 
+// The preview and the render child read the SAME file — and the promise only holds if they read it
+// the same WAY. The child reads it through dotenv (`import 'dotenv/config'`), which drops a trailing
+// `# comment`, accepts an `export ` prefix, and keeps the LAST assignment. Reading it as the
+// wizard's ordered entries instead answered all three differently, so an ordinary .env previewed one
+// prompt and paid for another.
+test('a dotenv-valid .env previews exactly what the render child will read from it', async () => {
+  const { parse } = await import('dotenv');
+  const quirkyRoot = path.join(tmpRoot, 'quirky');
+  const plainRoot = path.join(tmpRoot, 'plain');
+  for (const d of [quirkyRoot, plainRoot]) fs.mkdirSync(d, { recursive: true });
+  const quirky = [
+    'export SEEDANCE_PROMPT_MAX_BYTES=1200',
+    'SEEDANCE_STYLE=hand-held documentary # the look for this run',
+    'SEEDANCE_AVOID=the guard that was replaced',
+    'SEEDANCE_AVOID=the guard that wins',
+  ].join('\n') + '\n';
+  fs.writeFileSync(path.join(quirkyRoot, '.env'), quirky);
+  // What the CHILD gets, from dotenv's own parser — never a second reading of ours.
+  const child = parse(quirky);
+  assert.deepEqual(child, {
+    SEEDANCE_PROMPT_MAX_BYTES: '1200',
+    SEEDANCE_STYLE: 'hand-held documentary',
+    SEEDANCE_AVOID: 'the guard that wins',
+  }, 'dotenv itself reads it this way');
+  fs.writeFileSync(path.join(plainRoot, '.env'), Object.entries(child).map(([k, v]) => `${k}=${v}`).join('\n') + '\n');
+
+  const got = (await view(quirkyRoot, 'seedance-2.0@fal')).prompts[0];
+  const want = (await view(plainRoot, 'seedance-2.0@fal')).prompts[0];
+  assertBytesEqual(got.prompt, want.prompt, 'the preview of a dotenv-valid .env');
+  assert.equal(got.maxBytes, 1200, 'an `export`ed budget is still the budget the render will apply');
+  assert.ok(got.prompt.includes('the guard that wins'), 'the assignment dotenv keeps is the one previewed');
+  assert.ok(!got.prompt.includes('# the look'), 'a trailing comment is not part of the value');
+});
+
 // A knob that is NOT env-tunable cannot drift by .env, only by edit — so it is asserted directly.
 test('the hard model caps prompt-service mirrors are still config.js\'s hard caps', () => {
   assert.equal(cfg.kling.maxStoryboards, 6, 'prompt-service.js hardcodes maxStoryboards: 6');

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { parseEnv, upsertEnv, serializeEnv, getEnvValue, readEnvFileOrExample, writeEnv } from '../../src/lib/env-file.js';
+import { parseEnv, upsertEnv, serializeEnv, getEnvValue, dotenvValues, readEnvFileOrExample, writeEnv } from '../../src/lib/env-file.js';
 import { mkTmp } from '../helpers/tmp.js';
 
 test('parse/serialize round-trip preserves comments, blanks, and commented keys', () => {
@@ -12,6 +12,27 @@ test('parse/serialize round-trip preserves comments, blanks, and commented keys'
   // a `# KEY=` line is a comment, not an active KV
   assert.equal(getEnvValue(entries, 'VOICES_DIR'), undefined);
   assert.equal(getEnvValue(entries, 'LLM_PROVIDER'), 'openai');
+});
+
+// The two readers answer different questions on purpose, and the difference is load-bearing: the
+// editor's entries keep every byte of a line so a rewrite can leave the rest of the file alone,
+// while anything that must AGREE with a running process has to read the file the way dotenv did.
+test('dotenvValues reads a .env exactly as dotenv does — and parseEnv still does not', async () => {
+  const { parse } = await import('dotenv');
+  const src = [
+    'export A=1',
+    'B=plain # trailing note',
+    'C="  padded  "',
+    'D=first',
+    'D=last',
+  ].join('\n') + '\n';
+  assert.deepEqual({ ...dotenvValues(src) }, parse(src), 'dotenv itself is the oracle');
+  assert.deepEqual({ ...dotenvValues(src) }, { A: '1', B: 'plain', C: '  padded  ', D: 'last' });
+  // …and the wizard's editor keeps answering the question it exists for.
+  const entries = parseEnv(src);
+  assert.equal(getEnvValue(entries, 'D'), 'first', 'the FIRST active line is the one an upsert rewrites');
+  assert.equal(getEnvValue(entries, 'B'), 'plain # trailing note', 'and it keeps the line verbatim');
+  assert.equal(serializeEnv(entries), src);
 });
 
 test('upsert replaces in place, appends new, tracks changed, blanks, and rejects newlines', () => {

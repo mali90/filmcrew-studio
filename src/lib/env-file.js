@@ -30,6 +30,34 @@ export function getEnvValue(entries, key) {
 }
 
 /**
+ * The values DOTENV would load from this text — the only honest reading for anything that has to
+ * agree with a process configured by `import 'dotenv/config'` (the render child, and the web
+ * server's prompt preview, which exists to promise "this is exactly what we send").
+ *
+ * Deliberately not parseEnv: that one is the wizard's line editor and answers a different question
+ * — what does line N say, so a rewrite can leave every other byte alone — which is why it keeps a
+ * trailing `# comment` inside the value, ignores an `export ` prefix, and reports the FIRST
+ * assignment. dotenv strips the comment, accepts the prefix, and lets the LAST assignment win, so
+ * an ordinary .env read through the editor's eyes disagrees with the render it is describing.
+ * The line grammar and the quote/escape handling below are dotenv@16's own (lib/main.js) — copied
+ * rather than approximated, because "close enough" is the same bug in a smaller font.
+ */
+export function dotenvValues(text) {
+  // Null-prototype: a dotenv key is `[\w.-]+`, which spells `__proto__` just fine.
+  const out = Object.create(null);
+  const lines = String(text ?? '').replace(/\r\n?/mg, '\n');
+  const LINE = /(?:^|^)\s*(?:export\s+)?([\w.-]+)(?:\s*=\s*?|:\s+?)(\s*'(?:\\'|[^'])*'|\s*"(?:\\"|[^"])*"|\s*`(?:\\`|[^`])*`|[^#\r\n]+)?\s*(?:#.*)?(?:$|$)/mg;
+  for (let m = LINE.exec(lines); m !== null; m = LINE.exec(lines)) {
+    let value = (m[2] || '').trim();
+    const quote = value[0];
+    value = value.replace(/^(['"`])([\s\S]*)\1$/mg, '$2');
+    if (quote === '"') value = value.replace(/\\n/g, '\n').replace(/\\r/g, '\r');
+    out[m[1]] = value; // a repeated key overwrites, exactly as dotenv's own object write does
+  }
+  return out;
+}
+
+/**
  * Upsert `updates` (a {KEY: value} map) into `entries`: replace an existing active KEY= in place,
  * else append a new `KEY=value` line at the end. Values are written raw (no quotes, no spaces around
  * `=`); a newline in a value is rejected. Returns {entries, changed[]} (changed = keys whose value
@@ -75,4 +103,4 @@ export function readEnvFileOrExample(root) {
   return { path: envPath, text: '', source: 'none' };
 }
 
-export default { parseEnv, getEnvValue, upsertEnv, serializeEnv, writeEnv, readEnvFileOrExample };
+export default { parseEnv, getEnvValue, dotenvValues, upsertEnv, serializeEnv, writeEnv, readEnvFileOrExample };

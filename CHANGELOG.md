@@ -249,6 +249,12 @@
   on references that survived — including characters the casting pass never starred — and a job
   that named only props falls back to a single surviving stand-in, with a log line saying so rather
   than swapping it in silently.
+- **The prompt preview reads your `.env` the way the render will.** Settings written in perfectly
+  ordinary dotenv syntax reached the preview differently than they reach the renderer: a trailing
+  `# note` stayed inside the value, an `export ` prefix made the line invisible, and a key assigned
+  twice was read as its first value while the render used its last. The sheet's whole promise is
+  that what you read is what gets sent, so it now parses that file with dotenv's own grammar —
+  which also means the byte meter that decides whether an edit fits is metering the real budget.
 - **A voice clip no longer costs you a boundary pin you were promised.** On fal's Seedance 2.5 one
   50-reference budget covers images, audio and video together, so a registered voice clip and a
   soft boundary pin want the same slot — and only the pin is given up (nothing ever drops a voice).
