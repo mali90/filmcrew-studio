@@ -212,6 +212,31 @@ test('a subset whose only reference is trimmed keeps its character, never inheri
   assert.ok(spec.kling.jobs[0].elements.length <= 49);
 });
 
+// …and when NOTHING the subset named belongs to a character, there is nobody to re-seat. A job that
+// named one prop is the cheapest job in the plan, and an emptied subset would make it the most
+// expensive one in the run: `[]` means "inherit the whole roster", i.e. every surviving reference,
+// uploaded and sent, for a shot the planner wrote for a single object.
+test('a prop-only subset whose every reference is trimmed rides with ONE stand-in, never the roster', () => {
+  const props = Array.from({ length: 49 }, (_, i) => `prop-${String(i + 1).padStart(2, '0')}`);
+  const inv = [...refsFor('keeper', 60), ...props.map((id) => ref(id))];
+  const spec = {
+    spec_version: '1.0',
+    kling: {
+      elements: [el('keeper-01', 'Keeper'), ...props.map((id) => el(id, null, 'object'))],
+      jobs: [
+        { job_id: 'J1', shots: ['S1'], elements: ['keeper-01', ...props] },
+        { job_id: 'J2', shots: ['S2'], elements: ['prop-49'] }, // the pin the budget takes, and nothing else
+      ],
+    },
+    audio: { voice: { lines: [line('S1', 'Keeper'), line('S2', 'Keeper')] } },
+  };
+  topUpStarredElements(spec, ctxFor('seedance-2.5@fal', ['keeper'], inv, voiced('Keeper')));
+  assert.equal(spec.kling.elements.length, 49, 'the voice clip keeps its slot');
+  assert.ok(!spec.kling.elements.some((e) => e.id === 'prop-49'), 'and takes it from the last un-starred pin');
+  assert.deepEqual(spec.kling.jobs[1].elements, ['prop-48'],
+    'one surviving un-starred reference stands in — an empty subset would send all 49, a paid upload each');
+});
+
 // …and the same has to hold when the subset is only PARTLY trimmed. A surviving co-star keeps
 // `kept` non-empty, so the character whose one listed reference went was accepted as uncast — and
 // because the fill below only widens seats that ALREADY ride, the paid job rendered without them.
@@ -235,6 +260,26 @@ test('a subset keeps every character it cast, not only the one whose reference s
   assert.ok(cast.some((id) => id.startsWith('keeper-')), 'J1 was cast with Keeper — a trim re-seats them, never uncasts them');
   assert.ok(cast.some((id) => id.startsWith('gull-')), 'and Gull still rides');
   for (const id of cast) assert.ok(spec.kling.elements.some((e) => e.id === id), `${id} is not in the roster`);
+});
+
+// A character the plan names is not always a character the Casting agent STARRED, and the trim reads
+// the un-starred ones off the tail — so the id it takes can be the only reference a subset gave a
+// character who has three more sitting in the roster. Re-seating them is the same repair, read off
+// the element's own `character` instead of the starred list.
+test('a subset re-seats a character the plan named but the cast did not star', () => {
+  const inv = [...refsFor('keeper', 60), ...refsFor('gull', 60)];
+  const roster = [el('keeper-01', 'Keeper'), ...refsFor('gull', 49).map((r) => el(r.id, 'Gull'))];
+  const spec = {
+    spec_version: '1.0',
+    kling: {
+      elements: roster,
+      jobs: [{ job_id: 'J1', shots: ['S1'], elements: ['gull-49'] }], // Gull's last reference is the tail
+    },
+    audio: { voice: { lines: [line('S1', 'Keeper')] } },
+  };
+  topUpStarredElements(spec, ctxFor('seedance-2.5@fal', ['keeper'], inv, voiced('Keeper')));
+  assert.ok(!spec.kling.elements.some((e) => e.id === 'gull-49'), 'the tail pin is what the voice clip cost');
+  assert.deepEqual(spec.kling.jobs[0].elements, ['gull-01'], 'Gull still rides, on a reference that survived');
 });
 
 // The trim's floor is one reference per starred character, so an excess made of UN-STARRED pins used

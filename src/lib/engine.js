@@ -460,6 +460,8 @@ export function topUpStarredElements(spec, ctx) {
    * combined count, the exact class of failure this trim exists to end. The un-starred pin goes from
    * the tail, the same end the cast trim takes. Below that floor there is nothing left to give, and
    * nothing needs to be: every registered model budgets more images than its own castLimit.
+   * Run over a JOB's own subset (below), that same floor is what keeps the subset non-empty — `[]`
+   * is the one spelling no job that named a subset may be left with (see rewriteSubset).
    * @returns {object[]} the elements removed, so a job naming one by id can be repaired
    */
   const trimToBudget = (list, budget, slugs, ownedIn = (l, cs) => l.filter((e) => ownedBy(e, cs))) => {
@@ -481,6 +483,24 @@ export function topUpStarredElements(spec, ctx) {
   if (trimmed.length) {
     const gone = new Map(trimmed.map((e) => [e.id, e]));
     const rosterById = new Map(els.map((e) => [e.id, e]));
+    // What a subset rides on when the trim took every id it named: the roster's least-committed
+    // survivor — an un-starred pin ahead of any starred character's reference, because which
+    // characters a shot contains is the Job Planner's call and this layer casts nobody into one.
+    const standIn = () => (els.findLast((e) => !castSlugs.some((cs) => ownedBy(e, cs))) ?? els.at(-1))?.id;
+    /**
+     * The ONE place a trimmed subset is written back — and `[]` is not a value it may store. An
+     * empty `job.elements` is how a plan says "this job names NO subset", and characterGroups()
+     * answers that by expanding it to the WHOLE roster, so an emptied subset would not read as
+     * "nothing left to send"; it would read as "send all 49 survivors", one paid upload each, for a
+     * job the planner wrote for a single prop. The spec has no third spelling of that difference, so
+     * a subset the trim emptied keeps a ONE-reference floor instead — and says so, because a
+     * stand-in is not the reference the planner asked for.
+     */
+    const rewriteSubset = (job, ids) => {
+      job.elements = ids.length ? ids : [standIn()].filter(Boolean);
+      if (ids.length || !job.elements.length) return;
+      log.warn(`[${job.job_id}] every reference this job named was trimmed to fit the budget — it renders with "${job.elements[0]}" standing in (an empty subset would send the whole ${els.length}-reference roster).`);
+    };
     for (const job of jobs) {
       if (!Array.isArray(job?.elements) || !job.elements.length) continue;
       const kept = job.elements.filter((id) => !gone.has(id));
@@ -491,10 +511,15 @@ export function topUpStarredElements(spec, ctx) {
       // cast is re-seated on a surviving roster reference instead, and the fill then widens that
       // seat to the job's own share. An emptied subset is the same repair, not a separate one:
       // leaving it empty would mean "inherit the whole roster", casting every character in the plan
-      // into a job the planner wrote for one.
-      const uncast = castSlugs.filter((cs) => job.elements.some((id) => ownedBy(gone.get(id), cs))
+      // into a job the planner wrote for one (see rewriteSubset).
+      // Every character the subset cast, not only the STARRED ones — the trim reads un-starred
+      // elements off the tail, so the id it takes can be the only reference a subset gave a
+      // character who has more sitting in the roster. Read off the element's own `character` where
+      // the starred list does not know the name.
+      const owners = [...new Set(castSlugs.concat(job.elements.map((id) => gone.get(id)?.character).filter(Boolean).map(slug)))];
+      const uncast = owners.filter((cs) => job.elements.some((id) => ownedBy(gone.get(id), cs))
         && !kept.some((id) => ownedBy(rosterById.get(id), cs)));
-      job.elements = kept.concat(uncast.map((cs) => els.find((e) => ownedBy(e, cs))?.id).filter(Boolean));
+      rewriteSubset(job, kept.concat(uncast.map((cs) => els.find((e) => ownedBy(e, cs))?.id).filter(Boolean)));
     }
   }
   const added = [];

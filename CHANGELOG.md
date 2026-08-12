@@ -240,6 +240,15 @@
   install commands.
 
 ### Fixed
+- **A shot written for one prop can no longer be sent the entire cast.** When a plan's references
+  do not fit the model's budget, the engine trims the roster — and if what it took was the last
+  reference a job had explicitly named, that job's list was left empty. An empty list means "use
+  the whole roster", so the cheapest job in the plan quietly became the most expensive one in the
+  run: every surviving reference uploaded and sent for a shot that asked for a single object. A job
+  that named its own references now always keeps at least one. The characters it cast are re-seated
+  on references that survived — including characters the casting pass never starred — and a job
+  that named only props falls back to a single surviving stand-in, with a log line saying so rather
+  than swapping it in silently.
 - **A voice clip no longer costs you a boundary pin you were promised.** On fal's Seedance 2.5 one
   50-reference budget covers images, audio and video together, so a registered voice clip and a
   soft boundary pin want the same slot — and only the pin is given up (nothing ever drops a voice).
