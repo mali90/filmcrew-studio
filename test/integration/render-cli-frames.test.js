@@ -123,6 +123,64 @@ test('render-job: --first-frame-from ON the chained frame KEEPS the recorded sea
   assert.equal(side.seam_in.from?.clip, path.join(prior, 'K1', 'clip.mp4'));
 });
 
+// The same lineage, one step further out: the pin may name the neighbour's CLIP rather than a still
+// beside it — the documented `--first-frame-from <clip>` usage, and what the web layer hands over
+// when no closing still was ever written (chaining off, a cleaned or legacy take). The frame comes
+// off the same predecessor either way, so the joint must stay readable either way; recording
+// `from: null` here is what turned a paid pin into a scene cut.
+test('render-job: --first-frame-from <clip> records the clip it was grabbed from', PENDING_FF, async () => {
+  const spec = writeSpec('rj-clip-src', TWO_JOBS);
+  const jobDir = path.join(work.dir, 'clip-take', 'renders', 't1', 'K1');
+  fs.mkdirSync(jobDir, { recursive: true });
+  const neighbour = path.join(jobDir, 'clip.mp4');
+  await makeTwoToneClip({ out: neighbour, seconds: 1 });
+  const runDir = path.join(work.dir, 'rj-clip-src-out');
+  const r = await runCli('src/cli/render-job.js', [
+    '--spec', spec, '--job', 'K2', '--out', runDir, '--first-frame-from', neighbour,
+  ], { env: CHILD_ENV });
+  assert.equal(r.code, 0, r.stderr);
+  const side = JSON.parse(fs.readFileSync(path.join(runDir, 'K2', 'prompts.json'), 'utf8'));
+  assert.equal(path.basename(side.seam_in.frame), 'pin_first_frame.png', "the clip's LAST frame was grabbed");
+  assert.deepEqual(side.seam_in.from, { take: 't1', job: 'K1', clip: neighbour },
+    'and the clip it came off is on the record, exactly as the chain would have written it');
+});
+
+// …but only for a frame that really is that neighbour's CLOSING one. Any other still sitting in a
+// take's job dir is a different image, and naming a source for it would claim a continuation the
+// clip does not have — the same lie as `from: null`, told the other way round.
+test('render-job: another still inside a take dir still points at no source', PENDING, async () => {
+  const spec = writeSpec('rj-other-still', TWO_JOBS);
+  const jobDir = path.join(work.dir, 'other-take', 'renders', 't1', 'K1');
+  fs.mkdirSync(jobDir, { recursive: true });
+  const other = path.join(jobDir, 'cover.png');
+  fs.writeFileSync(other, ONE_PX_PNG);
+  const runDir = path.join(work.dir, 'rj-other-still-out');
+  const r = await runCli('src/cli/render-job.js', [
+    '--spec', spec, '--job', 'K2', '--out', runDir, '--first-frame-from', other,
+  ], { env: CHILD_ENV });
+  assert.equal(r.code, 0, r.stderr);
+  const side = JSON.parse(fs.readFileSync(path.join(runDir, 'K2', 'prompts.json'), 'utf8'));
+  assert.equal(side.seam_in.from, null);
+});
+
+// Chaining off (KLING_CHAIN_FRAMES=0) is the other half of the same case: nothing derives a frame,
+// so the pin is the ONLY thing that knows which clip this segment continues from.
+test('render-job: with chaining disabled the pin alone keeps the joint readable', PENDING, async () => {
+  const spec = writeSpec('rj-nochain', TWO_JOBS);
+  const jobDir = path.join(work.dir, 'nochain-take', 'renders', 't3', 'K1');
+  fs.mkdirSync(jobDir, { recursive: true });
+  const frame = path.join(jobDir, 'last_frame.png');
+  fs.writeFileSync(frame, ONE_PX_PNG);
+  fs.writeFileSync(path.join(jobDir, 'clip.mp4'), 'FAKE-MP4');
+  const runDir = path.join(work.dir, 'rj-nochain-out');
+  const r = await runCli('src/cli/render-job.js', [
+    '--spec', spec, '--job', 'K2', '--out', runDir, '--first-frame-from', frame,
+  ], { env: { ...CHILD_ENV, KLING_CHAIN_FRAMES: '0' } });
+  assert.equal(r.code, 0, r.stderr);
+  const side = JSON.parse(fs.readFileSync(path.join(runDir, 'K2', 'prompts.json'), 'utf8'));
+  assert.deepEqual(side.seam_in.from, { take: 't3', job: 'K1', clip: path.join(jobDir, 'clip.mp4') });
+});
+
 test('render-job: --last-frame-from <clip> grabs that clip\'s FIRST frame (end where the next one begins)', PENDING_FF, async () => {
   const clip = path.join(work.dir, 'next.mp4');
   await makeTwoToneClip({ out: clip, first: 'red', last: 'blue' });

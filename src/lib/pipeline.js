@@ -136,6 +136,12 @@ export async function resolveBoundaryFrame(input, { end, destDir }) {
   return got;
 }
 
+/** Is an opening pin the neighbour's CLOSING frame — its clip (whose LAST frame is what gets grabbed)
+ *  or the `last_frame.png` recorded beside it? Only then does the clip it came out of name a
+ *  continuation; any other still sitting in that dir is a different frame, and claiming a source for
+ *  it would be a false chain. */
+const isClosingFrame = (input) => !IS_STILL.test(input) || path.basename(input) === 'last_frame.png';
+
 /**
  * Boundary-frame PRECEDENCE, decided in ONE place:
  *
@@ -175,14 +181,15 @@ async function seamSourceFor(takeDir, jobId) {
 }
 
 /**
- * Where a closing pin is HEADED: `--last-frame-from` points at the neighbouring clip this segment
- * must join (`<…>/renders/<tN>/<job>/clip.mp4`, or a frame beside it), and the seam record needs
- * that destination by name — a `to: null` on an applied end pin is what made every end-pinned
- * re-render read as a broken chain, so the seamless stitcher hard-cut the very joint the paid
- * dialog promised to preserve. A path outside a take dir (a hand-picked still) genuinely points
- * nowhere and stays null.
+ * The `{take, job, clip}` a boundary pin points AT. Both flags name a neighbouring clip this segment
+ * must join (`<…>/renders/<tN>/<job>/clip.mp4`, or a frame beside it), and both ends of a joint are
+ * recorded by that pointer: a `to: null` on an applied end pin is what made every end-pinned
+ * re-render read as a broken chain, so the seamless stitcher hard-cut the very joint the paid dialog
+ * promised to preserve — and a `from: null` on an applied opening pin says exactly the same lie from
+ * the other side. A path outside a take dir (a hand-picked still) genuinely points nowhere and stays
+ * null.
  */
-async function seamDestFor(input) {
+async function seamPointerFor(input) {
   const src = resolvePath(input);
   const m = /(?:^|[\\/])renders[\\/](t\d+)[\\/]([^\\/]+)[\\/][^\\/]+$/.exec(src);
   if (!m) return null;
@@ -274,7 +281,7 @@ export async function renderSpec(spec, { runDir, probe = false, upscale = false,
     // The run-bracketing close pin's destination, by the same honesty rule as renderJob's: only an
     // APPLIED pin records where it points.
     if (endPin && lastFrameFrom && r.seamOut && !['none', 'unsupported'].includes(r.seamOut.mode)) {
-      const to = await seamDestFor(lastFrameFrom);
+      const to = await seamPointerFor(lastFrameFrom);
       if (to) { r.seamOut.to = to; stampSeamOut(runDir, job.job_id, { to }); }
     }
     startFrame = undefined;
@@ -341,7 +348,7 @@ export async function renderJob(spec, jobId, { runDir, backend, take = 0, feedba
       // WHICH take's clip this frame came off is the whole point: a cut that mixes take 2's K1 with
       // take 1's K2 is indistinguishable from an intact chain without it.
       seamInFrom = await seamSourceFor(srcDir, jobs[idx - 1].job_id);
-    } else log.warn(`no seam frame at ${cand} — rendering ${jobId} without cross-job continuity`);
+    } else if (!firstFrameFrom) log.warn(`no seam frame at ${cand} — rendering ${jobId} without cross-job continuity`);
   }
 
   // No budget re-check here any more: a seam frame that has to ride as a reference is a soft pin,
@@ -359,8 +366,15 @@ export async function renderJob(spec, jobId, { runDir, backend, take = 0, feedba
     // names the boundary outright (so the choice survives whatever chainFrames is set to) while
     // --seam-from still says which take/job/clip it came off. Dropping the source there would tell
     // the continuity rule this clip opens on nothing, and every re-rendered joint would read as a
-    // scene cut. Any OTHER still is hand-picked and genuinely points nowhere.
-    if (!startFrame || path.resolve(pinned) !== path.resolve(startFrame)) seamInFrom = null;
+    // scene cut.
+    // A pin the chain never derived can still BE that chain, spelled out: `--first-frame-from
+    // <…>/renders/<tN>/<job>/clip.mp4` is the documented way to say "start where that clip ended",
+    // and it is what the web layer hands over when the neighbour's closing still was never written
+    // (chaining off, a cleaned or legacy take). The frame comes off the predecessor either way, so
+    // the pin's own path is the provenance. Any OTHER still is hand-picked and points nowhere.
+    if (!startFrame || path.resolve(pinned) !== path.resolve(startFrame)) {
+      seamInFrom = isClosingFrame(firstFrameFrom) ? await seamPointerFor(firstFrameFrom) : null;
+    }
     startFrame = pinned;
   } else if (job.first_frame) {
     seamInFrom = null; // the authored frame is what the renderer will use — naming the chain's
@@ -389,7 +403,7 @@ export async function renderJob(spec, jobId, { runDir, backend, take = 0, feedba
   // the pin survived (a budget-dropped soft pin records mode 'none', and a destination for a frame
   // nothing consumed would be a false continuation claim from this side of the joint).
   if (lastFrameFrom && r.seamOut && !['none', 'unsupported'].includes(r.seamOut.mode)) {
-    const to = await seamDestFor(lastFrameFrom);
+    const to = await seamPointerFor(lastFrameFrom);
     if (to) { r.seamOut.to = to; stampSeamOut(runDir, job.job_id, { to }); }
   }
 

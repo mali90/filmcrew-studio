@@ -233,7 +233,7 @@ export function openedOnPrev(next, prev, same = sameClip) {
 /**
  * Was `prev` rendered to ARRIVE on `next`'s opening frame, by its own record? The mirror image, and
  * the only evidence there is when the successor was never re-rendered: an applied end pin records
- * where it was headed (pipeline.js seamDestFor), and a pin the reference budget dropped records
+ * where it was headed (pipeline.js seamPointerFor), and a pin the reference budget dropped records
  * mode 'none' — so a destination alone never counts, it has to have been applied.
  * @param {{seamOut?:object}} prev  the record at the earlier position
  * @param {object} next             the record (or entry) at the later position

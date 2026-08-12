@@ -449,6 +449,15 @@
   on the stage the strip now names the cut its clips and joins belong to, and its region label says
   the same to assistive tech; the joins stay readable, because a blank strip trades one wrong
   impression for another.
+- **An opening pin taken off a neighbouring CLIP keeps its lineage.** Pointing
+  `--first-frame-from` at a clip is the documented way to say "start where that one ended", and it
+  is what the interface falls back to when the neighbour's closing still was never written — with
+  frame chaining switched off, or on a cleaned or older take. The frame was applied, but the record
+  of where it came from was dropped, so the joint read as a hard cut: the clip strip called it
+  broken and the seamless stitcher cut the very join the re-render had just paid for. A pin that
+  names a take's job — its clip, or the `last_frame.png` beside it — now records that
+  take/job/clip, exactly as the chain would have. A hand-picked still still points nowhere, because
+  it genuinely does.
 
 ### Changed
 - **Segmind's prices are on file — and they are roughly half fal's for the same model.** Every
