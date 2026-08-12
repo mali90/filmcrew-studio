@@ -85,7 +85,10 @@ test('the demo seeds a cut with one whole join and one broken one', async () => 
     // be read back as it was sent in BOTH takes, which is what makes the version picker demoable.
     const prompts = await get(`/api/runs/${health.seededRun}/prompts`);
     assert.deepEqual(prompts.jobs, ['K1', 'K2', 'K3']);
-    assert.ok(prompts.prompts.every((p) => p.bytes > 0 && p.maxBytes > 0), 'each prompt is metered');
+    // `maxBytes: null` is legitimate, not unmetered: Seedance ships with NO whole-prompt cap, so
+    // every Seedance view sends null and the meter shows the count alone. The demo seeds a Kling run
+    // today (500 B × segments), but re-seeding it on a Seedance backend must not fail here.
+    assert.ok(prompts.prompts.every((p) => p.bytes > 0 && (p.maxBytes == null || p.maxBytes > 0)), 'each prompt is metered');
     assert.deepEqual(prompts.prompts.find((p) => p.jobId === 'K2').availableTakes, ['t2', 't1']);
     const sent = await get(`/api/runs/${health.seededRun}/prompt?job=K2&take=t1`);
     assert.equal(sent.source, 'take');

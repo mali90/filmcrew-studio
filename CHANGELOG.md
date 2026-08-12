@@ -599,11 +599,12 @@
 - **Long Seedance prompts are no longer silently shortened.** The whole-prompt byte clamp defaulted
   to 5000 bytes, so a rich multi-shot prompt — the kind Seedance is best at — was cut off mid-sentence
   and sent with an ellipsis where the last shots used to be, with nothing on screen saying so. That
-  number was a house rule, not a provider limit: no provider documents a prompt-length ceiling for
-  these models (Segmind's Seedance 2.0/2.5 API pages state none; ByteDance only *recommends* staying
-  under about 1000 words, which is quality advice about what the model attends to, not an API
-  limit). It now ships **off**, and your prompt reaches fal/Segmind byte for byte. Because there is
-  no cap, the prompt editor's meter has no denominator to draw: it shows the byte **count** alone,
+  number was a house rule, not a provider limit: Segmind's Seedance 2.0/2.5 API pages declare no
+  prompt-length ceiling, and fal's published Seedance schemas declare no maximum length on `prompt`
+  while bounding their other fields (ByteDance only *recommends* staying under about 1000 words,
+  which is quality advice about what the model attends to, not an API limit). It now ships **off**,
+  and your prompt reaches fal/Segmind byte for byte. Because there is no cap, the prompt editor's
+  meter has no denominator to draw: it shows the byte **count** alone,
   and Save no longer refuses on length — an editor that invented a limit would just be the cap
   again, moved into the browser. `SEEDANCE_PROMPT_MAX_BYTES` is still the lever if a provider ever
   answers 422 on prompt length: set it to a number and the old behaviour comes back exactly as it
@@ -611,6 +612,13 @@
   than trimmed behind your back, and the meter gets its denominator back. Unset, empty and `0` all
   mean uncapped. **Kling is untouched**: its 500 bytes per shot segment is fal's own Kling o3 schema
   limit (it rejects at 512), so it is still measured, still metered per shot, and still enforced.
+  Two edges came with removing the default. A *mistyped* `SEEDANCE_PROMPT_MAX_BYTES` (`5,000`,
+  `5kb`) used to fall back to 5000 and would now read as no cap at all — the lever quietly doing
+  nothing for the person who just met a 422 — so an unreadable value is refused out loud, in the
+  render and in the prompt sheet, instead of being mistaken for "unset". And the web server's JSON
+  body limit is now stated rather than inherited: **8 MiB**, refused with the number in the message,
+  so the only ceiling left on an edit is one you can see (it was Fastify's undocumented 1 MiB and a
+  generic 413).
 - **Segmind's prices are on file — and they are roughly half fal's for the same model.** Every
   Segmind surface used to say the rate was "not on file yet", because it genuinely wasn't: the price
   table shipped three `PRICE CHECK REQUIRED` rows and the interface refused to guess. Those rows are

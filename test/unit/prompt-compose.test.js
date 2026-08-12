@@ -337,8 +337,10 @@ test('prompt-compose re-exports the shared helpers both renderers import', P_COM
 // function and the sites read it, which is what these cases hold in place.
 
 test('promptCapOf is the one place a Seedance cap is decided — 0 and absent both mean uncapped', P_COMPOSE, () => {
-  assert.equal(compose.DEFAULT_PROMPT_MAX_BYTES, 0, 'no provider documents a Seedance prompt-length limit');
-  for (const v of [undefined, null, '', 0, '0', -1, -1200, NaN, Infinity, 'nonsense', {}, []]) {
+  // No DEFAULT_* constant to fall back to, deliberately: `Number(x) || DEFAULT_PROMPT_MAX_BYTES`
+  // still reads as working code when the default is 0, so the name alone invites the bug back.
+  assert.equal(compose.DEFAULT_PROMPT_MAX_BYTES, undefined, 'nothing defaults a cap for a caller');
+  for (const v of [undefined, null, '', 0, '0', -1, -1200, []]) {
     assert.equal(compose.promptCapOf({ promptMaxBytes: v }), 0, `${JSON.stringify(v) ?? String(v)} is not a cap`);
   }
   assert.equal(compose.promptCapOf({}), 0);
@@ -346,6 +348,27 @@ test('promptCapOf is the one place a Seedance cap is decided — 0 and absent bo
   assert.equal(compose.promptCapOf(undefined), 0);
   assert.equal(compose.promptCapOf({ promptMaxBytes: 1200 }), 1200);
   assert.equal(compose.promptCapOf({ promptMaxBytes: '1200' }), 1200, 'a knob read from a run\'s .env arrives as text');
+});
+
+// NaN/'nonsense'/Infinity used to answer 0 here, alongside the genuinely-unset values above. That
+// was harmless while 0 meant "fall back to 5000" and is not now: with the clamp shipped off, a knob
+// nobody can read would be indistinguishable from a knob nobody set, so `SEEDANCE_PROMPT_MAX_BYTES=5,000`
+// would answer a provider's 422 by doing exactly nothing, twice.
+test('promptCapOf REFUSES a cap that was set to something unreadable — silence is the one wrong answer', P_COMPOSE, () => {
+  for (const v of ['5,000', '5kb', '5 000', 'nonsense', NaN, Infinity, {}]) {
+    assert.throws(
+      () => compose.promptCapOf({ promptMaxBytes: v }),
+      /SEEDANCE_PROMPT_MAX_BYTES is not a number of bytes/,
+      `${JSON.stringify(v) ?? String(v)} is unreadable, not uncapped`,
+    );
+  }
+  // …and it refuses on the paid path too, before a single byte is composed.
+  const spec = goldenSpec();
+  const settings = { ...settingsMod.seedancePromptSettings(spec, null, SEEDANCE_DEFAULTS), promptMaxBytes: Number('5,000') };
+  assert.throws(
+    () => compose.composeSeedanceJobPrompt(spec.kling.jobs[0], spec, settings, { refGroups: [{ name: 'keeper', refs: ['@Image1'] }] }),
+    /not a number/,
+  );
 });
 
 test('an uncapped composer neither clamps the plan nor overflows an override', P_COMPOSE, () => {

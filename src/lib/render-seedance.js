@@ -128,7 +128,10 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
   const knobs = config.seedance; // user-tunable settings, never model caps
   // …with the model's own block winning where it declares one (Seedance 2.5 renders 480p/720p only
   // and defaults to 720p, so it cannot share 2.0's resolution settings). Everything the model does
-  // not redeclare — style, avoid, textRule, voiceMode, uploadMode, promptMaxBytes — stays shared.
+  // not redeclare — voiceMode, uploadMode, probe resolution — stays shared. The PROMPT-shaped knobs
+  // (style, avoid, textRule, promptMaxBytes) run the same rule one layer down, inside
+  // buildSeedanceJobPrompt, which is handed `caps` for exactly that: the preview resolves them
+  // through the same function, and a model block only one half honoured is preview ≠ wire.
   const probeResolution = modelKnobs(caps)?.probeResolution ?? knobs.probeResolution;
   const mode = knobs.uploadMode;
 
@@ -252,22 +255,22 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
 
   // 3. ONE multi-shot prompt for the whole job (pure, unit-tested). A prompt override — the user's
   //    own words, snapshotted into THIS take dir before anything was submitted — replaces the shot
-  //    bodies only: the front matter, the seam pins laid out just above and the byte clamp are all
-  //    re-composed over it (applyOverride), so an edit can never cost the contract.
+  //    bodies only: the front matter, the seam pins laid out just above and (where a cap is set) the
+  //    byte clamp are all re-composed over it (applyOverride), so an edit can never cost the
+  //    contract. The clause/budget knobs are NOT passed here: `caps` is, and the settings merge
+  //    behind it reads this model's own block then the shared `seedance` one — the same call the
+  //    preview makes, so the two cannot resolve a knob differently.
   const override = readJobOverride(runDir, job.job_id);
   const { prompt, shotPrompts, totalDuration, promptSource } = buildSeedanceJobPrompt(job, spec, {
     override,
+    caps,
     refGroups,
     audioRefFor,
     startFrameRef,
     endFrameRef,
-    style: knobs.style,
-    avoidClause: knobs.avoid,
-    textClause: knobs.textRule,
     feedback, // per-take director note ("Director note: …" in the prompt front matter)
     nonce,
     shotSyntax: caps.shotSyntax, // how THIS model wants its shots joined (undefined ⇒ connectors)
-    maxBytes: knobs.promptMaxBytes,
   });
 
   const args = buildSeedanceArgs({

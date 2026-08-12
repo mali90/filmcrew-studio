@@ -26,6 +26,10 @@ export const resolvePath = (p) => (path.isAbsolute(p) ? p : path.resolve(ROOT, p
  */
 export function buildConfig(env = process.env) {
   // numEnv/boolEnv read from THIS call's env, so buildConfig(someEnv) is fully self-contained.
+  // A value that does not parse stays NaN rather than falling back to the default: config.js is
+  // imported at module scope by every entry point (the doctor included), so throwing here would
+  // crash the one command whose job is to REPORT a broken setup. The use site refuses instead —
+  // see promptCapOf for the Seedance clamp, whose "unset" and "unreadable" would otherwise agree.
   const numEnv = (key, dflt) => {
     const v = env[key];
     return v === undefined || v === '' ? dflt : Number(v);
@@ -181,11 +185,12 @@ export function buildConfig(env = process.env) {
       //     words, no timbre consistency). The fallback if 'reference' still garbles. Kling's voice_id
       //     is the only guaranteed-consistent voice path (see docs/PROVIDERS.md).
       voiceMode: env.SEEDANCE_VOICE_MODE || 'reference',
-      // Whole-prompt byte clamp, OFF by default (0). No provider documents a prompt-length limit for
-      // Seedance — Segmind's 2.0/2.5 API pages state none, and ByteDance only recommends staying
-      // under ~1000 words (quality guidance, not an API limit) — so a default here would shorten a
-      // rich multi-shot prompt where nobody could see it. Set it to a number if a provider ever
-      // answers 422 on prompt length; unset/empty/0 all mean uncapped.
+      // Whole-prompt byte clamp, OFF by default (0). Nothing we can check documents a prompt-length
+      // limit for Seedance — Segmind's 2.0/2.5 API pages state none, fal's published Seedance
+      // schemas put no maxLength on `prompt`, and ByteDance only recommends staying under ~1000
+      // words (quality guidance, not an API limit) — so a default here would shorten a rich
+      // multi-shot prompt where nobody could see it. Set it to a number if a provider ever answers
+      // 422 on prompt length; unset/empty/0 all mean uncapped.
       promptMaxBytes: numEnv('SEEDANCE_PROMPT_MAX_BYTES', 0),
       // Optional global style directive prepended to every Seedance prompt (e.g. "Rendered in
       // a glossy 3D-animation style — soft rounded surfaces…"). Empty = the look lives in each

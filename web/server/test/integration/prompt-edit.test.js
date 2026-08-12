@@ -172,10 +172,23 @@ test('an over-budget edit is refused WITH the numbers — never silently truncat
   assert.ok(!fs.existsSync(sidecarOf(runId)));
 });
 
+// With no app-level cap, the TRANSPORT's ceiling is the only one left on an edit — so it is stated
+// (web/server/app.js's BODY_LIMIT_BYTES, 8 MiB) and refused with the number in it. Fastify's own
+// default was 1 MiB and a generic 413 naming neither prompts nor bytes: a limit you cannot see or
+// measure against is the silence this whole change removed, relocated to the framework.
+test('a body past the server\'s stated limit is refused WITH the number, not by a generic 413', async () => {
+  const r = await put('/api/runs/whatever/prompt', { job: 'K1', prompt: 'x'.repeat(9 * 1024 ** 2) });
+  assert.equal(r.statusCode, 413);
+  const body = r.json();
+  assert.match(body.error, /8388608-byte limit/, 'the number is in the message, like every other refusal here');
+  assert.match(body.hint, /nothing was saved/);
+});
+
 // The other half of that promise. The root above SETS SEEDANCE_PROMPT_MAX_BYTES, and everything
 // about a set cap still holds — it clamps, and an edit over it is refused with the numbers. The
-// SHIPPED default sets nothing: no provider documents a prompt-length limit for Seedance, so there
-// is no denominator to meter against and no length a save may be refused for. This needs its own
+// SHIPPED default sets nothing: nothing checkable documents a prompt-length limit for Seedance
+// (Segmind's API pages and fal's published schemas declare none), so there is no denominator to
+// meter against and no length a save may be refused for. This needs its own
 // app because a cap is read from a run's .env, and this one must not carry the line — in EITHER
 // place, since childEnv wins over .env (dotenv never overwrites an existing variable).
 test('with no cap set, the view has no denominator and a ~20 KB edit rides the whole path verbatim', async () => {

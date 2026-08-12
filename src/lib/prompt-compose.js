@@ -50,16 +50,6 @@ export const DEFAULT_TEXT_RULE = 'No on-screen text, letters, captions, or signs
 // silently turning every shot into 1s rather than throwing somewhere far away.
 export const DEFAULT_SHOT_SECONDS = 5;
 
-// The Seedance whole-prompt clamp ships OFF. No provider documents a prompt-length limit for these
-// models (Segmind's 2.0/2.5 API pages state none; ByteDance only RECOMMENDS staying under ~1000
-// words, which is a quality note, not an API limit), so the old 5000 was a house rule that shortened
-// long multi-shot prompts where nobody could see it. 0 is the uncapped sentinel throughout, and the
-// value config.js and web/server's mirror both default SEEDANCE_PROMPT_MAX_BYTES to — that knob is
-// still the lever for anyone who meets a provider 422 in the wild. It is stated here rather than
-// used as promptCapOf's fallback on purpose: a fallback would swallow an explicit 0 the day someone
-// put a number back, which is the exact bug this change exists to remove.
-export const DEFAULT_PROMPT_MAX_BYTES = 0;
-
 // Capitalize a speaker id for the spoken-line clause (e.g. a future line.speaker); default neutral.
 export const speakerName = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : 'The character');
 
@@ -82,17 +72,47 @@ export function trimToBytes(s, maxBytes) {
 }
 
 /**
- * The Seedance whole-prompt cap a settings bag asks for, or 0 for "no cap". ONE normalizer, because
- * the three sites that used to write `Number(x) || DEFAULT` each collapsed an explicit 0 back into
- * an ambient default — and with 0 meaning uncapped that is the difference between sending a prompt
- * and silently shortening it. Anything that is not a positive finite number is not a cap: a knob
- * read from a run's .env arrives as text, an unset one as '' or undefined.
+ * The Seedance whole-prompt cap a settings bag asks for, or 0 for "no cap".
+ *
+ * The clamp SHIPS OFF: Segmind's 2.0/2.5 API pages declare no prompt-length limit and fal's
+ * published Seedance schemas declare no `maxLength` on `prompt` (they DO bound their other fields,
+ * so the absence is meaningful; fal publishes no schema at all for the two reference-to-video
+ * endpoints this repo calls by default, so those are unverified rather than known-unbounded).
+ * ByteDance only RECOMMENDS staying under ~1000 words, which is a quality note about what the model
+ * attends to, not an API limit. So the old 5000 was a house rule that shortened long multi-shot
+ * prompts where nobody could see it. 0 is the uncapped sentinel throughout, and what config.js and
+ * web/server's mirror both default SEEDANCE_PROMPT_MAX_BYTES to — that knob is still the lever for
+ * anyone who meets a provider 422 in the wild.
+ *
+ * ONE normalizer, because the three sites that used to write `Number(x) || DEFAULT` each collapsed
+ * an explicit 0 back into an ambient default — and with 0 meaning uncapped that is the difference
+ * between sending a prompt and silently shortening it. There is deliberately no DEFAULT_* constant
+ * to fall back to: a fallback would swallow an explicit 0 the day someone puts a number back, which
+ * is the exact bug this exists to remove. UNSET is 0 too: '' and undefined are how config.js and
+ * web/server's mirror spell "no knob".
+ *
+ * An UNREADABLE value is the one thing that is NOT silently uncapped. `SEEDANCE_PROMPT_MAX_BYTES=5,000`
+ * (or `5kb`, or `5 000`) parses to NaN, which would read exactly like unset — quietly disabling the
+ * lever a user reached for after a provider 422, and answering their next 422 the same way. So it
+ * throws instead, on both halves at once: the renderer refuses before it submits, and the preview
+ * reports it as that job's `error`, in the place the number would otherwise have been drawn.
+ * config.js cannot refuse it itself — every entry point imports it at module scope, the doctor
+ * included, and the doctor's job is to REPORT a broken setup rather than die with it.
  * @param {{promptMaxBytes?:number|string}|null} [settings]
  * @returns {number} the cap in UTF-8 bytes, or 0 when there is none
+ * @throws {Error} when a cap was set to something that is not a number
  */
 export function promptCapOf(settings) {
-  const n = Number(settings?.promptMaxBytes);
-  return Number.isFinite(n) && n > 0 ? n : 0;
+  const raw = settings?.promptMaxBytes;
+  if (raw === undefined || raw === null || raw === '') return 0;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) {
+    throw new Error(
+      `SEEDANCE_PROMPT_MAX_BYTES is not a number of bytes (got "${String(raw)}") — and a knob nobody can read is not "no cap": `
+      + 'it would send the very prompt a provider refused. Set a whole number of bytes, or leave it empty (or 0) for no cap.',
+    );
+  }
+  return n > 0 ? n : 0;
 }
 
 /**
@@ -306,7 +326,8 @@ function jobSpeakers(job, spec, audioOn) {
 /**
  * The SYSTEM front matter for one Seedance job: style, identity, guards, take/note directives, the
  * first-frame pin and the per-speaker voice notes. It sits ahead of the shot bodies so it survives
- * the byte clamp — and it is exactly what a user's prompt edit may NOT spend (see pinBytesOf).
+ * the byte clamp wherever a cap is set (Seedance ships uncapped) — and it is exactly what a user's
+ * prompt edit may NOT spend (see pinBytesOf).
  */
 function seedanceFrontMatter(job, spec, settings, opts = {}) {
   const { refGroups = [], audioRefFor = null, startFrameRef = null, endFrameRef = null, feedback = '', nonce = 0 } = opts;
@@ -400,10 +421,10 @@ export function composeSeedanceJobPrompt(job, spec, settings, opts = {}) {
  *
  * The user owns the WORDS; the system owns the CONTRACT. So an override replaces only the shot
  * bodies — the front matter (style, identity clause, text/speech rules, director note, take
- * directive), the seam pins and the byte clamp are all re-composed on top, from this render's own
- * settings. That is why a stored override never contains a pin sentence: pins name `@Image3` labels
- * that only exist once THIS render has laid out its references, so storing one would freeze a
- * stale (or plain wrong) reference into every future take.
+ * directive), the seam pins and — where a cap is set — the byte clamp are all re-composed on top,
+ * from this render's own settings. That is why a stored override never contains a pin sentence:
+ * pins name `@Image3` labels that only exist once THIS render has laid out its references, so
+ * storing one would freeze a stale (or plain wrong) reference into every future take.
  *
  * Pure, and shape-preserving: hand it what a composer returned and it returns the same shape.
  *
@@ -483,8 +504,10 @@ export function assertOverrideFits(built, jobId) {
   if (over <= 0) return built;
   throw new Error(
     `job ${jobId}: the saved prompt edit no longer fits — it is ${over} byte(s) over the room this render leaves for your words. `
-    + 'Something the SYSTEM owns has grown since it was saved: a re-render adds an "Alternate take"/"Director note" line the editor could not budget for, '
-    + 'and a revise can lengthen the identity or voice clauses. Nothing was sent — shorten the edit in the prompt editor, or discard it. '
+    + 'Either the BUDGET moved under it — this backend\'s prompt-length knob was set or lowered since (Seedance ships uncapped, so setting '
+    + 'SEEDANCE_PROMPT_MAX_BYTES does exactly that to every edit written before it) — or something the SYSTEM owns has grown: a re-render adds an '
+    + '"Alternate take"/"Director note" line the editor could not budget for, and a revise can lengthen the identity or voice clauses. '
+    + 'Nothing was sent — shorten the edit in the prompt editor, or discard it. '
     + 'Trimming it here would drop the end of words you are paying to send, without showing you what went.',
   );
 }

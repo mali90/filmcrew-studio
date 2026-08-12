@@ -80,13 +80,21 @@ instead of on screen.
 | `seedance-2.0@fal` · `@segmind` | **none** | the whole job prompt | `SEEDANCE_PROMPT_MAX_BYTES` |
 | `seedance-2.5@fal` · `@segmind` | **none** | the whole job prompt | `SEEDANCE_PROMPT_MAX_BYTES` |
 
-Seedance ships **uncapped**: no provider documents a prompt-length limit for these models (Segmind's
-2.0/2.5 API pages state none), so a long multi-shot prompt reaches the model whole. ByteDance, the
-model's owner, *recommends* keeping a prompt under about 1000 words — that is quality guidance about
-what the model attends to, not an API limit, and the pipeline does not enforce it. Set
+Seedance ships **uncapped**, on the evidence we could actually check: Segmind's 2.0/2.5 API pages
+declare no prompt-length limit, and fal's published Seedance schemas declare no `maxLength` on
+`prompt` while bounding their other fields (fal publishes no schema for the two
+`…/reference-to-video` endpoints this repo calls by default, so those are unverified rather than
+known-unbounded). A long multi-shot prompt therefore reaches the model whole. ByteDance, the model's
+owner, *recommends* keeping a prompt under about 1000 words — that is quality guidance about what the
+model attends to, not an API limit, and the pipeline does not enforce it. Set
 `SEEDANCE_PROMPT_MAX_BYTES` to a number if a provider ever answers 422 on prompt length; unset, empty
 and `0` all mean uncapped. Kling's per-segment cap is the opposite kind of number: fal's Kling o3
 schema really rejects a 512-byte segment, so it is enforced.
+
+One ceiling is left, and it is the transport's rather than a model's: the web server accepts a JSON
+body up to `BODY_LIMIT_BYTES` (8 MiB, `web/server/app.js`), so a prompt edit past that is refused
+with a 413 that quotes the number. It sits far past any screenplay; it is named here because an
+unstated limit is the same thing as a silent one.
 
 The meter you edit against is **not** the raw cap. It is:
 

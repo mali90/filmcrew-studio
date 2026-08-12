@@ -32,6 +32,9 @@ import { voiceClipLookup, voiceKnobs } from './voice-refs.js';
  * in prompt-read.test.js catches.
  */
 function promptDefaults(get) {
+  // Mirrors config.js's numEnv exactly, NaN included: a knob that does not parse must reach the
+  // preview as the same unreadable value it reaches the render as, and be refused by the same rule
+  // (promptCapOf) — a fallback to the default here would preview a cap the render never applies.
   const num = (key, dflt) => { const v = get(key); return v === '' ? dflt : Number(v); };
   const bool = (key, dflt) => { const v = get(key); return v === '' ? dflt : /^(1|true|yes|on)$/i.test(v); };
   const kling = {
@@ -52,10 +55,11 @@ function promptDefaults(get) {
     resolution: get('SEEDANCE_RESOLUTION') || '480p',
     generateAudio: voices.audioOn,
     voiceMode: voices.voiceMode,
-    // 0 = uncapped, mirroring config.js's own default: no provider documents a Seedance
-    // prompt-length limit, so the knob only clamps for a user who sets one (a provider 422 is the
-    // reason to). A number here that config.js does not share would meter an edit — and refuse a
-    // save — against a budget the render never applies.
+    // 0 = uncapped, mirroring config.js's own default: Segmind's 2.0/2.5 API pages declare no
+    // prompt-length limit and fal's published Seedance schemas declare no maxLength on `prompt`, so
+    // the knob only clamps for a user who sets one (a provider 422 is the reason to). A number here
+    // that config.js does not share would meter an edit — and refuse a save — against a budget the
+    // render never applies.
     promptMaxBytes: num('SEEDANCE_PROMPT_MAX_BYTES', 0),
     style: get('SEEDANCE_STYLE') || '',
     avoid: get('SEEDANCE_AVOID') || '',
@@ -372,7 +376,8 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
     const { voiced, audioRefFor, seam, plan, opts } = layoutFor(hasSeamIn, hasSeamOut);
     const planned = composeSeedanceJobPrompt(job, spec, settings, opts);
     // The renderer's own call (seedance.js → applyOverride): the user's words with THIS render's
-    // front matter and seam pins re-composed over them, then clamped. Preview === wire, still.
+    // front matter and seam pins re-composed over them, and clamped only where a cap is set —
+    // Seedance ships uncapped, and a user's words are never clamped either way. Preview === wire, still.
     const { prompt, shotPrompts } = override ? applyOverride(planned, override, settings) : planned;
     // The editable body: the composed prompt with the SYSTEM front matter taken back off, which is
     // precisely what `applyOverride` re-composes over. Saving it untouched yields the same bytes.
@@ -396,9 +401,11 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
 
     // The meter's denominator is not THIS render's pins but the widest pin set any render of this
     // segment can apply (boundaryCandidates): the saved words are re-composed under whichever
-    // boundaries the re-render resolves, and `applyOverride` clamps the result. Metering the plan's
-    // pins alone accepted an edit that a `boundaries:'auto'` re-render then truncated from the end,
-    // mid-paid-render, with nothing on screen saying so. A pairing the renderer would REFUSE (more
+    // boundaries the re-render resolves, and `applyOverride` MEASURES the result against the cap —
+    // `assertOverrideFits` then refuses the render rather than trimming words somebody is paying to
+    // send. Metering the plan's pins alone accepted an edit a `boundaries:'auto'` re-render could
+    // not fit — once by truncating it from the end mid-paid-render, now by refusing to send at all —
+    // with nothing on screen having said so. A pairing the renderer would REFUSE (more
     // voiced speakers than @Audio slots once a frame makes the job reference-to-video) reserves
     // nothing: that render throws before it spends, so it can never cut anybody's words.
     const pinBytes = Math.max(...boundaryCandidates(job, index).map((b) => {
@@ -646,13 +653,14 @@ const badRequest = (message, hint) => Object.assign(new Error(message), { status
 /**
  * How many bytes of a job's budget the user's own words may spend: the model's cap minus what the
  * SYSTEM already owns. Measured from the same composer the render uses, so the meter in the editor
- * and the check here can never disagree.
- * @returns {{perSegment:number[]}|{whole:number|null}} `whole: null` when the model has no cap
+ * and the check here can never disagree — which is why BOTH branches read a missing cap the way
+ * PromptEditor's `roomFor` reads it (no limit), not as a limit of zero that refuses every save.
+ * @returns {{perSegment:(number|null)[]}|{whole:number|null}} `null` where the model has no cap
  *   (Seedance ships uncapped) — there is nothing to be over, so nothing to refuse.
  */
 function budgetOf(view) {
   if (Array.isArray(view.segments)) {
-    return { perSegment: view.segments.map((s) => Math.max(0, Number(s.maxBytes ?? 0) - Number(s.pinBytes ?? 0))) };
+    return { perSegment: view.segments.map((s) => (s.maxBytes == null ? null : Math.max(0, Number(s.maxBytes) - Number(s.pinBytes ?? 0)))) };
   }
   if (view.maxBytes == null) return { whole: null };
   return { whole: Math.max(0, Number(view.maxBytes) - Number(view.pinBytes ?? 0)) };
@@ -692,8 +700,9 @@ export async function savePromptOverride({ root, envRoot, childEnv, runDir, spec
       throw badRequest(`expected ${view.segments.length} segment(s), got ${segments.length}`, 'one entry per shot, in shot order');
     }
     bodies.forEach((s, i) => {
+      const cap = budget.perSegment[i];
+      if (cap == null) return; // no cap on this segment ⇒ nothing to be over (the meter says the same)
       const bytes = utf8(s);
-      const cap = budget.perSegment[i] ?? 0;
       if (bytes > cap) throw badRequest(`shot ${i + 1} is ${bytes} bytes; the room left for your words is ${cap} bytes (over by ${bytes - cap})`, 'trim it — nothing is truncated for you, because you would not see what went');
     });
   } else {

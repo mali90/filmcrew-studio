@@ -158,8 +158,9 @@ test('clampBytes never splits a multibyte char and is a no-op under budget', () 
 });
 
 // ── The whole-prompt clamp is OFF by default ────────────────────────────────────────────────────
-// No provider documents a prompt-length limit for Seedance (Segmind's 2.0/2.5 API pages state none;
-// ByteDance only RECOMMENDS staying under ~1000 words), so the 5000-byte default was self-imposed
+// Nothing checkable documents a prompt-length limit for Seedance (Segmind's 2.0/2.5 API pages state
+// none, fal's published Seedance schemas put no maxLength on `prompt`, and ByteDance only
+// RECOMMENDS staying under ~1000 words), so the 5000-byte default was self-imposed
 // and long multi-shot prompts were being shortened before anyone could see it. Uncapped is now the
 // default; SEEDANCE_PROMPT_MAX_BYTES remains the lever for anyone who meets a provider 422.
 
