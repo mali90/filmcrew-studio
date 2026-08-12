@@ -4,8 +4,11 @@ import { pinStrengthFor, pinStrengthsFor, type PinStrength } from '../../../../.
 
 export type { PinStrength };
 
-/** Client-side basename of an absolute fs path. */
-export const basename = (p: string) => p.split('/').pop() ?? p;
+/** Client-side basename of an absolute fs path. BOTH separators: the paths that reach the browser
+ *  unredacted (`approved.final`, a cut's `master`) are whatever the SERVER's os wrote, so on Windows
+ *  they arrive backslash-delimited — and a '/'-only split would leave the whole host path where a
+ *  file name was promised, and build a media URL out of it. */
+export const basename = (p: string) => p.split(/[/\\]/).pop() ?? p;
 
 /** Media URL for a stitched master that lives in out/ (older cuts only expose fs paths). */
 export const outMediaUrl = (absPath: string) => `/api/media/out/${encodeURIComponent(basename(absPath))}`;

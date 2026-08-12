@@ -222,6 +222,20 @@ describe('ApproveBar', () => {
     expect(caption).toMatch(/ocean-final\.mp4 stays on disk/); // and nothing is deleted
   });
 
+  // `approved.final` is the one path that deliberately reaches the browser unredacted, and it is
+  // written by whatever OS the SERVER runs on. On Windows it arrives backslash-delimited, and the
+  // caption still owes the reviewer a file name — a host path there is unreadable and promises
+  // nothing.
+  it('names the file even when the server hands over a Windows path', () => {
+    const run = reopenedRun();
+    run.manifest!.approved!.final = 'C:\\Users\\ali\\Videos\\out\\ocean-final.mp4';
+    renderReview(<ApproveBar run={run} />);
+
+    const caption = screen.getByText(/This writes a new final/).textContent ?? '';
+    expect(caption).toMatch(/ocean-final\.mp4 stays on disk/);
+    expect(caption).not.toMatch(/[\\/]Users[\\/]/);
+  });
+
   it('the plain replace is not a paid button; only the "& upscale" variant is', async () => {
     markPaidConfirmed();
     const { rerender } = renderReview(<ApproveBar run={reopenedRun()} />);
