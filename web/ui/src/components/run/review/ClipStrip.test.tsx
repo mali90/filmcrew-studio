@@ -197,6 +197,33 @@ describe('ClipStrip', () => {
     expect(screen.getByRole('button', { name: 'Prompt for K2' })).toBeEnabled();
   });
 
+  // The DISPLAY half of the same fact: the tiles come from `latestRender.jobs` and the verdicts from
+  // `run.continuity`, which the server aligns to that render — so under an older master every badge
+  // is the LATEST cut's, and a joint re-rendered since can read the exact opposite of the video
+  // playing. The strip says whose joins these are instead of wearing them as the older cut's.
+  it('names the cut its badges belong to while an older cut is on the stage', () => {
+    const run = threeSegmentRun({ continuity: [entry('K2', 1), entry('K3', 2)] });
+    run.manifest!.cuts = [
+      { id: 'c1', take: 't1', master: '/abs/out/ocean v1.mp4', createdAt: '2026-07-04T09:00:00.000Z' },
+      { id: 'c2', take: 't2', master: '/abs/out/ocean.mp4', createdAt: '2026-07-04T10:00:00.000Z' },
+    ];
+    render(<ClipStrip run={run} jobs={run.latestRender!.jobs} takeCountFor={() => 1} isLatestCut={false} onSeek={vi.fn()} />);
+
+    expect(screen.getByTestId('clip-strip-cut-scope')).toHaveTextContent(
+      'These clips and joins describe the latest cut (c2) — not the older master playing above.',
+    );
+    // assistive tech hears the same scope from the region's own name
+    expect(screen.getByLabelText('Clips in the latest cut')).toBeInTheDocument();
+    // and the joins stay readable — the fix is a caption, not a blank strip
+    expect(screen.getAllByText('joined')).toHaveLength(2);
+  });
+
+  it('claims nothing about another cut while the latest one is playing', () => {
+    renderStrip(threeSegmentRun({ continuity: [entry('K2', 1), entry('K3', 2)] }));
+    expect(screen.queryByTestId('clip-strip-cut-scope')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Clips in this cut')).toBeInTheDocument();
+  });
+
   // No legend: the strip explains itself with the drawing and one sentence (Don't #9).
   it('carries no legend', () => {
     const { container } = renderStrip(threeSegmentRun({ continuity: [entry('K2', 1), entry('K3', 2)] }));

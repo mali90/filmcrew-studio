@@ -78,12 +78,18 @@ export function ClipStrip({ run, jobs, takeCountFor, promptStateFor, isLatestCut
   /** Whether this segment's prompt carries an edit, and whether the plan has since moved under it
    *  (spec D8). Absent — a strip rendered without the prompt read — simply wears no pen. */
   promptStateFor?: (jobId: string) => { edited: boolean; stale: boolean };
-  /** Whether the cut switcher is showing the LATEST cut. A re-render has no way to build on any
-   *  other: `rerender-job` resolves both neighbours and the composition it writes from the
-   *  manifest's current clips, which are the latest cut's, so on an older cut the paid action would
-   *  change a composition that is not the master playing above. Off ⇒ the action says so and
-   *  refuses. Required, not defaulted: a caller that forgets it would sell a paid re-render of the
-   *  wrong cut. */
+  /** Whether the cut switcher is showing the LATEST cut. Two things hang on it, and both come from
+   *  the same fact — everything this strip draws is the latest cut's. The clips are
+   *  `latestRender.jobs` and the verdicts are `run.continuity`, which the server aligns 1:1 with
+   *  that render and computes from the manifest's CURRENT clips; no older cut's composition is kept
+   *  anywhere to draw instead.
+   *  1. The paid re-render is withheld: `rerender-job` resolves both neighbours and the composition
+   *     it writes from those same current clips, so on an older cut it would rebuild a cut that is
+   *     not the master playing above.
+   *  2. The badges say whose joins they are, rather than letting the older master on the stage wear
+   *     another cut's verdicts (a joint re-rendered since could read the exact opposite).
+   *  Required, not defaulted: a caller that forgets it would sell a paid re-render of the wrong cut
+   *  and caption the wrong video. */
   isLatestCut: boolean;
   onSeek: (index: number) => void;
 }) {
@@ -149,12 +155,22 @@ export function ClipStrip({ run, jobs, takeCountFor, promptStateFor, isLatestCut
       ? 'You’re watching an older cut. A re-render always rebuilds the latest one, so switch back to it first.'
       : null;
 
+  // Which cut these tiles are really about. Named, not hidden: blanking the badges under an older
+  // master would trade one wrong impression for another, and the joins of the latest cut are still
+  // worth reading — as long as the strip says that is what they are.
+  const latestCutId = run.manifest?.cuts?.at(-1)?.id ?? null;
+
   return (
     <div
       className="mt-5"
-      aria-label="Clips in this cut"
+      aria-label={isLatestCut ? 'Clips in this cut' : 'Clips in the latest cut'}
       onKeyDown={(e) => { if (e.key === 'Escape') setSelected(null); }}
     >
+      {!isLatestCut && (
+        <p className="mb-2 text-center text-caption text-ink-muted" data-testid="clip-strip-cut-scope">
+          These clips and joins describe the latest cut{latestCutId ? ` (${latestCutId})` : ''} — not the older master playing above.
+        </p>
+      )}
       <div className="well flex justify-center overflow-x-auto" data-testid="clip-strip">
         <div className="flex min-w-min items-start">
           {jobs.map((job, i) => (

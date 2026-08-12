@@ -61,6 +61,29 @@ describe('ReviewStage', () => {
     expect(screen.getByTestId('master-video')).toHaveAttribute('src', '/api/media/out/ocean%20v1.mp4');
   });
 
+  // The stage swaps the video for an older cut but keeps handing the strip the LATEST render's jobs
+  // and continuity — there is no per-cut composition to hand it instead. So the pair must not read
+  // as one thing: the strip states which cut its clips and joins belong to, and the paid re-render
+  // (which can only ever rebuild the latest cut) stays withheld.
+  it('scopes the strip to the latest cut while an older one plays, and still withholds the re-render', () => {
+    const run = makeRun('review');
+    run.manifest!.cuts = [
+      { id: 'c1', take: 't1', master: '/abs/out/ocean v1.mp4', createdAt: '2026-07-04T09:00:00.000Z' },
+      { id: 'c2', take: 't2', master: '/abs/out/ocean.mp4', createdAt: '2026-07-04T10:00:00.000Z' },
+    ];
+    renderReview(<Stage run={run} />);
+    expect(screen.queryByTestId('clip-strip-cut-scope')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Switch cut' }));
+    fireEvent.click(screen.getAllByRole('option')[1]);
+
+    expect(screen.getByTestId('clip-strip-cut-scope')).toHaveTextContent(
+      'These clips and joins describe the latest cut (c2) — not the older master playing above.',
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Play from K2' }));
+    expect(screen.getByRole('button', { name: 'Re-render K2' })).toBeDisabled();
+  });
+
   it('seeks the master to the sum of preceding jobs when a clip card is clicked', () => {
     const run = makeRun('review');
     renderReview(<Stage run={run} />);
