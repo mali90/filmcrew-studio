@@ -295,9 +295,18 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     return { stitcher: s.stitcher, joints: s.joints ?? 0, matched: s.matched ?? 0 };
   }
 
+  /**
+   * A map keyed by JOB ID, with NO prototype. A job id is whatever the plan called it, and on a
+   * plain `{}` the assignment `map['__proto__'] = clip` hits Object.prototype's setter: no own key
+   * appears, so the clip is silently dropped from every cut. (Object spread would put the prototype
+   * back, so a copy goes through here too. JSON.parse defines `__proto__` as an ordinary own key,
+   * which is why a manifest read off disk copies across intact.)
+   */
+  const jobMap = (from) => Object.assign(Object.create(null), from);
+
   /** Track the newest clip per job id — the composition source for mixed cuts. */
   function mergeJobClips(m, jobs) {
-    m.jobClips = m.jobClips ?? {};
+    m.jobClips = jobMap(m.jobClips);
     for (const j of jobs ?? []) {
       const id = j.jobId ?? j.job;
       if (id && j.clip) m.jobClips[id] = j.clip;
@@ -318,7 +327,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
    * per-joint verdict is computed from them by lib/lineage.js, never stored.
    */
   function mergeLineage(m, jobs) {
-    m.clipLineage = m.clipLineage ?? {};
+    m.clipLineage = jobMap(m.clipLineage);
     for (const j of jobs ?? []) {
       const id = j.jobId ?? j.job;
       if (!id || !j.clip) continue; // a failed job replaces nothing — its predecessor's lineage stands
@@ -511,8 +520,10 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     const dest = path.join(takeDir, OVERRIDES_FILE);
     try { fs.copyFileSync(src, dest); } catch (e) { throw unusable(`it could not be snapshotted into the take — ${String(e?.message ?? e).slice(0, 80)}`); }
     // 'override' only when an edit really reaches one of the jobs being rendered — a sidecar that
-    // only holds K1's edit must not label a K2-only re-render as edited.
-    return { args: ['--prompt-overrides', dest], promptSource: jobIds.some((id) => jobs[id]) ? 'override' : 'plan' };
+    // only holds K1's edit must not label a K2-only re-render as edited. `Object.hasOwn`, never a
+    // bracket read: `jobs` came off JSON.parse with Object.prototype behind it, so a job the plan
+    // called `toString` would find an inherited function and label the take as edited.
+    return { args: ['--prompt-overrides', dest], promptSource: jobIds.some((id) => Object.hasOwn(jobs, id)) ? 'override' : 'plan' };
   }
 
   /**
@@ -857,7 +868,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
         if (!/^t\d{1,4}$/.test(String(takeId))) throw Object.assign(new Error(`"${takeId}" is not a take id`), { statusCode: 400, hint: 'take ids look like t1, t2, …' });
       }
       updateManifest(dir, (m) => {
-        m.jobClips = { ...m.jobClips };
+        m.jobClips = jobMap(m.jobClips);
         for (const [jobId, takeId] of Object.entries(composition)) {
           const takeRj = readJson(safeChild(dir, 'renders', String(takeId), 'render.json'));
           const hit = takeRj?.jobs?.find((j) => (j.jobId ?? j.job) === jobId);

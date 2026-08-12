@@ -121,15 +121,28 @@ const utf8 = (s) => Buffer.byteLength(String(s ?? ''), 'utf8');
 const OVERRIDES_FILE = 'prompt-overrides.json';
 const OVERRIDES_SCHEMA = 1;
 
+/**
+ * A map keyed by JOB ID — with no prototype, because a job id is arbitrary validated text and
+ * `{}` inherits members that behave like keys. `jobs['__proto__'] = edit` on a plain object hits
+ * Object.prototype's SETTER: no own key appears, `Object.keys` stays empty, writeOverrides then
+ * deletes the sidecar as "no edits left" and the user's words are gone. The reads are just as
+ * wrong the other way — `jobs['toString']` on a plain object answers with an inherited function,
+ * i.e. "yes, this job has an edit". Object spread would put the prototype back, so every copy goes
+ * through here too.
+ */
+const jobMap = (from) => Object.assign(Object.create(null), from);
+
 /** The run's saved edits, or an empty set. A corrupt sidecar reads as empty HERE (the preview must
  *  still render) — the renderers throw on it instead, before anything is submitted. */
 function readOverrides(runDir) {
   try {
     const raw = JSON.parse(fs.readFileSync(path.join(runDir, OVERRIDES_FILE), 'utf8'));
     const jobs = raw?.jobs;
-    return { schema: OVERRIDES_SCHEMA, jobs: jobs && typeof jobs === 'object' && !Array.isArray(jobs) ? jobs : {} };
+    // JSON.parse defines `__proto__` as an ORDINARY own key, so a hand-written sidecar naming one
+    // survives this copy intact — it is only assignment onto a plain object that loses it.
+    return { schema: OVERRIDES_SCHEMA, jobs: jobMap(jobs && typeof jobs === 'object' && !Array.isArray(jobs) ? jobs : null) };
   } catch {
-    return { schema: OVERRIDES_SCHEMA, jobs: {} };
+    return { schema: OVERRIDES_SCHEMA, jobs: jobMap(null) };
   }
 }
 
@@ -138,7 +151,7 @@ function readOverrides(runDir) {
 function writeOverrides(runDir, mutate) {
   const file = path.join(runDir, OVERRIDES_FILE);
   const current = readOverrides(runDir);
-  const next = mutate({ schema: OVERRIDES_SCHEMA, jobs: { ...current.jobs } });
+  const next = mutate({ schema: OVERRIDES_SCHEMA, jobs: jobMap(current.jobs) });
   if (!Object.keys(next.jobs).length) {
     try { fs.rmSync(file, { force: true }); } catch { /* already gone */ }
     return next;
@@ -685,9 +698,9 @@ export async function savePromptOverride({ root, envRoot, childEnv, runDir, spec
  */
 export async function discardPromptOverride({ root, envRoot, childEnv, runDir, spec, backend, voicesDir, jobId }) {
   const planned = (spec?.kling?.jobs ?? []).some((j) => j?.job_id === jobId);
-  // `Object.hasOwn`, never a bracket read: `jobs` is a plain object literal, so `jobs['__proto__']`
-  // and `jobs['toString']` resolve to INHERITED members and would answer "yes, there was an edit" —
-  // a bogus 200, an SSE broadcast to every tab and a junk History row for a job that never existed.
+  // `Object.hasOwn`, never a bracket read — belt and braces over `jobMap`'s null prototype: on a
+  // plain object `jobs['toString']` resolves to an INHERITED member and would answer "yes, there
+  // was an edit" — a bogus 200, an SSE broadcast to every tab and a junk History row.
   const had = Object.hasOwn(readOverrides(runDir).jobs, jobId);
   // An orphaned override (its job is gone from the plan) is still discardable — that is the only way
   // the "1 edited prompt has no segment any more" row can be cleared.

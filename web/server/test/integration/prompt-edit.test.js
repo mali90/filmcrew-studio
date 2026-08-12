@@ -133,6 +133,34 @@ test('DELETE /prompt on an Object.prototype key is a 404, not a bogus success', 
   assert.equal((m?.history ?? []).filter((h) => h?.kind === 'prompt-discard').length, 0, 'no junk history row');
 });
 
+// The mirror image of the read above: a plan may legitimately CALL a job `__proto__` (the spec asks
+// only that a job_id is non-empty), and `jobs[jobId] = edit` on a plain object then hits
+// Object.prototype's setter — no own key, `Object.keys` empty, the sidecar deleted as "no edits
+// left", and the words the user typed for a paid render gone with a 200 in front of them.
+test('a job the plan named "__proto__" keeps its edit — the sidecar is a null-prototype map', async () => {
+  const runId = await plannedRun();
+  const jobId = '__proto__';
+  const spec = readJson(specOf(runId));
+  spec.kling.jobs[0].job_id = jobId;
+  fs.writeFileSync(specOf(runId), JSON.stringify(spec, null, 2));
+
+  const mine = 'the lamp room, held, nothing moving';
+  const saved = await put(`/api/runs/${runId}/prompt`, { job: jobId, prompt: mine });
+  assert.equal(saved.statusCode, 200, saved.body);
+  assert.equal(saved.json().source, 'override');
+
+  assert.ok(fs.existsSync(sidecarOf(runId)), 'the sidecar survives the save');
+  assert.equal(readJson(sidecarOf(runId)).jobs[jobId].prompt, mine, 'stored under the id the plan used');
+
+  const view = (await get(`/api/runs/${runId}/prompt?job=${encodeURIComponent(jobId)}`)).json();
+  assert.equal(view.source, 'override');
+  assert.ok(view.prompt.includes(mine), 'and it is what a later render would send');
+
+  // Every other job still reads as the plan's — the map answers for own keys only.
+  const other = (await get(`/api/runs/${runId}/prompt?job=${spec.kling.jobs[1]?.job_id ?? 'K2'}`)).json();
+  if (other?.jobId) assert.equal(other.source, 'plan');
+});
+
 test('an over-budget edit is refused WITH the numbers — never silently truncated', async () => {
   const runId = await plannedRun();
   const view = (await get(`/api/runs/${runId}/prompts`)).json().prompts[0];

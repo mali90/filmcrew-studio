@@ -210,6 +210,11 @@ test('the stored sidecar carries the WORDS ONLY — no pin sentence, no front ma
     assert.equal(got.prompt, sidecar.jobs.K1.prompt, 'read back byte for byte');
     assert.equal(overrides.readJobOverride(dir, 'K9'), null, 'a job with no edit reads as null, not as empty text');
     assert.equal(overrides.readJobOverride(pathMod.join(dir, 'nope'), 'K1'), null, 'no sidecar at all is simply no override');
+    // The map a job id is looked up in has NO prototype: on a plain object these resolve to
+    // INHERITED members, and a renderer would carry "an edit" into a job that has none.
+    for (const key of ['__proto__', 'constructor', 'toString', 'valueOf']) {
+      assert.equal(overrides.readJobOverride(dir, key), null, `"${key}" is not an edit`);
+    }
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
