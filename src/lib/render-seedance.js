@@ -31,7 +31,7 @@ import fs from 'node:fs';
 import config from '../../config.js';
 import log from './logger.js';
 import { refLabel } from './render-models.js';
-import { buildSeedanceArgs, fitAudioRef, audioWindowFor, nameOf } from './seedance-args.js';
+import { buildSeedanceArgs, cappedAudioRefs, cappedCombinedRefs, fitAudioRef, audioWindowFor, nameOf } from './seedance-args.js';
 import { appliedSeamModes, chooseSeamMode, planSeamRefs } from './prompt-compose.js';
 import { readJobOverride } from './prompt-overrides.js';
 import { buildSeedanceJobPrompt, seedanceConfigFor, modelKnobs } from './seedance.js';
@@ -77,9 +77,7 @@ async function audioRefsFor(job, spec, dir, caps) {
     if (clip) refs.push({ speaker: sp, clip });
     else log.warn(`[${job.job_id}] no voice ref clip for "${sp}" — ${caps.label} voices the line natively (mint one with: npm run mint-voice -- "${sp}" <clip>)`);
   }
-  if (refs.length > caps.maxAudioRefs) {
-    throw new Error(`job ${job.job_id}: ${refs.length} voiced speakers exceeds ${nameOf(caps)}'s ${caps.maxAudioRefs}-audio-ref cap — split the dialogue across jobs.`);
-  }
+  cappedAudioRefs(caps, job.job_id, refs.length);
   // The model's per-clip window, sized for how many refs share the combined budget. `maxS` is
   // today's budget/N for a model with no declared window; `minS` is 0 unless the model states one
   // (Segmind's Seedance 2.5 422s on a clip under 2s — a dropped ref costs a voice, a rejected
@@ -168,14 +166,9 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
   });
   const voiceRefs = ((plannedImages > 0 || startFrameSrc) && sdCfg.generateAudio && knobs.voiceMode !== 'native')
     ? await audioRefsFor(job, spec, dir, caps) : [];
-  if (caps.maxCombinedRefs != null) {
-    // Only the CAST is checked here: a soft-pinned boundary frame is droppable (planSeamRefs drops
-    // it below), so counting it would fail a render that would have succeeded without its seam.
-    const combined = plannedImages + voiceRefs.length;
-    if (combined > caps.maxCombinedRefs) {
-      throw new Error(`${nameOf(caps)} accepts at most ${caps.maxCombinedRefs} references in total (images + audio + video) — ${combined} supplied.`);
-    }
-  }
+  // Only the CAST is counted here: a soft-pinned boundary frame is droppable (planSeamRefs drops it
+  // below), so counting it would fail a render that would have succeeded without its seam.
+  cappedCombinedRefs(caps, { images: plannedImages, audio: voiceRefs.length });
 
   const castUrls = [];
   const castMeta = [];

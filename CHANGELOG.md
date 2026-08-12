@@ -256,6 +256,15 @@
   newest take's seams.
 - **The prompt preview drops the same too-short voice clips the renderer drops** (under the model's
   per-clip minimum), so the preview's @Audio references always match the wire prompt.
+- **…and it now REFUSES the jobs the renderer refuses, instead of trimming them into a prompt that
+  cannot be sent.** A job with more voiced speakers than the model has @Audio slots was silently
+  sliced to fit, and a cast whose images plus voice clips overran a shared reference budget (fal
+  Seedance 2.5's 50 — say 49 cast images and two voice refs) quietly lost cast references to the
+  layout. Both are hard errors in the renderer, raised before it uploads anything, so the sheet was
+  presenting a ready-looking prompt — citing @Image labels no render would ever send — for a job
+  that was deterministically unrenderable. The preview now shows the renderer's own message on that
+  job ("the render would fail on the same message: …"); both surfaces call the same check, so the
+  wording cannot drift.
 - **The starred-cast top-up no longer holds a reference slot back for the seam frame** — seam pins
   yield to cast references at render (a pin is a nicety, identity is not), so reserving the slot
   only starved a starred character of one view without saving the pin. Voice references are the

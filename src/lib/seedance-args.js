@@ -86,6 +86,32 @@ function capped(caps, kind, n, max) {
 }
 
 /**
+ * The two reference limits a job has to clear BEFORE anything is uploaded — the renderer runs them
+ * ahead of its first paid round trip (an upload round that precedes a doomed submit is money spent
+ * for nothing), and the prompt PREVIEW runs the same two so it can never advertise a prompt the
+ * renderer will refuse to send. Both throw, because refusing is what the renderer really does:
+ * quietly slicing the list to fit would show a job as ready when it is deterministically invalid.
+ *
+ * Split in two because the renderer learns the numbers at two different moments: the voiced-speaker
+ * count before it fits any clip, the combined total once the surviving clips are known.
+ */
+
+/** More voiced speakers than the model has @Audio slots. Named per JOB — the fix is editorial
+ *  (split the dialogue), so the message has to say which job to split. */
+export function cappedAudioRefs(caps, jobId, n) {
+  if (caps?.maxAudioRefs != null && n > caps.maxAudioRefs) {
+    throw new Error(`job ${jobId}: ${n} voiced speakers exceeds ${nameOf(caps)}'s ${caps.maxAudioRefs}-audio-ref cap — split the dialogue across jobs.`);
+  }
+}
+
+/** Individually legal image/audio counts whose SUM overruns a declared combined budget (fal
+ *  Seedance 2.5's 50). Worded by the same `capped` the argument builder uses, so the pre-upload
+ *  refusal, the builder's own late check and the preview all read identically. */
+export function cappedCombinedRefs(caps, { images = 0, audio = 0, video = 0 } = {}) {
+  capped(caps, 'references in total (images + audio + video)', images + audio + video, caps?.maxCombinedRefs);
+}
+
+/**
  * Emit a reference list under the model's own key name. An EMPTY list is omitted entirely (a
  * text-to-video job sends no `image_urls` key at all); a non-empty list for a slot the model does
  * not have (`argMap.<slot>: null`) is a loud throw, never a silent drop — dropping it would ship a
@@ -168,4 +194,4 @@ export function buildSeedanceArgs(intent, caps) {
   return args;
 }
 
-export default { buildSeedanceArgs, firstFrameIsRef, fitAudioRef, audioWindowFor };
+export default { buildSeedanceArgs, firstFrameIsRef, fitAudioRef, audioWindowFor, cappedAudioRefs, cappedCombinedRefs };

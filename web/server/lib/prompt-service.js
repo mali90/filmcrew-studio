@@ -161,7 +161,7 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
     import(path.join(root, 'src/lib/seedance-args.js')),
   ]);
   const { capsFor, normalizeBackend, refLabel } = models;
-  const { fitAudioRef } = seedanceArgs;
+  const { cappedAudioRefs, cappedCombinedRefs, fitAudioRef } = seedanceArgs;
   const { composeKlingStoryboard, composeSeedanceJobPrompt, applyOverride, pinBytesOf, promptFingerprint, chooseSeamMode, planSeamRefs, appliedSeamModes } = compose;
   const { klingPromptSettings, seedancePromptSettings } = promptSettings;
   const { characterGroups, jobSpeakers } = castGroups;
@@ -299,8 +299,14 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
     // Voice references (@AudioN) ride the same gate as the renderer's: something to attach them to,
     // audio on, and a voiceMode that keeps the clip.
     const candidates = (castCount > 0 || hasSeamIn) && audioOn && defaults.seedance.voiceMode !== 'native'
-      ? jobSpeakers(job, spec).filter((sp) => voiceClipFor(sp)).slice(0, caps.maxAudioRefs)
+      ? jobSpeakers(job, spec).filter((sp) => voiceClipFor(sp))
       : [];
+    // …and the same REFUSAL. More voiced speakers than the model has @Audio slots is a hard error in
+    // the renderer (before it fits a single clip), so slicing the list to fit here would present a
+    // ready-looking preview for a job that can never be sent. viewFor turns the throw into the job's
+    // `error` — the same shape an unbuildable prompt already reports, and the sheet already words it
+    // as "the render would fail on the same message".
+    cappedAudioRefs(caps, job.job_id, candidates.length);
     // The renderer's own drop rule, same inputs: window sized by the PRE-drop candidate count, a
     // clip under the per-clip minimum never reaches the wire — so it never reaches the preview.
     const fitCaps = { ...caps, audioBudgetS: caps.audioBudgetS ?? 15 };
@@ -310,6 +316,13 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
     });
     const audioLabels = new Map(voiced.map((sp, i) => [slug(sp), refLabel(caps, 'Audio', i + 1)]));
     const audioRefFor = (sp) => audioLabels.get(slug(sp ?? '')) ?? null;
+
+    // The combined budget (fal 2.5 counts images + audio + video against one cap), checked BEFORE
+    // the seam layout for the same reason the renderer checks it before uploading anything: only the
+    // CAST and the surviving voice clips count, because planSeamRefs drops a soft-pinned boundary
+    // frame rather than overrun. Without this the preview happily drops cast refs the renderer would
+    // never get to drop — it throws first — and `refs` below would cite labels no render can send.
+    cappedCombinedRefs(caps, { images: castCount, audio: voiced.length });
 
     const seam = chooseSeamMode({ caps, castRefCount: castCount, hasSeamIn, hasSeamOut });
     const plan = planSeamRefs({
