@@ -97,13 +97,14 @@
   counts.** `Edit prompt` opens the words themselves — the authored scene body, not the composed
   prompt, because the style directive, the identity clause, the speech rules and the frame pins are
   re-composed on top at render time and re-composing them over themselves would send them twice. The
-  meter draws against `maxBytes − pinBytes`: the room left for *your* words once the system's share
-  is taken out, in UTF-8 **bytes**, so an em dash costs 3 and an emoji 4 — counting characters is how
-  a 480-character edit sails past a 500-byte cap and dies at the provider instead of on screen. Kling
-  gets one textarea and one meter per shot (its cap is per shot; fal rejects a 512-byte segment) and
-  Seedance one for the whole job. Over budget, nothing is ever truncated for you: every byte you
-  typed stays in the box, Save refuses, and the line says by how much — text cut behind your back is
-  text you cannot fix. When the agents revise the plan under a saved edit, a banner says the one
+  meter draws against `maxBytes − pinBytes` wherever the model has a cap: the room left for *your*
+  words once the system's share is taken out, in UTF-8 **bytes**, so an em dash costs 3 and an emoji
+  4 — counting characters is how a 480-character edit sails past a 500-byte cap and dies at the
+  provider instead of on screen. Kling gets one textarea and one meter per shot (its cap is per
+  shot; fal rejects a 512-byte segment) and Seedance one for the whole job — uncapped, so that one
+  counts bytes without a denominator (see *Changed*). Over budget, nothing is ever truncated for
+  you: every byte you typed stays in the box, Save refuses, and the line says by how much — text cut
+  behind your back is text you cannot fix. When the agents revise the plan under a saved edit, a banner says the one
   thing that matters first — *your edit is still what we'll send, word for word* — and offers
   `Refresh from plan` (loads the new text into the editor, **unsaved**) or `Discard edit` (confirmed
   first, and only then). An edit whose segment the agents re-cut away is listed with its text and a
@@ -132,10 +133,11 @@
   the review strip opens one panel under the stage — an inline disclosure, not a modal, because
   reading is neither destructive nor paid. It shows the words themselves, the reference legend that
   rides along with them (`@Element1 = the lighthouse keeper`) and what else is pinned into every
-  prompt for that job, and it meters the text against the model's real budget: `3,880 / 5,000 B`,
-  amber from 90%, and on Kling one counter per shot segment against the 500 bytes fal actually
-  enforces. Every number is the server's own count — nothing is recounted in the browser, because a
-  second implementation of "how big is this prompt" is exactly how a preview starts lying. A version
+  prompt for that job, and it meters the text against the model's real budget where the model has
+  one: on Kling one counter per shot segment against the 500 bytes fal actually enforces
+  (`380 / 500 B`, amber from 90%), and on uncapped Seedance the byte count alone. Every number is
+  the server's own count — nothing is recounted in the browser, because a second implementation of
+  "how big is this prompt" is exactly how a preview starts lying. A version
   picker switches between the current plan and any past take that kept a `prompts.json`, and a past
   take is shown verbatim as it was sent, named with the provider **that take** recorded and the time
   it went out. Read-only in this step: no editing, and nothing here spends.
@@ -143,9 +145,9 @@
   builder the renderer uses.** `GET /api/runs/:id/prompts` (every job of the current plan) and
   `GET /api/runs/:id/prompt?job=K2` return the exact text that would leave for the provider, the
   reference legend it cites (`@Image1`, `@Audio1`, the boundary pins), its UTF-8 byte count, the
-  model's byte budget, and how much of that budget the SYSTEM already owns (front matter, guards,
-  frame pins) so an editor can draw a real meter. This is not a second implementation: the server
-  calls `src/lib/prompt-compose.js` — the same pure function the renderers call — and an
+  model's byte budget (`null` where the model has none), and how much of it the SYSTEM already owns
+  (front matter, guards, frame pins) so an editor can draw a real meter. This is not a second
+  implementation: the server calls `src/lib/prompt-compose.js` — the same pure function the renderers call — and an
   integration test composes the same job independently and compares buffers, because a preview that
   differs from what is sent by a single byte is a lie. `&take=t2` serves that take's `prompts.json`
   verbatim instead: what was actually sent, when, and to which provider, never recomposed (the
