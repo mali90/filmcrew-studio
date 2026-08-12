@@ -325,6 +325,48 @@ describe('ApproveBar', () => {
     expect(screen.getByRole('checkbox')).toBeEnabled();
   });
 
+  // The gate and the options each judge by THEIR OWN vendor's target. A 1080p cut is at fal's
+  // ~1080p plan and nowhere near Segmind's 4k one — reading "already HD" off the picked vendor
+  // disabled the toggle, and the picker that could have switched to the reachable 4K job renders
+  // only while the toggle is on, so the valid upscale had no way in at all.
+  it('offers the 4K upscale on a 1080p cut when Segmind targets it — fal being at target is fal’s fact', async () => {
+    markPaidConfirmed();
+    bothProvidersKeyed({ segmindTarget: 2160 }); // UPSCALE_TARGET_RESOLUTION=4k
+    const captured = captureApprove();
+    const run = makeRun('review');
+    run.manifest!.cuts = [{ id: 'c1', take: 't1', master: '/abs/out/hd.mp4', shortSide: 1080, createdAt: 'now' }];
+    renderReview(<ApproveBar run={run} />);
+
+    const checkbox = screen.getByRole('checkbox');
+    await waitFor(() => expect(checkbox).toBeEnabled());
+    // and the vendor that can actually do the job is the one on offer
+    await screen.findByText(/This cut is 1080p — one Topaz job per clip lifts it toward ~4K\./);
+
+    fireEvent.click(checkbox);
+    const segmind = await screen.findByRole('radio', { name: /Segmind/ });
+    expect(segmind).toHaveAttribute('aria-checked', 'true');
+    // fal has a key but nothing to add here, so it is the option that goes grey — with the reason
+    const fal = screen.getByRole('radio', { name: /fal\.ai/ });
+    expect(fal).toBeDisabled();
+    expect(screen.getByText(/fal\.ai would deliver ~1080p — this cut is already 1080p\./)).toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole('button', { name: /Approve & upscale/ }));
+    await waitFor(() => expect(captured.body).toEqual({ upscale: true, provider: 'segmind' }));
+  });
+
+  it('still disables the toggle when EVERY reachable vendor is at its target', async () => {
+    bothProvidersKeyed(); // both quote ~1080p
+    const run = makeRun('review');
+    run.manifest!.cuts = [{ id: 'c1', take: 't1', master: '/abs/out/hd.mp4', shortSide: 1080, createdAt: 'now' }];
+    renderReview(<ApproveBar run={run} />);
+
+    const checkbox = screen.getByRole('checkbox');
+    await waitFor(() => expect(checkbox).toBeDisabled());
+    expect(screen.getByText(/already 1080p — at or above the 1080p target/i)).toBeInTheDocument();
+    expect(screen.queryByRole('radiogroup', { name: 'Upscale provider' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeEnabled(); // the free finalize stays
+  });
+
   it('a keyless provider renders disabled with the reason in plain words', async () => {
     // the default fixture is honest here already: fal has a key, Segmind does not
     renderReview(<ApproveBar run={makeRun('review')} />);
