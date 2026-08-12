@@ -475,6 +475,57 @@ test('a corrupt overrides sidecar REFUSES the render (409) rather than quietly r
   assert.ok(!fs.existsSync(path.join(dir, 'renders', 't1')), 'the reserved take dir is released, not left to burn a number');
 });
 
+// Readable JSON with a `jobs` object is NOT enough. `{"prompt":123}` or a non-string segment is a
+// shape the CLI's readPromptOverrides refuses — and the child re-reads this very file — so a
+// pre-flight that only checked the container reserved a take, wrote a cost-ledger row and queued a
+// PAID child that then died on the same bytes: a synchronous 409 turned into a failed render plus a
+// bogus take in the run's history. The pre-flight runs the CLI's OWN validator so the two cannot
+// disagree about what "malformed" means.
+test('a malformed override ENTRY is refused BEFORE the take, the ledger row and the queue', async () => {
+  const planned = await plannedRun();
+  const spec = readJson(specOf(planned));
+  const jobId = spec.kling.jobs[0].job_id;
+  const cases = [
+    ['a non-string prompt', { [jobId]: { prompt: 123 } }],
+    ['a non-string segment', { [jobId]: { segments: ['fine', 7] } }],
+    ['segments that are not an array', { [jobId]: { segments: 'one long string' } }],
+    ['an entry with neither prompt nor segments', { [jobId]: { fingerprint: 'f', updatedAt: 'now' } }],
+    ['an entry that is not an object', { [jobId]: 'just the words' }],
+  ];
+  for (const [n, [why, jobs]] of cases.entries()) {
+    const runId = `web-1999010100001${n}-badentry`;
+    const { dir, svc, enqueued } = fakeService(runId, spec);
+    fs.writeFileSync(path.join(dir, 'prompt-overrides.json'), JSON.stringify({ schema: 1, jobs }, null, 2));
+
+    assert.throws(() => svc.render(runId, { mode: 'full' }), (e) => {
+      assert.equal(e.statusCode, 409, why);
+      assert.match(String(e.message), /prompt edits are unusable/i, why);
+      return true;
+    }, why);
+    assert.throws(() => svc.rerenderJob(runId, { jobId }), (e) => e.statusCode === 409, `${why} (re-render takes the same path)`);
+    assert.equal(enqueued.length, 0, `${why}: nothing was queued — a refused render costs exactly nothing`);
+    const m = readManifest(dir);
+    assert.equal(m.takes.length, 0, `${why}: no take pretends to have happened`);
+    assert.equal(m.costLedger.length, 0, `${why}: and no cost-ledger row claims money moved`);
+    assert.ok(!fs.existsSync(path.join(dir, 'renders', 't1')), `${why}: the reserved take dir is released`);
+  }
+});
+
+// The other half of the same rule: what the CLI ACCEPTS, the server must not refuse. A sidecar that
+// parses and validates renders exactly as it always did.
+test('a valid sidecar still renders — the shared validator refuses nothing the CLI would take', async () => {
+  const planned = await plannedRun();
+  const spec = readJson(specOf(planned));
+  const jobId = spec.kling.jobs[0].job_id;
+  const runId = 'web-19990101000019-goodentry';
+  const { dir, svc } = fakeService(runId, spec);
+  fs.writeFileSync(path.join(dir, 'prompt-overrides.json'), JSON.stringify({ schema: 1, jobs: { [jobId]: { segments: ['one', 'two'] } } }, null, 2));
+
+  const { takeId } = svc.render(runId, { mode: 'full' });
+  assert.equal(readManifest(dir).takes.at(-1).promptSource, 'override');
+  assert.ok(fs.existsSync(path.join(dir, 'renders', takeId, 'prompt-overrides.json')));
+});
+
 test('a run with no edits keeps today\'s argv and records promptSource "plan"', async () => {
   const planned = await plannedRun();
   const spec = readJson(specOf(planned));

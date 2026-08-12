@@ -24,6 +24,10 @@ import { castRefCountFor } from '../../../src/lib/seam-rule.js';
 // voices dir read as data), so the canary still holds.
 import { jobSpeakers } from '../../../src/lib/cast-groups.js';
 import { slug } from '../../../src/lib/util.js';
+// The CLI's OWN sidecar validator — the module render.js/render-job.js re-read prompt-overrides.json
+// with. Imported rather than re-stated so the pre-flight below and the child cannot disagree about
+// what "malformed" means; config-free like the rest of this graph (node:fs + node:path, nothing else).
+import { validatePromptOverrides } from '../../../src/lib/prompt-overrides.js';
 import { voiceRefCountsFor } from './voice-refs.js';
 // config-FREE import: run-service is loaded eagerly by app.js, and the demo/e2e server sets FAL_BASE_URL
 // only AFTER its static import chain — importing anything that pulls config.js here would snapshot the
@@ -545,15 +549,21 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
     const unusable = (why) => Object.assign(new Error(`this run's saved prompt edits are unusable (${why})`), {
       statusCode: 409, hint: 'discard the edited prompt (or fix prompt-overrides.json) — rendering the plan instead would spend money on words you replaced',
     });
+    let raw;
+    try { raw = JSON.parse(fs.readFileSync(src, 'utf8')); } catch { throw unusable(`${OVERRIDES_FILE} is not readable JSON`); }
+    // The ENTRIES, not just the container: `{"prompt":123}` or a non-string segment parses fine and
+    // holds a jobs object, but the child re-reads this same file through readPromptOverrides and
+    // refuses it. Checked only for shape here, a take was reserved, a cost-ledger row written and a
+    // PAID child queued to die on the same bytes — a 409 the caller could act on became a failed
+    // render and a bogus take in the run's history. One validator, so the two cannot disagree.
     let jobs;
-    try { jobs = JSON.parse(fs.readFileSync(src, 'utf8'))?.jobs; } catch { throw unusable(`${OVERRIDES_FILE} is not readable JSON`); }
-    if (!jobs || typeof jobs !== 'object' || Array.isArray(jobs)) throw unusable(`${OVERRIDES_FILE} has no jobs object`);
+    try { jobs = validatePromptOverrides(raw, OVERRIDES_FILE).jobs; } catch (e) { throw unusable(String(e?.message ?? e)); }
     const dest = path.join(takeDir, OVERRIDES_FILE);
     try { fs.copyFileSync(src, dest); } catch (e) { throw unusable(`it could not be snapshotted into the take — ${String(e?.message ?? e).slice(0, 80)}`); }
     // 'override' only when an edit really reaches one of the jobs being rendered — a sidecar that
     // only holds K1's edit must not label a K2-only re-render as edited. `Object.hasOwn`, never a
-    // bracket read: `jobs` came off JSON.parse with Object.prototype behind it, so a job the plan
-    // called `toString` would find an inherited function and label the take as edited.
+    // bracket read: the validated map has no prototype, but a job the plan called `hasOwnProperty`
+    // would still shadow the lookup on any map that did — the own-key question is the one being asked.
     return { args: ['--prompt-overrides', dest], promptSource: jobIds.some((id) => Object.hasOwn(jobs, id)) ? 'override' : 'plan' };
   }
 

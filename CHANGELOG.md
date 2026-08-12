@@ -247,6 +247,16 @@
   install commands.
 
 ### Fixed
+- **A broken prompt-edit file is refused before the render, not after you have paid for it.** The
+  check that runs before a render only asked whether the saved edits *parsed* and held a jobs
+  object — so a file whose entries were malformed (a prompt that is a number, a segment list that
+  is not a list of strings) sailed through, the take was reserved, a cost-ledger row was written
+  and a paid render was queued. The render child reads the very same file with the stricter reader
+  the command line has always used, so it then failed on those bytes: what should have been an
+  immediate refusal became a failed render and a take in the run's history that never rendered
+  anything. Both surfaces now read the file through that one reader, so nothing the child would
+  reject can start a render, and nothing it would accept is refused. The refusal still says what is
+  wrong with the file and offers discarding the edit as the way forward.
 - **Approving a probe no longer quotes you for clips it never rendered.** A probe renders the
   first job only, and the upscale runs on exactly the clips that take holds — but the approve
   bar's default quote (the one you get without switching to an older cut) priced *every* job in
