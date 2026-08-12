@@ -340,10 +340,20 @@ export function registerRunRoutes(app) {
     return { runId: run.id, backend, jobs, prompts, orphaned };
   });
 
+  // WHICH job's prompt — from the query on a read, from the body on an edit, and VERBATIM either
+  // way. A job id is whatever the plan called it: the schema asks only that it is non-blank, and the
+  // renderer writes that job's take in a directory of exactly that name, whitespace included.
+  // Trimming it here looked like normalisation but was a rename — the read missed the job, or
+  // answered for whichever job happened to be spelled like the trimmed form, while a save stored the
+  // user's words under a key no render would ever look up. The only question asked of it here is
+  // whether a job was named at all; whether the name is safe to join onto a path is the take scan's
+  // question (isSafeSegment, in prompt-service), and its answer is a plain miss.
+  const jobOf = (req) => String(req.body?.job ?? req.body?.jobId ?? req.query?.job ?? '');
+
   app.get('/api/runs/:id/prompt', async (req, reply) => {
     const run = plannedRunOr409(req.params.id, reply);
     if (!run) return reply;
-    const jobId = String(req.query.job ?? '').trim();
+    const jobId = jobOf(req);
     const jobIds = (run.spec.kling?.jobs ?? []).map((j) => j?.job_id).filter(Boolean);
     if (!jobId) throw Object.assign(new Error('job required'), { statusCode: 400, hint: `?job=<id> — this plan has: ${jobIds.join(', ')}` });
     const take = req.query.take ? String(req.query.take) : null;
@@ -364,7 +374,6 @@ export function registerRunRoutes(app) {
   // Saving an edit is genuinely free: one local file write, nothing submitted, nothing billed. The
   // words are stored VERBATIM in <runDir>/prompt-overrides.json — never the system pins, which are
   // re-composed at render time because they name reference labels this render has not laid out yet.
-  const jobOf = (req) => String(req.body?.job ?? req.body?.jobId ?? req.query?.job ?? '').trim();
 
   app.put('/api/runs/:id/prompt', async (req, reply) => {
     const run = plannedRunOr409(req.params.id, reply);

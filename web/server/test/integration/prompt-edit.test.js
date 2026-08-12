@@ -161,6 +161,44 @@ test('a job the plan named "__proto__" keeps its edit — the sidecar is a null-
   if (other?.jobId) assert.equal(other.source, 'plan');
 });
 
+// Same lesson, different spelling: the schema asks only that a job_id is non-blank, and the renderer
+// makes a directory of that EXACT name — so a plan may call a job " K1 ". Trimming the id at the
+// door was not normalisation but a rename, and the two ends of it disagreed: the read either missed
+// the job or answered for whichever job happened to be spelled like its trimmed form, while a save
+// stored the user's words under a key no render would ever look up.
+test('a job id carrying edge whitespace is read, edited and discarded under the name the plan gave it', async () => {
+  const runId = await plannedRun();
+  const spec = readJson(specOf(runId));
+  const trimmedSpelling = spec.kling.jobs[0].job_id;
+  const jobId = ` ${trimmedSpelling} `;
+  // A second job whose id IS the trimmed spelling: a trim here does not just miss, it aims elsewhere.
+  const neighbourJob = structuredClone(spec.kling.jobs[0]);
+  spec.kling.jobs[0].job_id = jobId;
+  if (spec.kling.jobs[1]) spec.kling.jobs[1].job_id = trimmedSpelling;
+  else spec.kling.jobs.push(neighbourJob);
+  fs.writeFileSync(specOf(runId), JSON.stringify(spec, null, 2));
+
+  const view = await get(`/api/runs/${runId}/prompt?job=${encodeURIComponent(jobId)}`);
+  assert.equal(view.statusCode, 200, view.body);
+  assert.equal(view.json().jobId, jobId, 'the id travels to the plan lookup exactly as it was asked for');
+
+  const mine = 'the lamp room, held, nothing moving';
+  const saved = await put(`/api/runs/${runId}/prompt`, { job: jobId, prompt: mine });
+  assert.equal(saved.statusCode, 200, saved.body);
+  assert.equal(readJson(sidecarOf(runId)).jobs[jobId].prompt, mine, 'stored under the id the plan used');
+  const neighbour = (await get(`/api/runs/${runId}/prompt?job=${trimmedSpelling}`)).json();
+  assert.equal(neighbour.jobId, trimmedSpelling);
+  assert.equal(neighbour.source, 'plan', 'the job spelled like the trimmed form was never touched');
+
+  const gone = await del(`/api/runs/${runId}/prompt?job=${encodeURIComponent(jobId)}`);
+  assert.equal(gone.statusCode, 200, gone.body);
+  assert.ok(!fs.existsSync(sidecarOf(runId)), 'and the discard found the same edit the save wrote');
+
+  // Naming no job at all is still the 400 that tells you what the plan has.
+  const bare = await get(`/api/runs/${runId}/prompt?job=`);
+  assert.equal(bare.statusCode, 400, bare.body);
+});
+
 test('an over-budget edit is refused WITH the numbers — never silently truncated', async () => {
   const runId = await plannedRun();
   const view = (await get(`/api/runs/${runId}/prompts`)).json().prompts[0];
