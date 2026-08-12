@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { server, http, HttpResponse } from '../../../test/msw';
-import { makeRun, promptView } from '../../../test/fixtures';
+import { makeRun, promptView, SPEC } from '../../../test/fixtures';
 import { renderReview, markPaidConfirmed, clearPaidState } from './test-helpers';
 import { ReviewStage } from './ReviewStage';
 
@@ -202,6 +202,62 @@ describe('ReviewStage', () => {
     expect(notice.textContent).toMatch(/\d+:\d{2}/); // ticking elapsed from activeJob.startedAt
     // the stage falls back to the cut's own file while the latest master is rebuilt
     expect(screen.getByTestId('master-video')).toHaveAttribute('src', '/api/media/out/ocean%20v1.mp4');
+  });
+
+  // A cascade renders several segments into ONE take, so the take's render.json exists (and holds
+  // only the finished children) from the first landing onward. The scan then stops synthesizing the
+  // take's pending jobs, and the segment actually on the wire is in NO server-sent list.
+  it('keeps naming the working segment, and the whole cut on the strip, mid-cascade', () => {
+    const run = makeRun('review');
+    run.status = 'rendering';
+    run.spec = {
+      ...SPEC,
+      shots: [...SPEC.shots],
+      kling: { ...SPEC.kling, jobs: [
+        { job_id: 'K1', shots: ['S1'], elements: ['subject'] },
+        { job_id: 'K2', shots: ['S2'], elements: ['subject'] },
+        { job_id: 'K3', shots: ['S3'], elements: ['subject'] },
+      ] },
+    };
+    run.manifest!.activeJob = { kind: 'render-job', pid: 7, startedAt: new Date(Date.now() - 9000).toISOString() };
+    // K2 was re-rendered with a cascade, so K2 and K3 are being replaced in take t2. K2 has landed
+    // and written render.json; K3 is on the wire right now.
+    run.manifest!.takes = [
+      { id: 't1', mode: 'full', revision: null, createdAt: '2026-07-04T10:00:00.000Z' },
+      { id: 't2', mode: 'job', jobId: 'K2', cascade: true, revision: null, createdAt: '2026-07-04T11:00:00.000Z' },
+    ];
+    run.manifest!.jobClips = { K1: '/abs/runs/x/renders/t1/K1/clip.mp4', K2: '/abs/runs/x/renders/t2/K2/clip.mp4' };
+    run.latestRender!.masterUrl = null;
+    run.latestRender!.jobs = [
+      { jobId: 'K2', clip: '/abs/runs/x/renders/t2/K2/clip.mp4', clipExists: true, clipUrl: '/api/media/runs/x/renders/t2/K2/clip.mp4', error: null },
+    ];
+
+    renderReview(<Stage run={run} />);
+
+    expect(screen.getByTestId('rerender-inflight-notice').textContent).toContain('Re-rendering K3 —');
+    // …and the strip is the whole cut, not the one clip this partial take happens to hold
+    for (const id of ['K1', 'K2', 'K3']) expect(screen.getByTestId(`segment-tile-${id}`)).toBeInTheDocument();
+    // K1 was never in the cascade's path, so it is still a finished clip; K3 is the one rendering.
+    expect(within(screen.getByTestId('segment-tile-K3')).getByText('rendering')).toBeInTheDocument();
+    expect(within(screen.getByTestId('segment-tile-K1')).queryByText('rendering')).not.toBeInTheDocument();
+  });
+
+  it('does not second-guess the take the scan is still synthesizing', () => {
+    // Before the cascade's FIRST child lands there is no render.json, so the scan already sends the
+    // full plan with the targeted jobs blank — the server's list is used verbatim.
+    const run = makeRun('review');
+    run.status = 'rendering';
+    run.manifest!.activeJob = { kind: 'render-job', pid: 7, startedAt: new Date().toISOString() };
+    run.manifest!.takes = [
+      { id: 't1', mode: 'full', revision: null, createdAt: '2026-07-04T10:00:00.000Z' },
+      { id: 't2', mode: 'job', jobId: 'K1', cascade: true, revision: null, createdAt: '2026-07-04T11:00:00.000Z' },
+    ];
+    run.latestRender!.jobs = [
+      { jobId: 'K1', clip: null, clipExists: false, clipUrl: null, error: null },
+      { jobId: 'K2', clip: null, clipExists: false, clipUrl: null, error: null },
+    ];
+    renderReview(<Stage run={run} />);
+    expect(screen.getByTestId('rerender-inflight-notice').textContent).toContain('Re-rendering K1 —');
   });
 
   it('shows no in-flight banner when nothing is rendering', () => {

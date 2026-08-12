@@ -60,13 +60,43 @@ export function ReviewStage({ run, cutId, setCutId }: {
     onError: (e) => toast({ kind: 'error', text: e instanceof ApiClientError ? `${e.message} — ${e.hint}` : e.message }),
   });
 
-  const jobs = run.latestRender?.jobs ?? [];
+  // The PLAN's job list — the cut in full, whatever any single take happens to contain.
+  const jobIds = useMemo(() => (run.spec?.kling?.jobs ?? []).map((j) => j.job_id), [run.spec]);
+  const rendered = run.latestRender?.jobs ?? [];
 
   // A segment re-render in flight (U1): the page keeps this stage mounted for job-mode renders, so
   // the banner slot says which segment is being replaced and that the video below is still the
-  // CURRENT cut. The working segment is the one whose clip has neither landed nor failed.
+  // CURRENT cut.
   const activeJob = run.manifest?.activeJob;
   const rerenderInFlight = activeJob?.kind === 'render-job';
+
+  // A CASCADE re-renders several segments into ONE take, writing render.json after each child. From
+  // the moment the first child lands, that take counts as complete, so the run scan stops
+  // synthesizing its pending jobs and `latestRender.jobs` holds only the segments already finished:
+  // the one actually on the wire is absent, and so is every segment the cascade has not reached.
+  // The plan knows the whole cut and the take record knows where the cascade began, so the strip is
+  // rebuilt from those until it finishes — a segment this take is replacing but has not delivered
+  // reads as pending, everything else keeps the clip the manifest last recorded for it. (Its
+  // thumbnail is the one casualty: a media URL is the server's to mint, and the manifest carries
+  // only the path.)
+  const jobs = useMemo(() => {
+    if (!rerenderInFlight || !jobIds.length) return rendered;
+    const byId = new Map(rendered.map((j) => [j.jobId, j]));
+    if (jobIds.every((id) => byId.has(id))) return rendered; // the scan is still synthesizing this take
+    const from = lastTake?.mode === 'job' && lastTake.jobId ? jobIds.indexOf(lastTake.jobId) : -1;
+    const replacing = (id: string) => from !== -1
+      && (lastTake?.cascade === true ? jobIds.indexOf(id) >= from : id === lastTake?.jobId);
+    const clips = run.manifest?.jobClips ?? {};
+    return jobIds.map((id) => byId.get(id) ?? {
+      jobId: id,
+      clip: replacing(id) ? null : clips[id] ?? null,
+      clipExists: replacing(id) ? false : Boolean(clips[id]),
+      clipUrl: null,
+      error: null,
+    });
+  }, [rerenderInFlight, jobIds, rendered, lastTake, run.manifest?.jobClips]);
+
+  // The working segment is the first one whose clip has neither landed nor failed.
   const workingJobId = rerenderInFlight ? jobs.find((j) => !j.clipExists && !j.error)?.jobId : undefined;
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -77,7 +107,6 @@ export function ReviewStage({ run, cutId, setCutId }: {
 
   // every take that PRODUCED A CLIP of this job counts — the full render's clip is a take too
   // (counting only job-mode takes once said "2 takes" for a job with three clips on disk)
-  const jobIds = (run.spec?.kling?.jobs ?? []).map((j) => j.job_id);
   const jobTakeCount = (jobId: string) =>
     (run.manifest?.takes ?? []).filter((t) =>
       t.mode === 'full'
