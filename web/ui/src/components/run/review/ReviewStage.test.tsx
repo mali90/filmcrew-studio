@@ -186,6 +186,10 @@ describe('ReviewStage', () => {
     const run = makeRun('review');
     run.status = 'rendering';
     run.manifest!.activeJob = { kind: 'render-job', pid: 7, startedAt: new Date(Date.now() - 42000).toISOString() };
+    run.manifest!.takes = [
+      { id: 't1', mode: 'full', revision: null, createdAt: '2026-07-04T09:00:00.000Z' },
+      { id: 't2', mode: 'job', jobId: 'K2', revision: null, createdAt: '2026-07-04T10:00:00.000Z' },
+    ];
     // a distinct basename proves the fallback: latestRender.masterUrl is gone, the cut's file is not
     run.manifest!.cuts = [{ id: 'c1', take: 't1', master: '/abs/out/ocean v1.mp4', createdAt: '2026-07-04T09:05:00.000Z' }];
     run.latestRender!.masterUrl = null;
@@ -258,6 +262,53 @@ describe('ReviewStage', () => {
     ];
     renderReview(<Stage run={run} />);
     expect(screen.getByTestId('rerender-inflight-notice').textContent).toContain('Re-rendering K1 —');
+  });
+
+  // `activeJob` names only the MIDDLE of a re-render. Before the child spawns (the job waits behind
+  // another run — the queue is global, only the spend lock is per run) there is no active job at
+  // all, and the reserved take has no render.json, so the scan sends no render either. The take
+  // record is what still names the interval.
+  it('holds the stage while the re-render is only QUEUED — no active job, no take on disk yet', () => {
+    const run = makeRun('review');
+    run.status = 'rendering';
+    run.manifest!.activeJob = null;
+    run.manifest!.takes = [
+      { id: 't1', mode: 'full', revision: null, createdAt: '2026-07-04T10:00:00.000Z' },
+      { id: 't2', mode: 'job', jobId: 'K2', revision: null, createdAt: '2026-07-04T11:00:00.000Z' },
+    ];
+    run.manifest!.jobClips = { K1: '/abs/runs/x/renders/t1/K1/clip.mp4', K2: '/abs/runs/x/renders/t1/K2/clip.mp4' };
+    run.latestRender = null; // a reserved take with no render.json — the server hands the UI nothing
+
+    renderReview(<Stage run={run} />);
+
+    expect(screen.getByTestId('rerender-inflight-notice').textContent).toContain('Re-rendering K2 —');
+    // the strip is still the whole cut, with only the segment being replaced blank
+    for (const id of ['K1', 'K2']) expect(screen.getByTestId(`segment-tile-${id}`)).toBeInTheDocument();
+    expect(within(screen.getByTestId('segment-tile-K2')).getByText('rendering')).toBeInTheDocument();
+    // no child, so no elapsed clock to quote — the sentence stands on its own
+    expect(screen.getByTestId('rerender-inflight-notice').textContent).not.toMatch(/\d+:\d{2}/);
+  });
+
+  // …and the tail: the clips are all back, and the free stitch that rebuilds the master is what is
+  // left. Naming a segment here would name one that is already finished.
+  it('holds the stage through the free stitch, and says THAT is what is happening', () => {
+    const run = makeRun('review');
+    run.status = 'rendering';
+    run.manifest!.activeJob = { kind: 'assemble', pid: 8, startedAt: new Date(Date.now() - 3000).toISOString() };
+    run.manifest!.takes = [
+      { id: 't1', mode: 'full', revision: null, createdAt: '2026-07-04T10:00:00.000Z' },
+      { id: 't2', mode: 'job', jobId: 'K2', revision: null, createdAt: '2026-07-04T11:00:00.000Z' },
+    ];
+    run.latestRender!.masterUrl = null; // the master is being rebuilt right now
+
+    renderReview(<Stage run={run} />);
+
+    const notice = screen.getByTestId('rerender-inflight-notice');
+    expect(notice.textContent).toContain(
+      "Stitching the new cut — the clips are back; you're watching the current cut until the new master is ready.",
+    );
+    expect(notice.textContent).not.toContain('undefined');
+    expect(screen.getByTestId('master-video')).toHaveAttribute('src', '/api/media/out/ocean.mp4');
   });
 
   it('shows no in-flight banner when nothing is rendering', () => {

@@ -160,8 +160,15 @@ export default function RunPage() {
       // A job-mode re-render replaces ONE clip of a cut the user is reviewing — tearing the review
       // room down for it would take away the very video they just paid to improve (U1). Full
       // renders, probes and first renders replace everything, so JobCards stays the honest view.
+      //
+      // The re-render is ONE interval, and `activeJob` names only its middle: it is empty while the
+      // job waits behind another run's child (the queue is global, only the SPEND lock is per run),
+      // and it reads `assemble` while the free stitch that follows rebuilds the master. Keyed on it,
+      // the stage was torn down and rebuilt on both sides of the model process. The take being
+      // worked on is what actually names the interval, and `rerender-job` records its mode before it
+      // enqueues anything — so a full render or a probe can never be mistaken for one.
       const segmentRerender = run.phase === 'render'
-        && run.manifest?.activeJob?.kind === 'render-job'
+        && run.manifest?.takes?.at(-1)?.mode === 'job'
         && (run.manifest?.cuts?.length ?? 0) > 0;
       main = run.phase === 'deliver' ? (
         <>

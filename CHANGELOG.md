@@ -319,6 +319,14 @@
   refuses with the reason on it ("You're watching an older cut. A re-render always rebuilds the
   latest one, so switch back to it first"), the same way it already refuses while a render is in
   flight. Reading a prompt stays free from either cut.
+- **The review room now survives the whole re-render, not just the middle of it.** A segment
+  re-render is three intervals — the wait in the queue behind another run, the model process, and
+  the free stitch that rebuilds the master — and only the middle one has a running child. Keyed on
+  that child, the page tore the review stage down and rebuilt it on both sides of it: the video you
+  paid to improve disappeared into a job-card list twice per re-render. The page and the stage now
+  read the take being worked on, which exists from the moment the re-render is accepted, so the cut
+  keeps playing throughout; while the clips are back and only the stitch is left, the banner says
+  that ("Stitching the new cut …") instead of naming a segment that has already finished.
 - **Starring a cast now sends the character's FULL reference set, not one image each.** A run with
   three starred characters — each carrying seven reference views — could reach a Seedance render
   with a single image per character: the Casting agent's "pick the smallest set" guidance biased it

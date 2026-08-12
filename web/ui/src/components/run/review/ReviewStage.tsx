@@ -66,9 +66,11 @@ export function ReviewStage({ run, cutId, setCutId }: {
 
   // A segment re-render in flight (U1): the page keeps this stage mounted for job-mode renders, so
   // the banner slot says which segment is being replaced and that the video below is still the
-  // CURRENT cut.
+  // CURRENT cut. Read from the same fact the page mounts on — the last take is a job take and the
+  // run is still working — so this covers the whole interval, including the queue wait before the
+  // child spawns and the free stitch after it. `activeJob` names only the middle of it.
   const activeJob = run.manifest?.activeJob;
-  const rerenderInFlight = activeJob?.kind === 'render-job';
+  const rerenderInFlight = run.status === 'rendering' && lastTake?.mode === 'job';
 
   // A CASCADE re-renders several segments into ONE take, writing render.json after each child. From
   // the moment the first child lands, that take counts as complete, so the run scan stops
@@ -134,7 +136,12 @@ export function ReviewStage({ run, cutId, setCutId }: {
           data-testid="rerender-inflight-notice"
         >
           <p className="text-dense text-ink">
-            Re-rendering {workingJobId} — you're watching the current cut; the new clip takes its place here when it lands.
+            {workingJobId
+              // Once every clip of the take has landed the model work is over and the free stitch is
+              // what is left. Naming a segment there would name one that is already done (and, before
+              // this had an answer, `undefined`).
+              ? <>Re-rendering {workingJobId} — you're watching the current cut; the new clip takes its place here when it lands.</>
+              : <>Stitching the new cut — the clips are back; you're watching the current cut until the new master is ready.</>}
           </p>
           {activeJob?.startedAt && (
             <span className="tnum text-caption text-ink-muted">{elapsed(now - new Date(activeJob.startedAt).getTime())}</span>
