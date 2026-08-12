@@ -538,6 +538,27 @@ test('upscale estimate is cut-aware: prices the selected cut’s jobs and reject
   assert.equal((await get(`/api/runs/${runId}/estimate?mode=upscale&cut=c9`)).statusCode, 400);
 });
 
+test('the DEFAULT upscale estimate prices the latest TAKE, not the whole plan (a probe holds one clip)', { skip: FF ? false : 'ffmpeg not installed' }, async () => {
+  // Omitting `cut` is the ApproveBar's normal path (it means "the latest selection"), and approve
+  // upscales exactly the clips the latest take's render.json lists. A probe renders only the first
+  // job, so pricing every job in the spec quoted MORE than the button would bill — an over-quote is
+  // as dishonest as an under-quote, and both are fixed the same way: price what the take holds.
+  const { runId } = (await post('/api/runs', { idea: 'price the probe TWO-JOB', backend: 'kling', aspect: '9:16', durationS: null })).json();
+  await waitForStatus(runId, 'plan-ready');
+  const planned = (await get(`/api/runs/${runId}`)).json().run.spec.kling.jobs.map((j) => j.job_id);
+  assert.deepEqual(planned, ['K1', 'K2'], 'the probe brief plans two jobs — a probe renders only the first');
+
+  await post(`/api/runs/${runId}/render`, { mode: 'probe' });
+  const run = await waitForStatus(runId, 'review');
+  assert.deepEqual(run.latestRender.jobs.map((j) => j.jobId), ['K1'], 'the probe take holds one clip');
+
+  const dflt = (await get(`/api/runs/${runId}/estimate?mode=upscale`)).json();
+  assert.deepEqual(dflt.perJob.map((p) => p.jobId), ['K1'], 'the default quote prices only the clip the probe rendered');
+  // …and it agrees with the explicit cut over that same take, which is the ApproveBar's other path
+  const c1 = (await get(`/api/runs/${runId}/estimate?mode=upscale&cut=c1`)).json();
+  assert.equal(dflt.totalUsd, c1.totalUsd, 'implicit latest and explicit c1 name one take — and one price');
+});
+
 test('SSE Last-Event-ID: reconnect replays only the log lines after the cursor', async () => {
   const { runId } = (await post('/api/runs', { idea: 'resume my log', backend: 'kling', aspect: '9:16', durationS: null })).json();
   await waitForStatus(runId, 'plan-ready');

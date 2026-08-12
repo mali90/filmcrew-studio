@@ -425,26 +425,37 @@ export function registerRunRoutes(app) {
       const provider = picked ?? readUpscaleProvider(app.ctx.envRoot, run.backend, app.ctx.childEnv);
       const upscaleOpts = { provider };
       const targetShortSide = readUpscaleTargetShortSide(app.ctx.envRoot, run.backend, app.ctx.childEnv, provider);
-      // no cut ⇒ the latest render (approve's default): price every job in the current spec
+      // A take is upscaled clip by clip, so its price is what THAT take actually holds: priced by
+      // its own saved spec (a pre-revision take may rename jobs or change durations) and only the
+      // jobs that produced a clip — assembleRun re-reads the take's render.json and finishRender
+      // upscales exactly those paths, skipping the clipless/failed ones.
+      const clipsOfTake = (takeDir) => {
+        const readTakeJson = (name) => {
+          try { return JSON.parse(fs.readFileSync(path.join(takeDir, name), 'utf8')); } catch { return null; }
+        };
+        const takeSpec = readTakeJson('spec.json') ?? run.spec; // the spec the take was rendered from
+        return ((readTakeJson('render.json')?.jobs) ?? [])
+          .filter((j) => j.clip) // only jobs Topaz will actually process
+          .map((j) => { const jobId = j.jobId ?? j.job; return { jobId, seconds: jobSeconds(takeSpec, jobId) }; });
+      };
+      // no cut ⇒ the LATEST RENDER take — the one approve's default upscales (approve reads it the
+      // same way). A probe take holds a single clip, so quoting every job in the spec named a charge
+      // bigger than the bill; over-quoting a paid button is the same lie as under-quoting it. Only
+      // when there is no finished take to read (nothing rendered yet, or the current one is still
+      // rendering — approve answers 409 in both) does the answer fall back to the plan, where the
+      // honest reading is "what upscaling a complete render would cost".
       if (!cut) {
-        const clips = (run.spec.kling?.jobs ?? []).map((j) => ({ jobId: j.job_id, seconds: jobSeconds(run.spec, j.job_id) }));
+        const takeDir = run.latestRender?.inProgress ? null : run.latestRender?.dir;
+        const clips = takeDir
+          ? clipsOfTake(takeDir)
+          : (run.spec.kling?.jobs ?? []).map((j) => ({ jobId: j.job_id, seconds: jobSeconds(run.spec, j.job_id) }));
         return { ...estimateUpscale(clips, upscaleOpts), targetShortSide };
       }
-      // a specific cut upscales exactly the clips in ITS take dir, priced by THAT take's own saved
-      // spec (a pre-revision cut may rename jobs or change durations) and only jobs that actually
-      // produced a clip (finishRender skips clipless/failed jobs) — so the price matches Topaz's work.
+      // a specific cut upscales exactly the clips in ITS take dir
       if (!/^c\d{1,4}$/.test(String(cut))) throw Object.assign(new Error(`"${cut}" is not a cut id`), { statusCode: 400, hint: 'cut ids look like c1, c2, …' });
       const chosen = (run.manifest?.cuts ?? []).find((c) => c.id === cut);
       if (!chosen) throw Object.assign(new Error(`cut "${cut}" not found`), { statusCode: 400, hint: 'pick a cut shown in review' });
-      const readTakeJson = (name) => {
-        const p = safeChild(runsDir, req.params.id, 'renders', String(chosen.take), name);
-        return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf8')) : null;
-      };
-      const takeSpec = readTakeJson('spec.json') ?? run.spec; // the spec the take was rendered from
-      const clips = ((readTakeJson('render.json')?.jobs) ?? [])
-        .filter((j) => j.clip) // only jobs Topaz will actually process
-        .map((j) => { const jobId = j.jobId ?? j.job; return { jobId, seconds: jobSeconds(takeSpec, jobId) }; });
-      return { ...estimateUpscale(clips, upscaleOpts), targetShortSide };
+      return { ...estimateUpscale(clipsOfTake(safeChild(runsDir, req.params.id, 'renders', String(chosen.take))), upscaleOpts), targetShortSide };
     }
     return estimateRender(run.spec, {
       backend: run.backend ?? 'kling',

@@ -247,6 +247,15 @@
   install commands.
 
 ### Fixed
+- **Approving a probe no longer quotes you for clips it never rendered.** A probe renders the
+  first job only, and the upscale runs on exactly the clips that take holds — but the approve
+  bar's default quote (the one you get without switching to an older cut) priced *every* job in
+  the plan, so a two-job probe advertised roughly twice the charge Topaz would bill. An
+  over-quote is the same dishonesty as an under-quote: the price now comes from the latest
+  render take itself — its own saved spec for the durations, and only the jobs that actually
+  produced a clip — which is how picking a cut explicitly has always been priced. A full render
+  quotes exactly what it did before; a probe, or a take some jobs failed in, now quotes what you
+  will really pay.
 - **A shot written for one prop can no longer be sent the entire cast.** When a plan's references
   do not fit the model's budget, the engine trims the roster — and if what it took was the last
   reference a job had explicitly named, that job's list was left empty. An empty list means "use
