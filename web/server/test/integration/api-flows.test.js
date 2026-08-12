@@ -490,6 +490,11 @@ async function makeTwoCutRun(idea) {
 test('approve honors the selected cut: finalizing c1 records c1 (not the latest c2)', { skip: FF ? false : 'ffmpeg not installed' }, async () => {
   const { runId, cuts } = await makeTwoCutRun('finalize the first cut');
 
+  // guards, while the run is still open: a bad or unknown cut id is rejected 400 (never silently
+  // falls back to latest)
+  assert.equal((await post(`/api/runs/${runId}/approve`, { cut: '../etc' })).statusCode, 400);
+  assert.equal((await post(`/api/runs/${runId}/approve`, { cut: 'c9' })).statusCode, 400);
+
   const fin = await post(`/api/runs/${runId}/approve`, { cut: 'c1' });
   assert.equal(fin.statusCode, 200, fin.body); // plain finalize is instant
   let m = (await get(`/api/runs/${runId}`)).json().run.manifest;
@@ -497,9 +502,11 @@ test('approve honors the selected cut: finalizing c1 records c1 (not the latest 
   assert.equal(m.approved.final, cuts[0].master, 'the delivered file is c1’s exact master');
   assert.equal(m.approved.upscaled, false);
 
-  // guards: a bad or unknown cut id is rejected 400 (never silently falls back to latest)
-  assert.equal((await post(`/api/runs/${runId}/approve`, { cut: '../etc' })).statusCode, 400);
-  assert.equal((await post(`/api/runs/${runId}/approve`, { cut: 'c9' })).statusCode, 400);
+  // A delivered run does not re-deliver on its own: switching the finalized cut is a deliberate
+  // reopen, not a second POST from whatever tab is still open (reopen-finalize.test.js owns the
+  // duplicate-history half of that rule).
+  assert.equal((await post(`/api/runs/${runId}/approve`, {})).statusCode, 409);
+  assert.equal((await post(`/api/runs/${runId}/reopen`, {})).statusCode, 200);
 
   // omitting the cut still finalizes the latest — today's behavior is preserved
   assert.equal((await post(`/api/runs/${runId}/approve`, {})).statusCode, 200);

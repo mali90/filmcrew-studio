@@ -333,6 +333,13 @@
   at all. The renderer then warns and renders without cross-job continuity, but the reply still said
   the join was pinned, so the dialog sold a seam the take was never going to have and the strip
   reported it broken afterwards for no visible reason. The reply now states what was applied.
+- **Approving a run that is already delivered is refused, instead of quietly re-delivering it.**
+  Every other spending route already refused a finalized run; approve did not, so a stale tab or a
+  retried request appended a duplicate entry to the delivery history and stamped the genuine final
+  as "replaced" by something that had replaced nothing — and, with the upscale toggle on, billed
+  Topaz a second time for a master already on disk. It now answers 409 and names *reopen* as the way
+  forward, exactly as `render`, `revise`, `rerender-job` and `assemble` do; after a reopen, a second
+  delivery works as before and lands as exactly one more final.
 - **Starring a cast now sends the character's FULL reference set, not one image each.** A run with
   three starred characters — each carrying seven reference views — could reach a Seedance render
   with a single image per character: the Casting agent's "pick the smallest set" guidance biased it

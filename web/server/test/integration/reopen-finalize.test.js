@@ -103,6 +103,9 @@ test('every spending action 409s on a finalized run — the UI is no longer the 
     [`/api/runs/${runId}/revise`, { feedback: 'warmer ending', scope: 'all' }],
     [`/api/runs/${runId}/rerender-job`, { jobId: 'K1' }],
     [`/api/runs/${runId}/assemble`, {}],
+    // Approving again is a spending action too — it is the one that bills Topaz a second time for
+    // a master already delivered.
+    [`/api/runs/${runId}/approve`, { upscale: true }],
     // Replanning is the same class of action as revising, and strictly worse on a delivered run: a
     // full engine pass (LLM spend) that REWRITES spec.json under a file the user already has, which
     // would desynchronise the prompt views, the lineage and the finals history from that file.
@@ -169,6 +172,32 @@ test('a reopened run is NOT complete until it is approved again', PENDING, async
   assert.notEqual(m.finals[0].final, m.finals[1].final, 'the second approval writes a NEW file, never over the first');
   for (const f of m.finals) assert.ok(fs.existsSync(f.final), `${f.final} still on disk`);
   assert.equal(m.finals[0].replacedBy, m.finals[1].id, 'the superseded delivery says what replaced it');
+});
+
+// The approve route was the hole in the guard: free or not, a second approval of a master already
+// delivered appends a duplicate `finals` entry and stamps the genuine prior delivery `replacedBy`
+// something that replaced nothing. A stale tab reloading, or a retried POST, is all it takes.
+test('approving twice needs a reopen in between — the delivery history never duplicates itself', PENDING, async () => {
+  const runId = await approvedRun('a fifth keeper, asked twice for the same light');
+  const before = manifestOf(runId);
+
+  const again = await post(`/api/runs/${runId}/approve`, { upscale: false });
+  assert.equal(again.statusCode, 409, `a delivered run re-approved must refuse (got ${again.statusCode}: ${again.body})`);
+  assert.match(again.json().hint, /reopen/i, 'and name the way forward');
+
+  const after = manifestOf(runId);
+  assert.equal(after.finals.length, before.finals.length, 'the refused approval wrote no delivery');
+  assert.equal(after.finals.at(-1).replacedBy ?? null, null, 'and never marked the real one superseded');
+  assert.deepEqual(after.approved, before.approved, '`approved` is byte-for-byte where it was');
+
+  // …and the deliberate path still works: reopening is what makes a second delivery legitimate,
+  // and it lands as exactly ONE more entry.
+  assert.equal((await post(`/api/runs/${runId}/reopen`, {})).statusCode, 200);
+  assert.equal((await post(`/api/runs/${runId}/approve`, { upscale: false })).statusCode, 200);
+  const redelivered = manifestOf(runId);
+  assert.equal(redelivered.finals.length, before.finals.length + 1, 'one reopen, one more delivery');
+  assert.equal(redelivered.finals.at(-2).replacedBy, redelivered.finals.at(-1).id, 'and the old one says what replaced it');
+  assert.equal((await get(`/api/runs/${runId}`)).json().run.status, 'complete');
 });
 
 test('reopening twice is idempotent-ish: it never loses a final and never double-counts', PENDING, async () => {

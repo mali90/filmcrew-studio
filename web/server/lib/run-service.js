@@ -875,6 +875,12 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
   function approve(runId, { upscale = false, cut, provider = null } = {}) {
     const dir = dirFor(runId);
     const run = scanRun(dir, { isAlive });
+    // A delivered run is done until it is reopened, and approving is no exception — this was the
+    // one spending route that omitted the guard. A stale tab or a retried request re-delivering the
+    // SAME master runs recordFinal again: `finals` grows a duplicate entry and the genuine prior
+    // delivery is stamped `replacedBy` something that replaced nothing. Ordered first, exactly as
+    // the other routes order it, so the answer names the way forward instead of a phantom conflict.
+    assertNotFinalized(runId);
     // Never approve while paid work runs: finalizing an older cut would mark the run complete and
     // hide the re-render/upscale the reviewer is still paying for (this covers the plain path too,
     // not just the upscale enqueue below).
