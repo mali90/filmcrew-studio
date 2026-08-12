@@ -96,6 +96,35 @@ export function voiceRefsRide({ castRefCount = 0, hasSeamIn = false, hasSeamOut 
   return conditioned && Boolean(audioOn) && voiceMode !== 'native';
 }
 
+/**
+ * WHICH of a job's speakers ride: the gate above, then the ones with a registered voice clip.
+ * Deliberately NOT sliced to the model's @Audio cap — what an over-cap job does is the caller's
+ * rule, and the callers disagree on purpose (the renderer and the preview refuse such a job; the
+ * budget layers only count what will ride).
+ * @param {{speakers?:string[], hasClip?:(speaker:string)=>unknown}} p  plus voiceRefsRide's own args
+ * @returns {string[]}
+ */
+export function voiceRefSpeakers({ speakers = [], hasClip = () => true, ...ride } = {}) {
+  return voiceRefsRide(ride) ? speakers.filter((sp) => Boolean(hasClip(sp))) : [];
+}
+
+/**
+ * How many references those clips spend out of a COMBINED budget (fal 2.5 counts images + audio +
+ * video against one cap), capped by the model's own @Audio slots — `planSeamRefs`' `otherRefCount`
+ * for a Seedance job.
+ *
+ * Nothing ever drops a voice clip: the pre-upload check THROWS the moment images + audio pass the
+ * combined cap. A soft boundary pin, by contrast, is given up (SEAM_PRIORITY) — so every surface
+ * that promises a pin before the user pays has to subtract this first, or it sells continuity the
+ * renderer deterministically drops. Counted here, once, for the engine's roster budget
+ * (topUpStarredElements), the re-render reply and the dialog that starts it.
+ * @param {{caps?:object}} p  plus voiceRefSpeakers' own args
+ * @returns {number}
+ */
+export function voiceRefDemand({ caps, ...p } = {}) {
+  return Math.min(voiceRefSpeakers(p).length, Number(caps?.maxAudioRefs) || 0);
+}
+
 /** Reject an unlisted enum value loudly, naming the model's legal set (no cap ⇒ no opinion). */
 function oneOf(caps, kind, value, allowed) {
   if (!allowed?.length || allowed.includes(value)) return value;
@@ -216,4 +245,4 @@ export function buildSeedanceArgs(intent, caps) {
   return args;
 }
 
-export default { buildSeedanceArgs, firstFrameIsRef, fitAudioRef, audioWindowFor, voiceRefsRide, cappedAudioRefs, cappedCombinedRefs };
+export default { buildSeedanceArgs, firstFrameIsRef, fitAudioRef, audioWindowFor, voiceRefsRide, voiceRefSpeakers, voiceRefDemand, cappedAudioRefs, cappedCombinedRefs };

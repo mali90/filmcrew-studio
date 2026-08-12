@@ -161,11 +161,16 @@ export function pinStrengthFor(
  * cast, SEAM_PRIORITY drops the closing pin, then the opening one, and the renderer records the
  * joint as a scene cut. Selling "near-seamless" for a pin that will be dropped is the one thing
  * this must never do, so both ends are asked together (they compete for the same slots).
+ *
+ * `otherRefCount` is what the same job already spends out of a COMBINED budget — its voice clips,
+ * on a model that counts images + audio + video against one cap (fal Seedance 2.5). Those slots are
+ * gone before a pin can have one (nothing drops a voice clip), and the browser cannot read the
+ * voices dir, so the count arrives on the run payload as `voiceRefs`.
  */
 export function pinStrengthsFor(
   backend: Backend | string,
-  { castRefCount = 0, hasSeamIn = false, hasSeamOut = false }:
-    { castRefCount?: number; hasSeamIn?: boolean; hasSeamOut?: boolean },
+  { castRefCount = 0, otherRefCount = 0, hasSeamIn = false, hasSeamOut = false }:
+    { castRefCount?: number; otherRefCount?: number; hasSeamIn?: boolean; hasSeamOut?: boolean },
 ): { in: PinStrength; out: PinStrength } {
   let caps: SeamCaps;
   try {
@@ -173,5 +178,5 @@ export function pinStrengthsFor(
   } catch {
     return { in: 'none', out: 'none' };
   }
-  return pinStrengths({ caps, castRefCount, hasSeamIn, hasSeamOut });
+  return pinStrengths({ caps, castRefCount, otherRefCount, hasSeamIn, hasSeamOut });
 }

@@ -96,6 +96,8 @@ export function makeRun(status: RunStatus, over: Partial<RunDetail> = {}): RunDe
     phase: status === 'complete' ? 'deliver' : status === 'review' ? 'review' : status === 'rendering' ? 'render' : 'plan',
     error: status === 'attention' ? { ts: baseManifest.createdAt, action: 'render', message: 'fal job failed: boom', logTail: ['ERR boom'] } : null,
     spec: planned ? SPEC : null,
+    // The fixture's backend has per-kind reference caps, so nothing competes with a boundary pin.
+    voiceRefs: null,
     queue: null,
     logCursor: 0,
   };

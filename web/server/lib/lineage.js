@@ -295,7 +295,8 @@ export function serializeContinuity(lineage) {
 /**
  * What a re-render of one segment should pin at each end — and how strongly the UI may describe it.
  *
- * One call shape: resolveBoundaries({ jobIds, jobId | index, continuity, caps, castRefCount, mode }).
+ * One call shape:
+ * resolveBoundaries({ jobIds, jobId | index, continuity, caps, castRefCount, otherRefCount, mode }).
  * The segment is named by `jobId` (what the routes have) or by `index` (its cut position).
  *
  * `first`/`last` are the CANDIDATES — the neighbours that exist at all, so the dialog can say
@@ -319,7 +320,8 @@ export function serializeContinuity(lineage) {
  *
  * @param {{jobIds?:string[], jobId?:string, index?:number,
  *          continuity?:{segments:Segment[]}|Segment[], caps?:object, castRefCount?:number,
- *          mode?:string}} opts
+ *          otherRefCount?:number, mode?:string}} opts  `otherRefCount` = the references this job
+ *          already spends out of a COMBINED budget (its voice clips — see lib/voice-refs.js)
  * @returns {{mode:string, index:number, jobId:string|null,
  *            first:Neighbour|null, last:Neighbour|null,
  *            start:{frame:'last', from:Neighbour|null}|null,
@@ -363,10 +365,14 @@ export function resolveBoundaries(opts = {}) {
     && (mode === 'both' || mode === 'end' || (mode === 'auto' && joined(next.seg, false)));
 
   // Budget included: at a full cast the image budget drops the closing pin, then the opening one,
-  // and a mode reported here is quoted to the user before they pay for the take.
+  // and a mode reported here is quoted to the user before they pay for the take. `otherRefCount` is
+  // what the job's voice clips already spend where the budget is COMBINED (fal 2.5 counts
+  // images + audio + video together) — nothing drops a voice clip, so those slots are gone before
+  // a pin can have one.
   const seam = pinStrengths({
     caps: opts.caps,
     castRefCount: Number(opts.castRefCount) || 0,
+    otherRefCount: Number(opts.otherRefCount) || 0,
     hasSeamIn: wantStart,
     hasSeamOut: wantEnd,
   });

@@ -29,10 +29,15 @@ const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-boundaries-'));
 const runsDir = path.join(tmpRoot, 'runs');
 const outDir = path.join(tmpRoot, 'out');
 const envRoot = path.join(tmpRoot, 'envroot');
-for (const d of [runsDir, outDir, envRoot]) fs.mkdirSync(d, { recursive: true });
+const voicesDir = path.join(tmpRoot, 'voices');
+const voicesFile = path.join(voicesDir, 'voices.json');
+for (const d of [runsDir, outDir, envRoot, voicesDir]) fs.mkdirSync(d, { recursive: true });
 fs.writeFileSync(path.join(envRoot, '.env'), '');
+// A bundled clip on disk IS a registered voice (voices.js stages one from any clip it finds), so
+// "keeper" costs an @Audio reference here without a minted voices.json.
+fs.writeFileSync(path.join(voicesDir, 'keeper.mp3'), 'ID3');
 
-const app = await buildApp({ root: HOST_ROOT, runsDir, outDir, envRoot });
+const app = await buildApp({ root: HOST_ROOT, runsDir, outDir, envRoot, voicesFile });
 test.after(async () => { await app.close(); fs.rmSync(tmpRoot, { recursive: true, force: true }); });
 const post = (url, payload) => app.inject({ method: 'POST', url, payload });
 
@@ -52,15 +57,18 @@ const seamIn = (runId, take, job) => (job
  * closing still really on disk. `chainedFrom` names, per job, the {take, job} its opening frame was
  * grabbed from, which is what makes a joint whole or broken.
  */
-function seedRun(runId, layout) {
+function seedRun(runId, layout, over = {}) {
+  const backend = over.backend ?? 'seedance';
+  const elements = over.elements ?? [{ id: 'subject', image: 'subject.png' }];
   const dir = path.join(runsDir, runId);
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'spec.json'), JSON.stringify({
     spec_version: '1.0',
-    render_backend: 'seedance',
+    render_backend: backend,
     project: { title: 'Boundary Drill', aspect_ratio: '9:16' },
     shots: JOBS.map((_, i) => ({ shot_id: `S${i + 1}`, duration_s: 5, description: 'a shot' })),
-    kling: { elements: [{ id: 'subject', image: 'subject.png' }], jobs: JOBS.map((j, i) => ({ job_id: j, shots: [`S${i + 1}`], elements: ['subject'] })) },
+    kling: { elements, jobs: JOBS.map((j, i) => ({ job_id: j, shots: [`S${i + 1}`], elements: elements.map((e) => e.id) })) },
+    ...(over.voiceLines ? { audio: { voice: { lines: over.voiceLines } } } : {}),
   }, null, 2));
 
   const jobClips = {};
@@ -78,7 +86,7 @@ function seedRun(runId, layout) {
   }
   const newestTake = layout.at(-1).take;
   writeManifest(dir, {
-    ...newManifest({ idea: 'boundary drill', backend: 'seedance', aspect: '9:16', durationS: 20 }, '2026-08-01T00:00:00.000Z'),
+    ...newManifest({ idea: 'boundary drill', backend, aspect: '9:16', durationS: 20 }, '2026-08-01T00:00:00.000Z'),
     takes: [{ id: newestTake, mode: 'full', createdAt: '2026-08-01T00:00:00.000Z' }],
     cuts: [{ id: 'c1', take: newestTake, master: null, createdAt: '2026-08-01T00:00:00.000Z' }],
     jobClips,
@@ -94,8 +102,8 @@ const mixed = [{ job: 'K1', take: 't2', from: null }, ...JOBS.slice(1).map((job,
   job, take: 't1', from: { take: 't1', job: JOBS[i] },
 }))];
 
-function fakeService(runId, layout) {
-  const dir = seedRun(runId, layout);
+function fakeService(runId, layout, over = {}) {
+  const dir = seedRun(runId, layout, over);
   const enqueued = [];
   const live = [];
   const mgr = {
@@ -108,7 +116,7 @@ function fakeService(runId, layout) {
     cancel: () => false,
   };
   const svc = createRunService({
-    root: HOST_ROOT, runsDir, outDir, envRoot, childEnv: { PATH: process.env.PATH }, mgr,
+    root: HOST_ROOT, runsDir, outDir, envRoot, voicesFile, childEnv: { PATH: process.env.PATH }, mgr,
     bus: { emit() {}, subscribe: () => () => {} },
     isAlive: () => false,
   });
@@ -290,6 +298,68 @@ test('a cascade end-conditions ONLY its last job — the earlier ones are define
     'no job of the cascade carries a closing pin');
   assert.equal(readManifest(dir).lastError, null, 'the cascade ran clean');
   assert.ok(enqueued.some((j) => j.kind === 'assemble'), 'and the new cut is still auto-assembled');
+});
+
+// ── the COMBINED reference budget (fal Seedance 2.5) ────────────────────────────────────────────
+// 2.5 on fal budgets images + audio + video against ONE 50-reference cap, so a registered voice clip
+// and a soft boundary pin want the same slot — and only the pin is sacrificial: SEAM_PRIORITY gives
+// it up, while nothing ever drops a voice clip (the renderer throws rather than ship a job over the
+// cap). With 49 cast images and one voiced speaker the render therefore has 49 image slots and opens
+// on a scene cut, so a reply that reports a pin sells continuity this PAID take cannot deliver.
+// The renderer has always subtracted the demand (render-seedance.js hands planSeamRefs its
+// `otherRefCount`); this is the same subtraction on the side that quotes the seam before the spend.
+
+const CAST_49 = Array.from({ length: 49 }, (_, i) => ({ id: `cast${i}`, image: `cast${i}.png` }));
+const on25 = { backend: 'seedance-2.5@fal', elements: CAST_49 };
+const lineFor = (speaker) => [{ shot_id: 'S2', speaker, text: 'Forty years I kept this light.' }];
+
+test('a voice reference spends the slot the opening pin wanted, and the reply stops promising it', () => {
+  const runId = 'web-19990101000011-voicebudget';
+  const { svc } = fakeService(runId, intact, { ...on25, voiceLines: lineFor('keeper') });
+
+  const r = svc.rerenderJob(runId, { jobId: 'K2', boundaries: 'both' });
+
+  assert.equal(r.boundaries.startMode, 'none', '49 cast refs + 1 voice clip fill the 50-reference budget');
+  assert.equal(r.boundaries.endMode, 'none', 'the closing pin went first, as it always does');
+});
+
+test('…and with nothing voiced the same cast still affords the opening pin', () => {
+  const runId = 'web-19990101000012-novoice';
+  const { svc } = fakeService(runId, intact, on25);
+
+  const r = svc.rerenderJob(runId, { jobId: 'K2', boundaries: 'both' });
+
+  assert.equal(r.boundaries.startMode, 'soft', 'the 50th slot is free, so SEAM_PRIORITY keeps the opening pin');
+  assert.equal(r.boundaries.endMode, 'none');
+});
+
+// The demand is what will RIDE, not who speaks: a speaker with no registered clip is voiced by the
+// model natively and costs no reference at all. Reserving a slot for one would give up a pin the
+// render was going to keep — and the strip would then offer a downstream cascade nobody needs.
+test('a speaker with no registered clip costs no slot at all', () => {
+  const runId = 'web-19990101000013-clipless';
+  const { svc } = fakeService(runId, intact, { ...on25, voiceLines: lineFor('stranger') });
+
+  const r = svc.rerenderJob(runId, { jobId: 'K2', boundaries: 'both' });
+
+  assert.equal(r.boundaries.startMode, 'soft');
+});
+
+test('the run payload carries the same count, because the browser cannot read the voices dir', () => {
+  const runId = 'web-19990101000014-wire';
+  const { svc } = fakeService(runId, intact, { ...on25, voiceLines: lineFor('keeper') });
+
+  const detail = svc.detail(runId);
+
+  assert.deepEqual(detail.voiceRefs, { K1: 0, K2: 1, K3: 0, K4: 0 }, 'ids only — the count, never a path');
+  assert.equal(JSON.stringify(detail.voiceRefs).includes(tmpRoot), false);
+});
+
+test('a model with no combined budget has nothing to report', () => {
+  const runId = 'web-19990101000015-nocombined';
+  const { svc } = fakeService(runId, intact, { voiceLines: lineFor('keeper') });
+
+  assert.equal(svc.detail(runId).voiceRefs, null, 'per-kind caps never make a voice clip and a pin compete');
 });
 
 // ── guards ──────────────────────────────────────────────────────────────────────────────────────

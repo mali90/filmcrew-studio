@@ -135,8 +135,10 @@ export function estimateRender(spec, { backend, mode = 'full', jobId, cascade = 
 const priceKeys = () => Object.keys(PRICES).filter((k) => PRICES[k] && typeof PRICES[k] === 'object' && ('perSecondUsd' in PRICES[k] || PRICES[k].$alias));
 
 /** One value out of <envRoot>/.env, read as DATA (never sourced) — the settings page writes that
- *  file and the render child reads it, so it is what the estimate has to price. */
-function readEnvVar(envRoot, key, fallbackEnv) {
+ *  file and the render child reads it, so it is what the estimate has to price. Exported because
+ *  the same reader answers the non-price knobs a run's boundary budget depends on (run-service's
+ *  voice-reference demand); a second .env parser in this server would be one too many. */
+export function readEnvVar(envRoot, key, fallbackEnv) {
   // The CHILD's precedence, mirrored exactly: a variable already present in the spawned process's
   // env (childEnv — even an explicit empty string) wins, because dotenv never overwrites an
   // existing variable. Reading .env first here would quote one provider while the render child

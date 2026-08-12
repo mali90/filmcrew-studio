@@ -76,7 +76,7 @@ export async function buildApp({
   const bus = createEventBus();
   let svc; // late-bound: the manager streams events into the service
   const mgr = createJobManager({ spawnCli, onEvent: (runId, evt) => svc?.onEvent(runId, evt) });
-  svc = createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr, bus, isAlive });
+  svc = createRunService({ root, runsDir, outDir, envRoot, voicesFile, childEnv, mgr, bus, isAlive });
 
   app.decorate('ctx', { root, runsDir, outDir, envRoot, profilesDir, environmentsDir, elementsRoot, voicesFile, childEnv, svc, mgr, bus, lifecycle });
 

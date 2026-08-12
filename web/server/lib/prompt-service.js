@@ -19,6 +19,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { isSafeSegment } from './paths.js';
+// Config-free siblings (no host import, so the lazy-import idiom above still holds): the voices
+// registry and the two voice knobs are read the same way here and by the seam budget in
+// run-service.js — a second reader is how a preview and a paid render start disagreeing.
+import { voiceClipLookup, voiceKnobs } from './voice-refs.js';
 
 /**
  * The prompt-relevant knobs, mirrored from config.js (the `kling`, `seedance` and `seedance25`
@@ -41,10 +45,13 @@ function promptDefaults(get) {
     defaultShotSeconds: num('KLING_DEFAULT_SHOT_SECONDS', 5),
     chainFrames: bool('KLING_CHAIN_FRAMES', true),
   };
+  // The two knobs that decide whether a voice clip rides come from voice-refs.js: the seam budget
+  // in run-service.js asks the same question of the same .env, and one mirror cannot drift.
+  const voices = voiceKnobs(get);
   const seedance = {
     resolution: get('SEEDANCE_RESOLUTION') || '480p',
-    generateAudio: bool('SEEDANCE_GENERATE_AUDIO', true),
-    voiceMode: get('SEEDANCE_VOICE_MODE') || 'reference',
+    generateAudio: voices.audioOn,
+    voiceMode: voices.voiceMode,
     promptMaxBytes: num('SEEDANCE_PROMPT_MAX_BYTES', 5000),
     style: get('SEEDANCE_STYLE') || '',
     avoid: get('SEEDANCE_AVOID') || '',
@@ -80,35 +87,6 @@ async function envLookup({ root, envRoot, childEnv }) {
     if (raw === undefined) return '';
     // parseEnv keeps a value verbatim (quotes included); dotenv strips a matching pair.
     return String(raw).trim().replace(/^(['"])([\s\S]*)\1$/, '$2');
-  };
-}
-
-const CLIP_EXT = /\.(mp3|wav|mp4|mov)$/i;
-
-/**
- * `(speaker) => clipPath|null`, mirroring src/lib/voices.js `getVoiceRefClip` (bundled clips on
- * disk, overridden by voices.json entries) without importing it — that module reads config.js.
- * Seedance cites a voiced character as `@AudioN` IN THE PROMPT, so whether a clip exists changes
- * the bytes; a preview that guessed would be wrong exactly for the cast that has voices.
- */
-function voiceClipLookup(voicesDir, root, slug) {
-  const dir = path.isAbsolute(voicesDir) ? voicesDir : path.resolve(root, voicesDir);
-  const map = new Map();
-  try {
-    for (const f of fs.readdirSync(dir)) if (CLIP_EXT.test(f)) map.set(slug(f.replace(CLIP_EXT, '')), path.join(dir, f));
-  } catch { /* no voices dir — nothing is voiced */ }
-  try {
-    const reg = JSON.parse(fs.readFileSync(path.join(dir, 'voices.json'), 'utf8'));
-    // A real registry entry always wins over the shipped-clip fallback — including one with no
-    // ref_clip at all, which is how a minted-but-clipless voice falls back to native audio.
-    for (const [key, v] of Object.entries(reg ?? {})) {
-      const clip = v?.ref_clip;
-      map.set(slug(key), clip ? (path.isAbsolute(clip) ? clip : path.resolve(root, clip)) : null);
-    }
-  } catch { /* no registry */ }
-  return (name) => {
-    const clip = map.get(slug(name ?? '')) ?? null;
-    return clip && fs.existsSync(clip) ? clip : null;
   };
 }
 
@@ -175,7 +153,7 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
     import(path.join(root, 'src/lib/seedance-args.js')),
   ]);
   const { capsFor, normalizeBackend, refLabel } = models;
-  const { cappedAudioRefs, cappedCombinedRefs, fitAudioRef, voiceRefsRide } = seedanceArgs;
+  const { cappedAudioRefs, cappedCombinedRefs, fitAudioRef, voiceRefSpeakers } = seedanceArgs;
   const { composeKlingStoryboard, composeSeedanceJobPrompt, applyOverride, pinBytesOf, promptFingerprint, chooseSeamMode, planSeamRefs, appliedSeamModes } = compose;
   const { klingPromptSettings, seedancePromptSettings } = promptSettings;
   const { characterGroups, jobSpeakers } = castGroups;
@@ -335,11 +313,10 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
       // Voice references (@AudioN) ride the renderer's gate itself, not a copy of it: something for
       // the clips to ride on (cast refs or a boundary frame at EITHER end), audio on, and a voiceMode
       // that keeps the clip.
-      const candidates = voiceRefsRide({
+      const candidates = voiceRefSpeakers({
+        speakers: jobSpeakers(job, spec), hasClip: voiceClipFor,
         castRefCount: castCount, hasSeamIn, hasSeamOut, audioOn, voiceMode: defaults.seedance.voiceMode,
-      })
-        ? jobSpeakers(job, spec).filter((sp) => voiceClipFor(sp))
-        : [];
+      });
       // …and the same REFUSAL. More voiced speakers than the model has @Audio slots is a hard error in
       // the renderer (before it fits a single clip), so slicing the list to fit here would present a
       // ready-looking preview for a job that can never be sent. viewFor turns the throw into the job's

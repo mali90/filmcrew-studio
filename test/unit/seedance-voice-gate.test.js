@@ -30,7 +30,7 @@ Object.assign(process.env, {
   SEEDANCE_UPLOAD_MODE: 'data-uri',
   FAL_SEEDANCE_ENDPOINT: 'ref2vid', FAL_SEEDANCE_TEXT_ENDPOINT: 'txt2vid', FAL_SEEDANCE_PROBE_ENDPOINT: 'probe2vid',
 });
-const { voiceRefsRide } = await import('../../src/lib/seedance-args.js');
+const { voiceRefsRide, voiceRefSpeakers, voiceRefDemand } = await import('../../src/lib/seedance-args.js');
 const { capsFor } = await import('../../src/lib/render-models.js');
 const { renderSeedanceJob } = await import('../../src/lib/render-seedance.js');
 
@@ -59,6 +59,38 @@ test('the two deliberate ways to ask for native voices still win over any frame'
   assert.equal(voiceRefsRide({ castRefCount: 2, hasSeamOut: true, audioOn: false, voiceMode: 'reference' }), false);
   assert.equal(voiceRefsRide({ castRefCount: 2, hasSeamOut: true, audioOn: true, voiceMode: 'native' }), false);
   assert.equal(voiceRefsRide(), false, 'and no opinion at all attaches nothing');
+});
+
+// ── how much of a COMBINED budget those clips spend ─────────────────────────────────────────────
+// The gate answers "do they ride"; the seam rule needs "how many slots are gone before a boundary
+// pin can have one" (fal 2.5 budgets images + audio + video against ONE cap). Counted once, here,
+// for the engine's roster budget, the prompt preview and both surfaces that quote a seam before a
+// paid re-render — the arithmetic drifting apart across those is exactly how a dialog ends up
+// promising a near-seamless join on a take the renderer opens with a scene cut.
+
+const clips = (...names) => (sp) => names.includes(sp);
+
+test('the demand counts the speakers that will really ride, and nothing else', () => {
+  const caps = { maxAudioRefs: 10, maxCombinedRefs: 50 };
+  const on = { castRefCount: 49, audioOn: true, voiceMode: 'reference' };
+  const speakers = ['keeper', 'stranger'];
+
+  assert.deepEqual(voiceRefSpeakers({ speakers, hasClip: clips('keeper'), ...on }), ['keeper']);
+  assert.equal(voiceRefDemand({ caps, speakers, hasClip: clips('keeper'), ...on }), 1,
+    'a speaker with no registered clip is voiced natively and costs no reference');
+  assert.equal(voiceRefDemand({ caps, speakers, hasClip: clips(), ...on }), 0);
+  assert.equal(voiceRefDemand({ caps, speakers, hasClip: clips('keeper'), ...on, audioOn: false }), 0,
+    'and a gate that says nothing rides reserves nothing');
+});
+
+test('the demand never exceeds the model\'s own @Audio slots', () => {
+  const speakers = Array.from({ length: 12 }, (_, i) => `sp${i}`);
+  assert.equal(voiceRefDemand({
+    caps: { maxAudioRefs: 10, maxCombinedRefs: 50 }, speakers, hasClip: () => true,
+    castRefCount: 1, audioOn: true, voiceMode: 'reference',
+  }), 10);
+  // A model that publishes no @Audio cap accepts no voice reference — never "unlimited".
+  assert.equal(voiceRefDemand({ caps: {}, speakers, hasClip: () => true, castRefCount: 1, audioOn: true, voiceMode: 'reference' }), 0);
 });
 
 // ── and what the renderer really sends ──────────────────────────────────────────────────────────

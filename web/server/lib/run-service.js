@@ -10,7 +10,7 @@ import { newManifest, writeManifest, readManifest, updateManifest } from './web-
 import { scanRun, listRuns, defaultIsAlive, finalizedFinal } from './run-scan.js';
 import { createRingLog } from './ring-log.js';
 import { watchRun } from './artifact-watch.js';
-import { estimateRender, estimateUpscale, readProbeResolution, readRenderResolution, readUpscaleProvider } from './estimator.js';
+import { estimateRender, estimateUpscale, readEnvVar, readProbeResolution, readRenderResolution, readUpscaleProvider } from './estimator.js';
 import { safeChild } from './paths.js';
 // Both config-free by construction (the runs-caps canary walks this graph): the continuity rule is a
 // pure function over a run record, and the model registry imports nothing at all.
@@ -19,6 +19,12 @@ import { capsFor, normalizeBackend } from '../../../src/lib/render-models.js';
 // The cast count the seam rule reads, from the module that owns the rule — a job with no elements
 // of its own inherits the WHOLE roster, and that subtlety is worth deriving in exactly one place.
 import { castRefCountFor } from '../../../src/lib/seam-rule.js';
+// …and the OTHER half of that budget on a model that spends ONE pool on every kind of reference:
+// the voice clips a job will attach. All three are config-free (spec reading, slugging, and a
+// voices dir read as data), so the canary still holds.
+import { jobSpeakers } from '../../../src/lib/cast-groups.js';
+import { slug } from '../../../src/lib/util.js';
+import { voiceRefCountsFor } from './voice-refs.js';
 // config-FREE import: run-service is loaded eagerly by app.js, and the demo/e2e server sets FAL_BASE_URL
 // only AFTER its static import chain — importing anything that pulls config.js here would snapshot the
 // wrong (real) fal endpoint and make the validators/renders miss the mock.
@@ -45,7 +51,7 @@ const ledgerLine = (est) => ({
   ...(est?.unknownPrice ? { unpriced: true } : {}),
 });
 
-export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr, bus, isAlive = defaultIsAlive, now = () => new Date() }) {
+export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, childEnv, mgr, bus, isAlive = defaultIsAlive, now = () => new Date() }) {
   // Seedance price scales with resolution, and the knob is per model (2.5 has its own) — so the
   // ledger records what THIS run's backend will actually be billed for. A per-run pick (stored on
   // the manifest, injected into every child spawn as that same knob) outranks the .env value here
@@ -54,6 +60,8 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     resolution: resolution || readRenderResolution(envRoot ?? root, backend, childEnv),
     probeResolution: readProbeResolution(envRoot ?? root, backend, childEnv),
   });
+  // Same default as app.js, so a service built without one still reads the voices the child reads.
+  const voicesDir = path.dirname(voicesFile ?? path.join(root, 'voices', 'voices.json'));
   const ringLogs = new Map();   // runId → ring log
   const watchers = new Map();   // runId → watcher
   const announced = new Map();  // runId → Set<artifact rel> already sent to clients — persists across watcher restarts so a spec block is never lost to a startup race nor re-announced
@@ -362,6 +370,21 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
 
   /** The model registry's caps for a backend, or null when the run names one we no longer know. */
   const capsOf = (backend) => { try { return capsFor(normalizeBackend(backend).id); } catch { return null; } };
+
+  /**
+   * Per job, the references its voice clips will spend out of a COMBINED reference budget — `null`
+   * on every model that publishes per-kind caps instead. The seam rule has to subtract it before it
+   * promises a boundary pin (a voice clip is never dropped, a soft pin always is), and the browser
+   * cannot read the voices dir, so this same map also rides the run payload for the dialog.
+   */
+  const voiceRefsFor = (spec, backend) => voiceRefCountsFor(spec, {
+    caps: capsOf(backend),
+    speakersOf: (job) => (Array.isArray(job?.shots) ? jobSpeakers(job, spec) : []),
+    voicesDir,
+    root,
+    slug,
+    get: (key) => readEnvVar(envRoot ?? root, key, childEnv),
+  });
 
   /** Write a full-composition render.json into takeDir: every spec job's newest clip, in order. */
   function composeCut(runId, takeDir) {
@@ -809,9 +832,11 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     // the last, because every job in between has both ends defined by its cascade neighbours.
     const lastRendered = cascadeJobs.at(-1) ?? jobId;
     const lineage = computeLineage(cutRecordFor(runId, m, jobs));
+    const voiceRefs = voiceRefsFor(spec, backend);
     const planFor = (id) => resolveBoundaries({
       jobIds: jobs, jobId: id, continuity: lineage, mode,
       caps: capsOf(backend), castRefCount: castRefCountFor(spec, id),
+      otherRefCount: voiceRefs?.[id] ?? 0,
     });
     const opening = planFor(jobId);
     const closing = lastRendered === jobId ? opening : planFor(lastRendered);
@@ -1047,6 +1072,9 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     return {
       ...run,
       spec,
+      // DETAIL only, and only where a combined budget makes a voice clip and a boundary pin compete:
+      // the re-render dialog quotes a seam before the user pays and cannot read the voices dir.
+      voiceRefs: voiceRefsFor(spec, run.backend),
       queue: queuePosition >= 0 ? { position: queuePosition + 1 } : null,
       logCursor: ringFor(runId).lastCursor,
     };

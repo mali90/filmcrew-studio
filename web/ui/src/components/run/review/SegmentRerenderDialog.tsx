@@ -110,6 +110,7 @@ export function SegmentRerenderDialog({ run, jobId, open, onClose }: {
   const joinsFor = (over?: { pinStart: boolean; pinEnd: boolean }) => segmentJoins({
     backend,
     castRefCount,
+    otherRefCount: run.voiceRefs?.[jobId] ?? 0,
     hasPrev: Boolean(prevId),
     hasNext: Boolean(nextId),
     entry: entryOf(jobId),

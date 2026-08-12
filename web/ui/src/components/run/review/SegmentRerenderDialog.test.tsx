@@ -190,6 +190,28 @@ describe('SegmentRerenderDialog — the boundary plan, in plain words (D14/D15)'
     expect(screen.getByTestId('downstream-seam-warning')).toHaveTextContent("K3's join will break");
   });
 
+  // fal's Seedance 2.5 budgets images + audio + video against ONE 50-reference cap, so a registered
+  // voice clip takes the slot a boundary pin would have used — and only the pin is sacrificial. The
+  // browser cannot read the voices dir, so the count rides the run payload; without it this dialog
+  // sold a near-seamless opening on a take the renderer deterministically opens with a scene cut.
+  it('a voice reference the render will send is subtracted before any pin is promised', () => {
+    expect(pinStrengthsFor('seedance-2.5@fal', { castRefCount: 49, otherRefCount: 1, hasSeamIn: true, hasSeamOut: true }))
+      .toEqual({ in: 'none', out: 'none' });
+
+    const run = withCast(onBackend(threeSegmentRun(), 'seedance-2.5@fal'), 49);
+    open({ ...run, voiceRefs: { K2: 1 } });
+    expect(sentence()).toBe('K2 will be rendered on its own. The joins on both sides become scene cuts.');
+    expect(screen.queryByTestId('soft-pin-warning')).not.toBeInTheDocument();
+  });
+
+  it('…and a job that sends no voice clip keeps the pin that last slot buys', () => {
+    expect(pinStrengthsFor('seedance-2.5@fal', { castRefCount: 49, hasSeamIn: true, hasSeamOut: true }))
+      .toEqual({ in: 'soft', out: 'none' });
+
+    open(withCast(onBackend(threeSegmentRun(), 'seedance-2.5@fal'), 49));
+    expect(sentence()).toContain("K2 will aim to start on K1's last frame — that join is near-seamless (reference-guided).");
+  });
+
   it('a budget that can afford neither pin still promises nothing at all', () => {
     expect(pinStrengthsFor('seedance-2.0@fal', { castRefCount: 14, hasSeamIn: true, hasSeamOut: true }))
       .toEqual({ in: 'none', out: 'none' });

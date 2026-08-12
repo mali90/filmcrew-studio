@@ -102,6 +102,7 @@ export function ChangeRequestPanel({ run }: { run: RunDetail }) {
   const { endStrength, showSeamWarning, offerCascade } = segmentJoins({
     backend,
     castRefCount: scopedJob ? castRefCountFor(run.spec, scopedJob) : 0,
+    otherRefCount: (scopedJob && run.voiceRefs?.[scopedJob]) || 0,
     hasPrev: jobIdx > 0,
     hasNext: downstream.length > 0,
     entry: entryOf(scopedJob),

@@ -150,6 +150,11 @@ export interface RunDetail extends RunSummary {
   // costs a render.json read per take per run, and the list re-fetches on every SSE status tick —
   // for a field only the run page (ClipStrip, SegmentRerenderDialog) ever reads.
   continuity: ContinuityEntry[] | null;
+  // DETAIL only, and only on a model whose reference budget is COMBINED across kinds (fal Seedance
+  // 2.5 takes 50 images + audio + video together) — `null` everywhere else, where a voice clip never
+  // takes an image slot. Per job: how many references its voice clips spend, which is what a
+  // boundary pin has to fit AROUND. The browser cannot read the voices dir, so the server counts it.
+  voiceRefs: Record<string, number> | null;
   spec: ProductionSpec | null;
   queue: { position: number } | null;
   logCursor: number;

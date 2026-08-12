@@ -238,6 +238,15 @@
   install commands.
 
 ### Fixed
+- **A voice clip no longer costs you a boundary pin you were promised.** On fal's Seedance 2.5 one
+  50-reference budget covers images, audio and video together, so a registered voice clip and a
+  soft boundary pin want the same slot — and only the pin is given up (nothing ever drops a voice).
+  The re-render dialog and the server's reply both counted the cast alone, so a segment with a big
+  reference set and one voiced speaker was sold a "near-seamless (reference-guided)" opening that
+  the render dropped: you paid for a take that came back on a scene cut, and the strip then offered
+  a downstream cascade to repair it. Both now subtract what the job's voice clips will really spend
+  — the speakers with a registered clip, capped by the model's audio slots, and zero when audio is
+  off or voices are model-native — so the promise matches the render or is not made at all.
 - **The prompt sheet keeps up with the run: a finished re-render and a revise both refresh it.**
   It stays open through the whole review while everything in it is composed by the server, and it
   was only ever refreshed when *you* edited a prompt. So the take you had just paid for was missing

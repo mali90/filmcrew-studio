@@ -200,9 +200,12 @@ export interface SegmentJoins {
  * @param p.pinStart/pinEnd  an explicit choice for that end (the dialog's Custom plan); omitted
  *   leaves auto's answer, which is all the rail ever posts.
  */
-export function segmentJoins({ backend, castRefCount, hasPrev, hasNext, entry, nextEntry, pinStart, pinEnd }: {
+export function segmentJoins({ backend, castRefCount, otherRefCount = 0, hasPrev, hasNext, entry, nextEntry, pinStart, pinEnd }: {
   backend: string;
   castRefCount: number;
+  /** What this job's voice clips already spend out of a COMBINED reference budget (`run.voiceRefs`
+   *  — the server counts them, since the browser cannot read the voices dir). */
+  otherRefCount?: number;
   hasPrev: boolean;
   hasNext: boolean;
   /** this segment's own continuity entry — does it start on the previous clip? */
@@ -223,8 +226,10 @@ export function segmentJoins({ backend, castRefCount, hasPrev, hasNext, entry, n
   // Both ends at once, and through the BUDGET-aware helper: the two pins compete for the same image
   // slots, and at a full cast SEAM_PRIORITY drops the closing one (then the opening one) before it
   // drops a paid identity reference. Each end keeps its own answer all the way to the copy — the
-  // budget can preserve one pin and drop the other.
-  const strengths = pinStrengthsFor(backend, { castRefCount, hasSeamIn: wantStart, hasSeamOut: wantEnd });
+  // budget can preserve one pin and drop the other. Where the budget is COMBINED (fal Seedance 2.5
+  // counts images + audio + video against one cap) the job's voice clips have already taken their
+  // slots: nothing drops a voice clip, so a pin that needs one of those is never coming back.
+  const strengths = pinStrengthsFor(backend, { castRefCount, otherRefCount, hasSeamIn: wantStart, hasSeamOut: wantEnd });
   const startStrength: PinStrength = wantStart ? strengths.in : 'none';
   const endStrength: PinStrength = wantEnd ? strengths.out : 'none';
 

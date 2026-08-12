@@ -14,7 +14,7 @@ import { complete, extractJson } from './llm.js';
 import { validateSpec } from './spec-schema.js';
 import { RENDER_MODELS, capsFor, castLimitFor, normalizeBackend, demotesOpeningFrame } from './render-models.js';
 import { knobsFor, seedancePromptSettings } from './prompt-settings.js';
-import { voiceRefsRide } from './seedance-args.js';
+import { voiceRefDemand } from './seedance-args.js';
 import { buildInventory, inventoryText, characterRefs, refBelongsTo } from './elements.js';
 import { getVoiceRefClip, voicesInventoryText } from './voices.js';
 import { jobSpeakers } from './cast-groups.js';
@@ -418,17 +418,15 @@ export function topUpStarredElements(spec, ctx) {
   // sends. Its conditioning half is settled here rather than asked per job: every job whose IMAGE
   // budget this layer computes is carrying cast references, which is what makes it
   // reference-to-video. Seam frames stay out of it for the same reason no seam slot is reserved.
-  const audioRides = combinedCap === Infinity ? false : voiceRefsRide({
+  const ride = combinedCap === Infinity ? null : {
     castRefCount: 1,
     audioOn: seedancePromptSettings(spec, caps, config.seedance).audioOn,
     voiceMode: config.seedance.voiceMode,
-  });
-  const audioDemand = (job) => {
-    // per-kind budgets — a voice clip never takes an image slot — or no clip rides at all
-    if (!audioRides) return 0;
-    const speakers = Array.isArray(job?.shots) ? jobSpeakers(job, spec) : [];
-    return Math.min(speakers.filter((sp) => voiceClipFor(sp)).length, Number(caps.maxAudioRefs) || 0);
   };
+  // `ride === null` is a per-kind budget: a voice clip never takes an image slot, so nothing to reserve.
+  const audioDemand = (job) => (ride === null ? 0 : voiceRefDemand({
+    caps, speakers: Array.isArray(job?.shots) ? jobSpeakers(job, spec) : [], hasClip: voiceClipFor, ...ride,
+  }));
   /** What ONE job may spend on images: the image cap, and whatever its voice clips leave over. */
   const budgetFor = (job) => Math.max(0, Math.min(imageCap, combinedCap - audioDemand(job)));
   // A job with an empty/absent `elements` inherits the WHOLE roster at render time, so the roster
