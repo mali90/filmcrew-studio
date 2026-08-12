@@ -700,6 +700,60 @@ test('a run created at a non-default resolution estimates, renders and (post-rev
   assert.equal(est2.totalUsd, Math.round(seconds2 * 0.3024 * 100) / 100, 'still the picked tier after revise');
 });
 
+// …and the pick outranks the SPEC too. A plan can carry a seedance.resolution pin — hand-authored,
+// or inherited from a spec that was planned on another tier or another model — and that pin used to
+// beat the tier the run was created at, so the render and the bill landed somewhere the user never
+// chose (or, off-ladder, failed outright). The pick is the choice; the pin is a default.
+test('a spec.seedance.resolution pin never outranks the run\'s own pick — estimate, render, and after a revise', async () => {
+  const { runId } = (await post('/api/runs', { idea: 'a heron over the reeds', backend: 'seedance-2.5@fal', aspect: '16:9', resolution: '480p', durationS: null })).json();
+  await waitForStatus(runId, 'plan-ready');
+  // 2.5@fal bills $0.2205/s at the picked 480p and $0.473/s at the pinned 720p
+  const specFile = path.join(runsDir, runId, 'spec.json');
+  const pin = (resolution) => {
+    const spec = JSON.parse(fs.readFileSync(specFile, 'utf8'));
+    spec.seedance = { resolution };
+    fs.writeFileSync(specFile, JSON.stringify(spec, null, 2));
+  };
+  const estimate = async () => (await get(`/api/runs/${runId}/estimate?mode=full`)).json();
+  const round2 = (n) => Math.round(n * 100) / 100;
+  // the estimator rounds each job before summing — mirror it rather than pricing the total
+  const at = (e, rate) => round2(e.perJob.reduce((a, j) => a + round2(j.seconds * rate), 0));
+
+  pin('720p');
+  const est = await estimate();
+  assert.equal(est.totalUsd, at(est, 0.2205), 'priced at the picked 480p, not the pinned 720p');
+  assert.notEqual(est.totalUsd, at(est, 0.473), 'and 480p is not what 720p would have cost');
+
+  // an OFF-LADDER pin (1080p survived a 2.0 → 2.5 switch) prices the pick too, instead of throwing
+  pin('1080p');
+  assert.equal((await estimate()).totalUsd, est.totalUsd);
+
+  // …and the render child agrees with the price it was quoted: it submits the picked tier
+  pin('720p');
+  const before = fal.requests.length;
+  const r = await post(`/api/runs/${runId}/render`, { mode: 'full' });
+  assert.equal(r.statusCode, 202, r.body);
+  assert.equal(r.json().estUsd, est.totalUsd, 'the paid button quotes the tier that will render');
+  await waitForStatus(runId, ['review', 'attention']); // attention = assemble-only trouble; the submit already happened
+  const submits = fal.requests.slice(before).filter((q) => q.method === 'POST' && q.path.includes('seedance-2.5'));
+  assert.ok(submits.length, 'the render reached the endpoint');
+  for (const s of submits) assert.equal(JSON.parse(s.body).resolution, '480p', 'the render child used the picked tier, not the pin');
+
+  // the pick still wins after a revise — the revision re-plans the spec, so the pin is re-applied
+  // to whatever it wrote, exactly as an inherited pin would survive one
+  await post(`/api/runs/${runId}/revise`, { feedback: 'hold the wide shot longer' });
+  const t0 = Date.now();
+  for (;;) {
+    const m = (await get(`/api/runs/${runId}`)).json().run.manifest;
+    if (m.revisions.length === 1) break;
+    if (Date.now() - t0 > 90000) throw new Error('timeout waiting for the revision');
+    await sleep(150);
+  }
+  pin('720p');
+  const est2 = await estimate();
+  assert.equal(est2.totalUsd, at(est2, 0.2205), 'still the picked tier after a revise');
+});
+
 // Seedance 2.5 is billed by pixel-seconds and has its OWN resolution knob. Reading the 2.0 knob
 // (or the 2.0 default) would quote 480p money for a 720p render — the estimate must follow the
 // env root the render child will actually read.

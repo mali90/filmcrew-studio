@@ -451,11 +451,13 @@ export function registerRunRoutes(app) {
       mode,
       jobId: req.query.jobId,
       cascade: req.query.cascade === '1' || req.query.cascade === 'true',
-      // Seedance is billed by pixel-seconds — price the resolution the render child will use: the
-      // run's own pick when one was made at create time (run-service injects it into every child
-      // spawn as the model's knob), else the knob that model reads from .env (per model — 2.5 reads
-      // SEEDANCE25_RESOLUTION and defaults to 720p, not 480p)
-      resolution: run.manifest?.resolution || readRenderResolution(app.ctx.envRoot, run.backend, app.ctx.childEnv),
+      // Seedance is billed by pixel-seconds — price the resolution the render child will use. The
+      // run's own pick (made at create time; run-service pins it onto every child spawn) travels as
+      // `pick`, NOT folded into `resolution`, because the estimator ranks the two differently: a
+      // pick outranks a spec.seedance.resolution pin, the .env knob does not. `resolution` is that
+      // knob, per model — 2.5 reads SEEDANCE25_RESOLUTION and defaults to 720p, not 480p.
+      pick: run.manifest?.resolution || null,
+      resolution: readRenderResolution(app.ctx.envRoot, run.backend, app.ctx.childEnv),
       probeResolution: readProbeResolution(app.ctx.envRoot, run.backend, app.ctx.childEnv),
     });
   });

@@ -30,6 +30,31 @@ const audioFlag = (spec, fallback) =>
   (spec?.kling?.generate_audio !== undefined ? !!spec.kling.generate_audio : !!fallback);
 
 /**
+ * THE rule for which resolution a Seedance render runs (and bills) at, from every source that can
+ * name one. It lives here, exported, because two halves of the product have to agree on it: the
+ * render child reaches it through seedancePromptSettings, and web/server's estimator imports it
+ * directly. They used to be two hand-mirrored expressions — and the mirror was wrong in the same
+ * way on both sides.
+ *
+ * Precedence, highest first:
+ *  - `pick`: the tier chosen FOR THIS RUN (the create-run picker; web/server pins it onto every
+ *    child spawn as RENDER_RESOLUTION_PICK). It outranks everything, including a spec pin: the
+ *    picker exists precisely because a pin the plan carried once governed the render and the bill
+ *    instead of the tier the user chose. It also means an off-ladder stale pin (a 1080p value that
+ *    survived a 2.0 → 2.5 switch) can no longer fail a run whose tier the user has settled.
+ *  - `spec.seedance.resolution`: a hand-authored pin. Still meaningful — a CLI run makes no per-run
+ *    pick, so a pin is how a spec asks for its own tier — and it still beats the .env knobs below.
+ *  - `own`: THIS MODEL's own knob (config[caps.knobsKey]); then `shared`, the shared Seedance one.
+ *
+ * spec.kling.resolution sits at NO rank: the agents fill that block from the KLING defaults (its
+ * enum cannot even express 480p), so honouring it silently rendered and billed Seedance at 1080p.
+ * @param {{pick?:string, spec?:object, own?:string, shared?:string}} [sources]
+ */
+export function seedanceResolution({ pick, spec, own, shared } = {}) {
+  return pick || spec?.seedance?.resolution || own || shared;
+}
+
+/**
  * Effective Kling settings for one spec: what to render with, plus the byte/segment budgets the
  * storyboard composer needs.
  * @param {object} spec  the Production Spec
@@ -59,19 +84,22 @@ export function klingPromptSettings(spec, defaults = {}) {
  * @param {object} spec  the Production Spec
  * @param {{knobsKey?:string}|null} [caps]  capsFor('<model>@<provider>') — picks up that model's own knobs block
  * @param {{generateAudio?:boolean, promptMaxBytes?:number, defaultShotSeconds?:number, style?:string,
- *          avoid?:string, textRule?:string, resolution?:string, aspectRatio?:string, knobs?:object}} [defaults]
- *   the caller's shared Seedance block; `knobs` is the bag `caps.knobsKey` is looked up in (config)
+ *          avoid?:string, textRule?:string, resolution?:string, resolutionPick?:string,
+ *          aspectRatio?:string, knobs?:object}} [defaults]
+ *   the caller's shared Seedance block; `knobs` is the bag `caps.knobsKey` is looked up in (config),
+ *   and `resolutionPick` is the per-run tier the run was created at, when there is one
  */
 export function seedancePromptSettings(spec, caps, defaults = {}) {
   const k = spec?.kling ?? {};
   const own = knobsFor(caps, defaults.knobs) ?? {};
   const audioOn = audioFlag(spec, defaults.generateAudio);
   return {
-    // NOT k.resolution: the kling block is written by the agents from KLING defaults (its enum
-    // can't even express 480p) — letting it override would silently render/bill Seedance at the
-    // Kling resolution. An explicit spec.seedance.resolution pin wins; else THIS MODEL's setting;
-    // else the shared Seedance one.
-    resolution: spec?.seedance?.resolution || own.resolution || defaults.resolution,
+    // One shared rule (seedanceResolution above), never a local re-statement of it: the tier this
+    // run was created at, else a hand-authored spec pin, else THIS MODEL's knob, else the shared
+    // Seedance one — and spec.kling.resolution at no rank at all.
+    resolution: seedanceResolution({
+      pick: defaults.resolutionPick, spec, own: own.resolution, shared: defaults.resolution,
+    }),
     aspectRatio: k.aspect_ratio || defaults.aspectRatio,
     generateAudio: audioOn,
     audioOn,
@@ -86,4 +114,4 @@ export function seedancePromptSettings(spec, caps, defaults = {}) {
   };
 }
 
-export default { knobsFor, klingPromptSettings, seedancePromptSettings };
+export default { knobsFor, seedanceResolution, klingPromptSettings, seedancePromptSettings };

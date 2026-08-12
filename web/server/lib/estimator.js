@@ -10,9 +10,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-// The registry is the ONE static import this server takes from the host src/ tree — zero imports,
-// no env, so it can never drag config.js in. See the canary in test/integration/runs-caps.test.js.
+// Two static imports from the host src/ tree, both leaves — zero imports of their own, no env, so
+// neither can drag config.js in. See the canary in test/integration/runs-caps.test.js.
 import { capsFor, normalizeBackend } from '../../../src/lib/render-models.js';
+// …and the render child's OWN resolution rule, imported rather than re-stated: a price quoted for a
+// tier the renderer would not use is exactly the bug a mirrored copy of it caused.
+import { seedanceResolution } from '../../../src/lib/prompt-settings.js';
 
 const PRICES = JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'prices.json'), 'utf8'));
 const DEFAULT_SHOT_SECONDS = 5; // mirrors config.kling.defaultShotSeconds
@@ -94,7 +97,7 @@ function priced(perSecond, perJob, priceKey, rates) {
   return { perJob: rows, totalUsd: sumUsd(rows), currency: 'USD', label: 'estimate' };
 }
 
-export function estimateRender(spec, { backend, mode = 'full', jobId, cascade = false, resolution, probeResolution } = {}) {
+export function estimateRender(spec, { backend, mode = 'full', jobId, cascade = false, pick, resolution, probeResolution } = {}) {
   const { key: priceKey, rates } = tableFor(backend);
   if (!rates) throw new Error(`no price table for backend "${backend}" (have: ${priceKeys().join(', ')})`);
   const jobs = spec?.kling?.jobs ?? [];
@@ -110,10 +113,11 @@ export function estimateRender(spec, { backend, mode = 'full', jobId, cascade = 
     // throw when the probe itself rides a perfectly legal rate.
     perSecond = rates.probePerSecondUsd ?? rateFor(rates, probeResolution ?? rates.probeResolution ?? resolution);
   } else {
-    // mirror the renderer's own precedence (seedanceConfigFor): an EXPLICIT spec.seedance.resolution
-    // pin overrides the .env default — but never the kling block, which the agents fill with KLING
-    // defaults and which would misprice (and mis-render) Seedance at 1080p
-    perSecond = rateFor(rates, spec?.seedance?.resolution ?? resolution);
+    // The renderer's own rule, RUN rather than mirrored (seedanceResolution, the function the render
+    // child resolves its tier with): the run's per-run pick first, then an explicit
+    // spec.seedance.resolution pin, then the .env knob — and never the kling block, which the agents
+    // fill with KLING defaults and which would misprice (and mis-render) Seedance at 1080p.
+    perSecond = rateFor(rates, seedanceResolution({ pick, spec, shared: resolution }));
     // fal prices Kling FLAT across resolutions; the only price knob is native audio on/off
     if (priceKey === 'kling' && spec?.kling?.generate_audio === false && rates.audioOffPerSecondUsd) {
       perSecond = rates.audioOffPerSecondUsd;

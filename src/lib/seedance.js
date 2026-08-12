@@ -35,9 +35,11 @@ export { SEEDANCE_TTV_GUIDANCE } from './seedance-guidance.js';
  */
 export const modelKnobs = (caps) => knobsFor(caps, config);
 
-/** The effective Seedance prompt/render settings for a spec on one model, config as the defaults. */
+/** The effective Seedance prompt/render settings for a spec on one model, config as the defaults.
+ *  `resolutionPick` is the tier this RUN was created at (empty for a CLI run): it outranks a spec
+ *  pin, which the knobs below never do — see seedanceResolution in prompt-settings.js. */
 export const seedanceSettingsFor = (spec, caps) =>
-  seedancePromptSettings(spec, caps, { ...config.seedance, aspectRatio: config.kling.aspectRatio, defaultShotSeconds: config.kling.defaultShotSeconds, knobs: config });
+  seedancePromptSettings(spec, caps, { ...config.seedance, aspectRatio: config.kling.aspectRatio, defaultShotSeconds: config.kling.defaultShotSeconds, knobs: config, resolutionPick: config.render.resolutionPick });
 
 /**
  * Compose ONE job's Seedance prompt from its shots' `kling` blocks + the spec's voice lines.

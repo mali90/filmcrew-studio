@@ -32,9 +32,16 @@
   beside Aspect: the pick is validated against the model's ladder before anything spawns (a tier
   the model cannot render is a 400, not a paid surprise), stored on the run, re-applied to every
   child spawn — plan, render, revise, re-render — and priced by the estimate and cost ledger, so a
-  run created at 480p is never quoted 720p money or vice versa. The planner's context stops
-  hardcoding Kling's `4k/1080p/720p` enum too, so it can never suggest a tier the renderer would
-  refuse.
+  run created at 480p is never quoted 720p money or vice versa. The tier you picked also outranks
+  anything the plan itself carries: a spec that pins `seedance.resolution` — written by hand, or
+  inherited from a plan made on another tier or another model — no longer decides the render and
+  the bill behind your back, and a stale pin naming a tier the current model cannot render at all
+  (a 1080p value carried across a Seedance 2.0 → 2.5 switch) is now simply outranked instead of
+  failing the run. A hand-authored pin still governs a CLI run, which makes no per-run pick. The
+  estimate and the render child resolve the tier through one shared rule rather than two mirrored
+  copies of it, so the price you are quoted and the tier that renders cannot disagree. The
+  planner's context stops hardcoding Kling's `4k/1080p/720p` enum too, so it can never suggest a
+  tier the renderer would refuse.
 - **A delivered run can be reopened for changes — and until it is, the server itself refuses to
   spend on it.** Approving used to lock a run in the interface only: a stale tab, a second browser
   window, or a double-click that landed just after the approval still reached `POST /render` and

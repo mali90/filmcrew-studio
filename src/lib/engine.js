@@ -13,7 +13,7 @@ import { ensureDir, writeJson, slug } from './util.js';
 import { complete, extractJson } from './llm.js';
 import { validateSpec } from './spec-schema.js';
 import { RENDER_MODELS, capsFor, castLimitFor, normalizeBackend, demotesOpeningFrame } from './render-models.js';
-import { knobsFor, seedancePromptSettings } from './prompt-settings.js';
+import { knobsFor, seedanceResolution, seedancePromptSettings } from './prompt-settings.js';
 import { voiceRefDemand } from './seedance-args.js';
 import { buildInventory, inventoryText, characterRefs, refBelongsTo } from './elements.js';
 import { getVoiceRefClip, voicesInventoryText } from './voices.js';
@@ -65,14 +65,20 @@ function familyOf(value) {
 }
 
 /**
- * The effective render resolution for a backend's model — read from the SAME knob the render child
- * reads: the model's own config block (`caps.knobsKey`, falling back to the shared Seedance block)
- * for the Seedance family, config.kling for Kling. A per-run pick arrives through that same env
- * variable (run-service injects `caps.resolutionEnv` into every child spawn), so the planner's
- * context and the render can never disagree on it.
+ * The effective render resolution for a backend's model — resolved by the SAME rule the render
+ * child applies (seedanceResolution), minus the spec: no spec exists yet when the planner is being
+ * briefed. A per-run pick outranks the knobs here exactly as it does at render time; it also
+ * arrives ON that knob (run-service injects `caps.resolutionEnv` alongside RENDER_RESOLUTION_PICK),
+ * so the planner's context and the render can never disagree on it.
  */
 function configuredResolution(caps) {
-  if (caps.family === 'seedance') return knobsFor(caps, config)?.resolution || config.seedance.resolution;
+  if (caps.family === 'seedance') {
+    return seedanceResolution({
+      pick: config.render.resolutionPick,
+      own: knobsFor(caps, config)?.resolution,
+      shared: config.seedance.resolution,
+    });
+  }
   // An empty ladder means the model has NO selectable resolution (Kling's endpoint renders its own
   // fixed output) — a legacy KLING_RESOLUTION in .env is tolerated as the no-op it always was.
   return caps.resolutions?.length ? config.kling.resolution : null;
@@ -364,7 +370,9 @@ function stampAspect(spec, aspectRatio) {
  * default into it — stamping makes the knob (and any per-run pick riding it as an env override)
  * govern the render instead of depending on the LLM copying the context line faithfully. The
  * Seedance family is deliberately untouched: its renderers ignore kling.resolution and read their
- * own knob at render time, so the value stays live rather than frozen at plan time.
+ * own knob at render time, so the value stays live rather than frozen at plan time. Nor does a
+ * Seedance run need a stamp to make a pick govern — seedanceResolution already ranks the pick above
+ * every spec pin, and a stamp would only freeze one plan's tier into the spec.
  */
 function stampResolution(spec, ctx) {
   if (ctx.caps?.family !== 'kling' || !ctx.resolution) return;

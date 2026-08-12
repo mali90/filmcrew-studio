@@ -31,7 +31,7 @@ const compose = await armed(
 );
 const settingsMod = await armed(
   () => import('../../src/lib/prompt-settings.js'),
-  ['klingPromptSettings', 'seedancePromptSettings', 'knobsFor'],
+  ['klingPromptSettings', 'seedancePromptSettings', 'knobsFor', 'seedanceResolution'],
 );
 const P_COMPOSE = pending(compose, 'WS2-02: src/lib/prompt-compose.js');
 const P_SETTINGS = pending(settingsMod, 'WS2-02: src/lib/prompt-settings.js');
@@ -192,6 +192,28 @@ test('seedancePromptSettings: kling.resolution NEVER leaks into Seedance (the 48
 
   const pinned = { ...spec, seedance: { resolution: '720p' } };
   assert.equal(settingsMod.seedancePromptSettings(pinned, null, SEEDANCE_DEFAULTS).resolution, '720p', 'an explicit spec.seedance pin wins');
+  // …but NOT over the tier this run was created at. The picker exists because a pin the plan
+  // carried once decided the render (and the bill) instead of the tier the user chose.
+  assert.equal(
+    settingsMod.seedancePromptSettings(pinned, null, { ...SEEDANCE_DEFAULTS, resolutionPick: '480p' }).resolution,
+    '480p',
+    'a per-run pick outranks a spec pin',
+  );
+});
+
+test('seedanceResolution: pick > spec pin > model knob > shared default, kling.resolution nowhere', P_SETTINGS, () => {
+  const { seedanceResolution } = settingsMod;
+  const pinned = { seedance: { resolution: '720p' }, kling: { resolution: '1080p' } };
+  assert.equal(seedanceResolution({ pick: '480p', spec: pinned, own: '720p', shared: '1080p' }), '480p');
+  assert.equal(seedanceResolution({ spec: pinned, own: '480p', shared: '1080p' }), '720p');
+  assert.equal(seedanceResolution({ spec: { kling: { resolution: '1080p' } }, own: '480p', shared: '720p' }), '480p');
+  assert.equal(seedanceResolution({ spec: { kling: { resolution: '1080p' } }, shared: '720p' }), '720p');
+  // An off-ladder pin (a 1080p value that survived a 2.0 → 2.5 switch) is simply outranked, not
+  // obeyed and not fatal, whenever the run has a pick of its own.
+  assert.equal(seedanceResolution({ pick: '480p', spec: { seedance: { resolution: '1080p' } }, own: '720p' }), '480p');
+  // Empty strings are absent values, not choices: config.render.resolutionPick is '' when unset.
+  assert.equal(seedanceResolution({ pick: '', spec: pinned, own: '480p' }), '720p');
+  assert.equal(seedanceResolution(), undefined);
 });
 
 test('knobsFor: own-property lookup only — a caps bundle naming __proto__ resolves to null', P_SETTINGS, () => {

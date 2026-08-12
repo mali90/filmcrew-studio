@@ -78,6 +78,14 @@ export function buildConfig(env = process.env) {
     render: {
       // '<model>@<provider>' (see src/lib/render-models.js); legacy 'kling'/'seedance' stay accepted.
       backend: env.RENDER_BACKEND || 'kling', // → canonicalized to 'kling-o3@fal'
+      // The resolution chosen FOR THIS RUN, as opposed to the standing per-model defaults in the
+      // knob blocks below. The web server pins it — together with that model's own knob — onto every
+      // child it spawns for a run whose creator picked a tier (run-service's resolutionOverride).
+      // It is a SEPARATE variable on purpose: read off SEEDANCE_RESOLUTION alone a per-run pick is
+      // indistinguishable from a .env default, and a stale spec.seedance.resolution pin used to
+      // outrank it — the user's chosen tier is the one that must render and bill
+      // (src/lib/prompt-settings.js seedanceResolution). Empty = no pick, the defaults govern.
+      resolutionPick: env.RENDER_RESOLUTION_PICK || '',
     },
 
     // ── fal.ai render transport (direct HTTP; persistent voice_ids for consistent character voices) ──

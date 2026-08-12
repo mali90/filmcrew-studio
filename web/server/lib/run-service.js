@@ -53,11 +53,13 @@ const ledgerLine = (est) => ({
 
 export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, childEnv, mgr, bus, isAlive = defaultIsAlive, now = () => new Date() }) {
   // Seedance price scales with resolution, and the knob is per model (2.5 has its own) — so the
-  // ledger records what THIS run's backend will actually be billed for. A per-run pick (stored on
-  // the manifest, injected into every child spawn as that same knob) outranks the .env value here
-  // exactly as it does in the render child; probes keep riding the separate probe knob either way.
-  const estOpts = (backend, resolution) => ({
-    resolution: resolution || readRenderResolution(envRoot ?? root, backend, childEnv),
+  // ledger records what THIS run's backend will actually be billed for. The per-run pick travels as
+  // its own field rather than pre-collapsed into `resolution`: the estimator ranks it the way the
+  // render child does (above a spec pin, which only outranks the .env value) and the two cannot
+  // disagree because they run the ONE function. Probes ride the separate probe knob either way.
+  const estOpts = (backend, pick) => ({
+    pick: pick || null,
+    resolution: readRenderResolution(envRoot ?? root, backend, childEnv),
     probeResolution: readProbeResolution(envRoot ?? root, backend, childEnv),
   });
   // Same default as app.js, so a service built without one still reads the voices the child reads.
@@ -91,12 +93,18 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
    * to EVERY child spawn: dotenv never overwrites an existing variable, so the pick governs the
    * plan context, the render, every revise and every re-render without touching the user's .env.
    * Empty when the run never picked one — the configured default governs, exactly as before.
+   *
+   * RENDER_RESOLUTION_PICK carries the SAME value a second time, and the two are written here in
+   * one place so they can never disagree. It is what marks the tier as a deliberate per-run CHOICE:
+   * on the knob alone a pick is indistinguishable from a .env default, and a spec.seedance.resolution
+   * pin outranked .env defaults — so a plan that carried a pin rendered and billed at the pinned
+   * tier instead of the picked one. The child ranks the pick first (seedanceResolution).
    */
   function resolutionOverride(runId) {
     const m = readManifest(dirFor(runId));
     if (!m?.resolution) return {};
     const key = capsOf(m.backend)?.resolutionEnv;
-    return key ? { [key]: m.resolution } : {};
+    return key ? { [key]: m.resolution, RENDER_RESOLUTION_PICK: m.resolution } : {};
   }
 
   /** Queued/active manager jobs for one run — memory truth the disk scan can't see. */

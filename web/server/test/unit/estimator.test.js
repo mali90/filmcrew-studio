@@ -84,6 +84,35 @@ test('seedance pricing scales with resolution: 480p default is cheap, native 108
   assert.throws(() => estimateRender(spec, { backend: 'seedance', resolution: '9000p' }), /no per-second rate/);
 });
 
+// The per-run pick is the tier the user chose for THIS run, and it is what renders (the child ranks
+// it above a spec pin too — src/lib/prompt-settings.js seedanceResolution, which this module runs
+// rather than re-states). A price quoted for the pinned tier would bill a render nobody asked for.
+test('a per-run pick outranks a spec.seedance.resolution pin; without one the pin still beats .env', () => {
+  const pinned = threeJobs();
+  pinned.seedance = { resolution: '720p' };
+  // priced() rounds each job before summing — mirror that, not seconds × rate
+  const round2 = (n) => Math.round(n * 100) / 100;
+  const at = (r) => round2(['K1', 'K2', 'K3'].reduce((a, id) => a + round2(jobSeconds(pinned, id) * r), 0));
+
+  // picked 480p, pinned 720p, .env 720p → the pick, on 2.5's own rates ($0.2205/s vs $0.473/s)
+  assert.equal(
+    estimateRender(pinned, { backend: 'seedance-2.5@fal', mode: 'full', pick: '480p', resolution: '720p' }).totalUsd,
+    at(0.2205),
+  );
+  // same run, no pick (a CLI spec): the hand-authored pin is still worth authoring
+  assert.equal(
+    estimateRender(pinned, { backend: 'seedance-2.5@fal', mode: 'full', resolution: '480p' }).totalUsd,
+    at(0.473),
+  );
+  // a STALE pin naming a tier this model cannot render must not take the estimate down either
+  const stale = threeJobs();
+  stale.seedance = { resolution: '1080p' }; // survived a 2.0 → 2.5 switch; 2.5 renders 480p/720p
+  assert.equal(
+    estimateRender(stale, { backend: 'seedance-2.5@fal', mode: 'full', pick: '480p', resolution: '720p' }).totalUsd,
+    at(0.2205),
+  );
+});
+
 test('job mode: one job, cascade adds the stale downstream jobs', () => {
   const spec = threeJobs();
   const solo = estimateRender(spec, { backend: 'kling', mode: 'job', jobId: 'K2' });
