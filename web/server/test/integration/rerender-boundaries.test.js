@@ -165,6 +165,29 @@ test('both REPAIRS the joint auto left alone', () => {
   assert.equal(r.boundaries.start.from.take, 't2');
 });
 
+// `--seam-from` is a place to LOOK, never evidence that anything is there. When the previous clip's
+// own take carries no closing still, the fallback aims at the latest cut's take dir — which, for a
+// cut assembled from several takes, need not hold that segment at all. renderJob then warns and
+// renders without cross-job continuity, so a reply that still said `start` sold a joint the take was
+// never going to have, and the strip would afterwards report it as broken for no visible reason.
+test('a seam dir with no frame in it is reported as no opening pin at all', () => {
+  const runId = 'web-19990101000006-noframe';
+  const { dir, svc, enqueued } = fakeService(runId, mixed);
+  // K1 lives in t2; take away its closing still. The cut's take is t1, which never held a K1.
+  fs.rmSync(frameOf(runId, 't2', 'K1'));
+
+  const r = svc.rerenderJob(runId, { jobId: 'K2', boundaries: 'both' });
+
+  const child = enqueued.at(-1);
+  assert.equal(flag(child, '--seam-from'), path.join(dir, 'renders', 't1'), 'the child is still told where to look');
+  assert.equal(flag(child, '--first-frame-from'), undefined, 'but there is no frame to pin, and none is claimed');
+  assert.equal(r.boundaries.start, null, 'so the reply promises no opening join');
+  assert.equal(r.boundaries.startMode, 'none');
+  // the other end is judged on its own file and is untouched by any of this
+  assert.equal(r.boundaries.end.to.jobId, 'K3');
+  assert.notEqual(r.boundaries.endMode, 'none');
+});
+
 test('start and end each pin one side only; none renders standalone', () => {
   const runId = 'web-19990101000004-sides';
   const { svc, enqueued, drain } = fakeService(runId, intact);

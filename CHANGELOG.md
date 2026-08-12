@@ -327,6 +327,12 @@
   read the take being worked on, which exists from the moment the re-render is accepted, so the cut
   keeps playing throughout; while the clips are back and only the stitch is left, the banner says
   that ("Stitching the new cut …") instead of naming a segment that has already finished.
+- **A re-render reports an opening pin only when the frame it would pin to is really on disk.** When
+  the previous segment's own take carries no closing still, the request falls back to the latest
+  cut's take directory — which, for a cut assembled from several takes, need not hold that segment
+  at all. The renderer then warns and renders without cross-job continuity, but the reply still said
+  the join was pinned, so the dialog sold a seam the take was never going to have and the strip
+  reported it broken afterwards for no visible reason. The reply now states what was applied.
 - **Starring a cast now sends the character's FULL reference set, not one image each.** A run with
   three starred characters — each carrying seven reference views — could reach a Seedance render
   with a single image per character: the Casting agent's "pick the smallest set" guidance biased it

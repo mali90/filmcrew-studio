@@ -821,12 +821,16 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     });
     emitStatus(runId);
     // What was actually pinned, not what was asked for: a boundary whose frame is not on disk is
-    // reported as unpinned, so the dialog never claims a join this take will not have.
+    // reported as unpinned, so the dialog never claims a join this take will not have. The opening
+    // end is judged on `firstFrameFrom`, never on `seamFrom`: the take dir only says WHERE to look,
+    // and renderJob chains from it solely when <seamFrom>/<prevJob>/last_frame.png is really there
+    // (it warns and renders without continuity otherwise) — so a resolved dir with no frame in it
+    // is exactly the case that used to be reported as a pin nobody would get.
     const applied = {
       mode,
-      start: seamFrom ? opening.start : null,
+      start: firstFrameFrom ? opening.start : null,
       end: lastFrameFrom ? closing.end : null,
-      startMode: seamFrom ? opening.startMode : 'none',
+      startMode: firstFrameFrom ? opening.startMode : 'none',
       endMode: lastFrameFrom ? closing.endMode : 'none',
     };
     return { takeId, queued, estUsd: est.totalUsd, cascadeJobs, boundaries: applied };
