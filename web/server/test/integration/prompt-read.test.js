@@ -277,3 +277,33 @@ test('the version picker is offered exactly the takes that kept a sidecar for TH
   const all = (await get(`/api/runs/${RUN_ID}/prompts`)).json();
   assert.deepEqual(all.prompts.find((p) => p.jobId === jobId).availableTakes, ['t2', 't1']);
 });
+
+// The renderers write prompts.json BEFORE they submit, on purpose: a render that dies still leaves
+// the prompt behind for the next attempt. So the file's existence proves only that we COMPOSED
+// something — a take that never reached a provider (no SEGMIND_API_KEY, no FAL_KEY, a rejected
+// payload) would otherwise be offered as a version and read back as "sent … take t3".
+test('a take that composed a prompt but never sent it is not offered, and cannot be opened', async () => {
+  const jobId = JOB_IDS[0];
+  const t3 = path.join(runsDir, RUN_ID, 'renders', 't3', jobId);
+  fs.mkdirSync(t3, { recursive: true });
+  // Exactly what a renderer leaves behind when it dies before the submit: schema 3, no submission.
+  fs.writeFileSync(path.join(t3, 'prompts.json'), JSON.stringify({
+    job_id: jobId, schema: 3, submitted_at: null, backend: 'seedance-2.0@fal', prompt: 'never left the machine',
+  }));
+
+  const plan = (await get(`/api/runs/${RUN_ID}/prompt?job=${jobId}`)).json();
+  assert.deepEqual(plan.availableTakes, ['t2', 't1'], 't3 composed a prompt but sent nothing');
+  assert.equal((await get(`/api/runs/${RUN_ID}/prompt?job=${jobId}&take=t3`)).statusCode, 404,
+    'and asking for it by hand is a miss too — this view labels its text "sent"');
+
+  // The same sidecar, once the provider has accepted it: offered, and dated by the ACCEPTANCE.
+  const acceptedAt = '2026-01-02T03:04:05.000Z';
+  fs.writeFileSync(path.join(t3, 'prompts.json'), JSON.stringify({
+    job_id: jobId, schema: 3, submitted_at: acceptedAt, request_id: 'req_1',
+    backend: 'seedance-2.0@fal', prompt: 'this one really went',
+  }));
+  const after = (await get(`/api/runs/${RUN_ID}/prompt?job=${jobId}`)).json();
+  assert.deepEqual(after.availableTakes, ['t3', 't2', 't1']);
+  const view = (await get(`/api/runs/${RUN_ID}/prompt?job=${jobId}&take=t3`)).json();
+  assert.equal(view.sentAt, acceptedAt, 'the recorded submission time, not the file mtime we just moved');
+});

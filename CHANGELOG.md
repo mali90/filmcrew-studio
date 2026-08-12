@@ -285,6 +285,14 @@
   outgrown it, the render stops before it submits and says how many bytes over it is and what to do
   (shorten it, or discard it), and the prompt sheet's byte meter shows it over budget beforehand.
   The agents' own text is still trimmed to fit — nobody promised *them* word for word.
+- **A take that never left the machine is no longer offered as a version, or read back as "sent".**
+  The renderer writes each take's prompt to disk *before* it submits, on purpose — a render that
+  dies still leaves its prompt behind — so the version picker was reading the file's existence as
+  proof the take had been sent. A render that failed before submission (no `SEGMIND_API_KEY`, no
+  `FAL_KEY`, a payload the endpoint rejected) was therefore listed alongside the real ones and
+  opened with *sent · take t3* over text no provider ever received. A take now appears only once
+  its request was accepted, and reaching for one by hand that never went is a plain miss. Takes
+  rendered before this was recorded are listed exactly as they always were.
 - **"sent 20 minutes ago" now dates the moment the provider *took* the job, not the moment it
   finished.** The time came from the prompt file's last-modified stamp, and that file is rewritten
   when the completion receipt lands — so a long Segmind render read as though it had been sent the

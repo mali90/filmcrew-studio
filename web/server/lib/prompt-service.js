@@ -507,9 +507,32 @@ function byTakeNewestFirst(a, b) {
   return n(b) - n(a);
 }
 
+// The sidecar schema that first recorded `submitted_at`. Older sidecars could not say whether their
+// job ever left the machine, so they are read exactly as they always were — a run's history is not
+// something to erase because a later build learned to ask a better question.
+const SUBMITTED_AT_SCHEMA = 3;
+
 /**
- * The takes that really kept a `prompts.json` for this job, newest first — the version picker's
- * options, and the only take ids `?take=` will answer for. Ids only: no path leaves this function.
+ * Did a provider ever ACCEPT this take's job? The renderers write the sidecar BEFORE they submit —
+ * that is deliberate, so a render that dies still leaves the prompt behind — which makes the file's
+ * existence proof only that we composed something. A take that never reached a provider (no
+ * SEGMIND_API_KEY, no FAL_KEY, a payload the endpoint rejected) must not be offered as a version and
+ * labelled "sent": that is the sheet claiming to show what was sent when nothing was.
+ */
+const wasSubmitted = (sidecar) =>
+  Boolean(sidecar) && (Boolean(sidecar.submitted_at) || Boolean(sidecar.request_id)
+    || Number(sidecar.schema ?? 0) < SUBMITTED_AT_SCHEMA);
+
+/** One take's sidecar for this job, parsed, or null (absent, unreadable, or never submitted). */
+function submittedSidecarAt(file) {
+  let sidecar;
+  try { sidecar = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
+  return wasSubmitted(sidecar) ? sidecar : null;
+}
+
+/**
+ * The takes that really SENT a prompt for this job, newest first — the version picker's options,
+ * and the only take ids `?take=` will answer for. Ids only: no path leaves this function.
  */
 function takesWithPrompts(runDir, jobId) {
   if (!runDir || !JOB_ID_RE.test(String(jobId))) return [];
@@ -520,7 +543,7 @@ function takesWithPrompts(runDir, jobId) {
     try { names = fs.readdirSync(base); } catch { continue; } // no renders/ yet — nothing was sent
     for (const name of names) {
       if (!TAKE_DIR_RE.test(name)) continue;
-      if (fs.existsSync(path.join(base, name, String(jobId), 'prompts.json'))) found.add(name);
+      if (submittedSidecarAt(path.join(base, name, String(jobId), 'prompts.json'))) found.add(name);
     }
   }
   return [...found].sort(byTakeNewestFirst);
@@ -541,7 +564,7 @@ async function labelForRecordedBackend(root, backend, endpoint) {
 /**
  * A past take's prompt, verbatim from its `prompts.json` — immutable, and the only honest answer to
  * "what was actually sent for this clip". Never recomposed: the settings may have moved since.
- * Returns null when that take never wrote a sidecar for this job.
+ * Returns null when that take never wrote a sidecar for this job — or wrote one it never sent.
  */
 async function takeView({ root, runDir, take, jobId }) {
   if (!TAKE_DIR_RE.test(String(take)) || !JOB_ID_RE.test(String(jobId))) return null;
@@ -551,8 +574,10 @@ async function takeView({ root, runDir, take, jobId }) {
   ];
   const file = candidates.find((p) => fs.existsSync(p));
   if (!file) return null;
-  let sidecar;
-  try { sidecar = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
+  // Same gate as the version picker, so a take id that is not offered cannot be reached by hand
+  // either: this view labels its text "sent", and a take that never left must not wear that.
+  const sidecar = submittedSidecarAt(file);
+  if (!sidecar) return null;
 
   const segments = Array.isArray(sidecar.segments) ? sidecar.segments : null;
   const prompt = typeof sidecar.prompt === 'string'

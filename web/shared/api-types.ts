@@ -328,8 +328,9 @@ export interface PromptView {
   planDraftSegments?: string[] | null;
   /** Hash of exactly the authored inputs this prompt is composed from; null for a past take. */
   fingerprint: string | null;
-  /** Take ids that kept a `prompts.json` for THIS job, newest first — the version picker's options.
-   *  A take that never sent this job is absent, so no option opens onto a 404. */
+  /** Take ids that really SENT this job, newest first — the version picker's options. A take whose
+   *  prompt was composed but never accepted by a provider is absent (the sidecar is written before
+   *  the submit), so no option opens onto a 404 or on to text nobody ever received. */
   availableTakes: string[];
   prompt: string;
   /** Kling only — one entry per shot; null on Seedance (one prompt per job). */
