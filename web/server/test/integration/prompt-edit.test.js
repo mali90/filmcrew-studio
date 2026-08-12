@@ -172,6 +172,63 @@ test('an over-budget edit is refused WITH the numbers — never silently truncat
   assert.ok(!fs.existsSync(sidecarOf(runId)));
 });
 
+// The other half of that promise. The root above SETS SEEDANCE_PROMPT_MAX_BYTES, and everything
+// about a set cap still holds — it clamps, and an edit over it is refused with the numbers. The
+// SHIPPED default sets nothing: no provider documents a prompt-length limit for Seedance, so there
+// is no denominator to meter against and no length a save may be refused for. This needs its own
+// app because a cap is read from a run's .env, and this one must not carry the line — in EITHER
+// place, since childEnv wins over .env (dotenv never overwrites an existing variable).
+test('with no cap set, the view has no denominator and a ~20 KB edit rides the whole path verbatim', async () => {
+  const bareEnvRoot = path.join(tmpRoot, 'envroot-uncapped');
+  fs.mkdirSync(bareEnvRoot, { recursive: true });
+  // A REAL .env, because only a real one is read as data (an .env.example previews a prompt no
+  // child would send) — with no SEEDANCE_PROMPT_MAX_BYTES in it.
+  fs.writeFileSync(path.join(bareEnvRoot, '.env'), '# deliberately no SEEDANCE_PROMPT_MAX_BYTES — uncapped is the shipped default\n');
+  const bareRunsDir = path.join(tmpRoot, 'runs-uncapped'); // its own service: recover() scans a runs dir
+  const { SEEDANCE_PROMPT_MAX_BYTES: _capped, ...bareChildEnv } = childEnv;
+  const bare = await buildApp({ root: HOST_ROOT, runsDir: bareRunsDir, outDir, childEnv: bareChildEnv, envRoot: bareEnvRoot });
+  try {
+    const inject = (method, url, payload) => bare.inject({ method, url, payload });
+    const { runId } = (await inject('POST', '/api/runs', { idea: 'a lighthouse keeper on his last night', backend: 'seedance', aspect: '9:16', durationS: null })).json();
+    const t0 = Date.now();
+    for (;;) {
+      const { status, error } = (await inject('GET', `/api/runs/${runId}`)).json().run;
+      if (status === 'plan-ready') break;
+      if (Date.now() - t0 > 120000) throw new Error(`timeout waiting for plan-ready (last: ${status} err=${JSON.stringify(error)})`);
+      await sleep(150);
+    }
+
+    const view = (await inject('GET', `/api/runs/${runId}/prompts`)).json().prompts[0];
+    assert.equal(view.maxBytes, null, '"no limit" travels as null — a 0 would meter every edit as instantly over');
+    assert.equal(view.segmentMaxBytes, null, 'Seedance renders one document per job, so there is no per-segment cap either');
+    assert.equal(typeof view.pinBytes, 'number', 'what the SYSTEM owns is still measured — it just has no budget to be subtracted from');
+    assert.ok(view.pinBytes > 0);
+
+    // ~20 KB of one user's own words: four times the house rule this replaced, and the kind of rich
+    // multi-shot prompt that used to be cut off mid-sentence where nobody could see it.
+    const long = 'A held shot of the lamp, the beam turning slowly over the water. '.repeat(320).trim();
+    assert.ok(Buffer.byteLength(long, 'utf8') > 20000);
+    const saved = await inject('PUT', `/api/runs/${runId}/prompt`, { job: view.jobId, prompt: long });
+    assert.equal(saved.statusCode, 200, saved.body);
+    assert.equal(saved.json().source, 'override');
+
+    const stored = readJson(path.join(bareRunsDir, runId, 'prompt-overrides.json'));
+    assert.equal(stored.jobs[view.jobId].prompt, long, 'stored byte for byte — no trimming, no clamp');
+
+    // …and a reload gets those same bytes back. `draft` is the editable body, which is exactly what
+    // was sent up; `prompt` is that body with the system contract re-composed over it.
+    const reread = (await inject('GET', `/api/runs/${runId}/prompt?job=${view.jobId}`)).json();
+    assert.equal(Buffer.compare(Buffer.from(reread.draft, 'utf8'), Buffer.from(long, 'utf8')), 0, 'round-tripped byte for byte');
+    assert.ok(reread.prompt.includes(long), 'and every one of those bytes is in what we would send');
+    assert.equal(reread.maxBytes, null, 'still no denominator on the way back');
+    // `endsWith`, never `includes` — the speech rule quotes a literal `says: "…"` in every audio-on
+    // prompt, so an `includes` would report a truncation that never happened.
+    assert.ok(!reread.prompt.endsWith('…'), 'nothing was cut, so nothing marks a cut');
+  } finally {
+    await bare.close();
+  }
+});
+
 test('an unknown job 404s and writes nothing', async () => {
   const runId = await plannedRun();
   assert.equal((await put(`/api/runs/${runId}/prompt`, { job: 'K9', prompt: 'hello' })).statusCode, 404);

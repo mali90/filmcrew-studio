@@ -344,7 +344,11 @@ export interface PromptView {
   shotPrompts: string[] | null;
   refs: PromptRef[];
   bytes: number;
-  /** The byte budget the meter draws against; null for a past take (its budget isn't recorded). */
+  /** The byte budget the meter draws against. Null when there is NO budget to draw: the model has
+   *  no prompt-length cap (Seedance ships uncapped, and `SEEDANCE_PROMPT_MAX_BYTES` is the lever for
+   *  anyone who meets a provider limit anyway), the job cannot be composed, or this is a past take,
+   *  whose budget was never recorded. Never 0 — the editor's room is `maxBytes − pinBytes`, which a
+   *  0 sends negative and meters every draft as instantly over. */
   maxBytes: number | null;
   /** Kling's per-segment cap, when the budget is per segment. */
   segmentMaxBytes: number | null;

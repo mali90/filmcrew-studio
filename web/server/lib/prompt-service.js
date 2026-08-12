@@ -52,7 +52,10 @@ function promptDefaults(get) {
     resolution: get('SEEDANCE_RESOLUTION') || '480p',
     generateAudio: voices.audioOn,
     voiceMode: voices.voiceMode,
-    // 0 = uncapped, the shipped default (no provider documents a Seedance prompt-length limit).
+    // 0 = uncapped, mirroring config.js's own default: no provider documents a Seedance
+    // prompt-length limit, so the knob only clamps for a user who sets one (a provider 422 is the
+    // reason to). A number here that config.js does not share would meter an edit — and refuse a
+    // save — against a budget the render never applies.
     promptMaxBytes: num('SEEDANCE_PROMPT_MAX_BYTES', 0),
     style: get('SEEDANCE_STYLE') || '',
     avoid: get('SEEDANCE_AVOID') || '',
