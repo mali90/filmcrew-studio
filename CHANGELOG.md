@@ -478,6 +478,13 @@
   the first character took four views and the second was left with two. Same plan, different result
   depending on the order the cast happened to be listed in. The split is now taken over what is
   actually left after the un-starred elements, so those two characters get three views each.
+- **A shot that names its own elements now sends the starred character's whole reference set.** The
+  top-up filled the roster and pushed each *newly added* reference into the shots that character
+  already appeared in — so when the plan arrived with the full set already on the roster and a shot
+  naming just one of them, nothing was added anywhere and that shot rendered the character from a
+  single image. Explicit element lists are now filled from the roster whichever way the plan was
+  written, in equal shares of that shot's own reference budget. Which characters a shot contains is
+  still the plan's call: nobody is cast into a shot they were not in.
 
 ### Changed
 - **Segmind's prices are on file — and they are roughly half fal's for the same model.** Every

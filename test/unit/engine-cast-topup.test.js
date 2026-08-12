@@ -214,6 +214,32 @@ test('a job naming its own subset is topped up within ITS budget, voice refs inc
   assert.ok(spec.kling.jobs[1].elements.length <= 48, `J2 sends ${spec.kling.jobs[1].elements.length} images + 2 voice refs`);
 });
 
+test('a subset naming ONE id of an already-full roster still sends the whole set', () => {
+  // The Casting agent placed the full reference set itself; only the Job Planner's subset sampled a
+  // single id. The roster needs nothing, so the top-up walks straight past it — and the job used to
+  // submit that one image, which is the exact one-image render this contract exists to end.
+  const inv = refsFor('keeper', 5);
+  const full = refsFor('keeper', 5).map((r) => r.id);
+  const spec = {
+    spec_version: '1.0',
+    kling: {
+      elements: [...full.map((id) => el(id, 'Keeper')), el('prop-net', null, 'object')],
+      jobs: [
+        { job_id: 'J1', shots: ['S1'], elements: ['keeper-01'] },
+        { job_id: 'J2', shots: ['S2'], elements: ['keeper-03'] },   // any id of the set, not just the first
+        { job_id: 'J3', shots: ['S3'], elements: ['prop-net'] },    // the keeper is not in this shot
+      ],
+    },
+  };
+  topUpStarredElements(spec, ctxFor('seedance-2.0@fal', ['keeper'], inv));
+  assert.equal(spec.kling.elements.length, 6, 'the roster was already full — nothing to add there');
+  for (const job of spec.kling.jobs.slice(0, 2)) {
+    assert.deepEqual([...job.elements].sort(), full, `${job.job_id} renders the whole set`);
+  }
+  assert.deepEqual(spec.kling.jobs[2].elements, ['prop-net'],
+    'which characters a shot contains stays the Job Planner\'s call — nobody is cast into it here');
+});
+
 test('a tighter combined-refs cap wins over maxImages', () => {
   const casts = ['ash', 'birch', 'cedar'];
   const inv = casts.flatMap((c) => refsFor(c, 20));

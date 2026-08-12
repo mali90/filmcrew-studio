@@ -446,18 +446,45 @@ export function topUpStarredElements(spec, ctx) {
       if (els.length >= rosterBudget) break;
       els.push({ id: r.id, role: 'subject', image: r.file, character: charName });
       added.push(r.id);
-      // A job naming an explicit subset gets the new ref only where the character already rides,
-      // within that job's OWN budget (its own voice refs, not the roster's worst case).
-      jobs.forEach((job) => {
-        if (!Array.isArray(job?.elements) || !job.elements.length) return; // inherits the roster
-        if (!job.elements.some((id) => { const e = els.find((x) => x.id === id); return e && owns(e); })) return;
-        if (job.elements.length < budgetFor(job)) job.elements.push(r.id);
-      });
     }
   }
+  if (added.length && !Array.isArray(k.elements)) k.elements = els;
+
+  // A job naming an explicit `elements` subset renders EXACTLY that subset (characterGroups), so a
+  // starred character riding in one has to ride with the same references the roster carries — and
+  // that holds even when the roster needed nothing added, which is the case the loop above walks
+  // straight past: the Casting agent already placed the full set, only the Job Planner's subset
+  // sampled a single id, and the job still submits one image. Filled per character in equal shares
+  // of the JOB's own budget (its own voice refs, not the roster's worst case), so a tight job cannot
+  // let the first character eat the last one's slots — and only where the character ALREADY rides,
+  // because which characters a shot contains is the Job Planner's call, not this layer's.
+  const byId = new Map(els.map((e) => [e.id, e]));
+  let filled = 0;
+  for (const job of jobs) {
+    if (!Array.isArray(job?.elements) || !job.elements.length) continue; // inherits the whole roster
+    const ownedInJob = (cslug) => job.elements.filter((id) => { const e = byId.get(id); return e && ownedBy(e, cslug); });
+    const riding = castSlugs.filter((cslug) => ownedInJob(cslug).length);
+    if (!riding.length) continue;
+    const budget = budgetFor(job);
+    const others = job.elements.filter((id) => { const e = byId.get(id); return !e || !riding.some((cslug) => ownedBy(e, cslug)); }).length;
+    const jobShare = Math.min(share, Math.floor(Math.max(0, budget - others) / riding.length));
+    for (const cslug of riding) {
+      const have = new Set(ownedInJob(cslug));
+      for (const e of els) {
+        if (have.size >= jobShare || job.elements.length >= budget) break;
+        if (!ownedBy(e, cslug) || have.has(e.id)) continue;
+        job.elements.push(e.id);
+        have.add(e.id);
+        filled += 1;
+      }
+    }
+  }
+
   if (added.length) {
-    if (!Array.isArray(k.elements)) k.elements = els;
     log.info(`Casting top-up: starred cast pins its full reference set — added ${added.length} element(s) [${added.join(', ')}] (${share}/character across ${cast.length} starred, budget ${rosterBudget}).`);
+  }
+  if (filled) {
+    log.info(`Casting top-up: filled ${filled} reference slot(s) in explicit job subsets, so a job that names its own elements sends the same set as the roster.`);
   }
   return spec;
 }
