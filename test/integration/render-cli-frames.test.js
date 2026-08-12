@@ -212,6 +212,47 @@ test('render: --first-frame-from applies to the FIRST job and --last-frame-from 
   assert.match(b2.prompt, /literal last frame/, 'K2 closes on the given frame');
 });
 
+// The run-bracketing opening pin is the same statement as render-job's, so it has to keep the same
+// lineage: a full render started on a neighbouring take's closing frame really does continue that
+// clip, and only the pin knows it (nothing in THIS run derived the frame). Recording no source there
+// would leave the pinned joint reading as a scene cut, and the stitcher would hard-cut a seam the
+// user paid to make continuous.
+test('render: an opening pin on a closing frame keeps the run\'s first joint on record', PENDING, async () => {
+  const spec = writeSpec('rn-pin-src', TWO_JOBS);
+  const jobDir = path.join(work.dir, 'rn-pin-take', 'renders', 't2', 'K4');
+  fs.mkdirSync(jobDir, { recursive: true });
+  const frame = path.join(jobDir, 'last_frame.png');
+  fs.writeFileSync(frame, ONE_PX_PNG);
+  fs.writeFileSync(path.join(jobDir, 'clip.mp4'), 'FAKE-MP4');
+  const runDir = path.join(work.dir, 'rn-pin-src-out');
+  const r = await runCli('src/cli/render.js', [
+    '--spec', spec, '--out', runDir, '--first-frame-from', frame,
+  ], { env: CHILD_ENV });
+  assert.equal(r.code, 0, r.stderr);
+  const first = JSON.parse(fs.readFileSync(path.join(runDir, 'K1', 'prompts.json'), 'utf8'));
+  assert.deepEqual(first.seam_in.from, { take: 't2', job: 'K4', clip: path.join(jobDir, 'clip.mp4') });
+  // …and it brackets the RUN, so the job after it still opens on this run's own chained frame.
+  const second = JSON.parse(fs.readFileSync(path.join(runDir, 'K2', 'prompts.json'), 'utf8'));
+  assert.notEqual(second.seam_in.from?.take, 't2', 'the run pin must not bleed into the next job');
+});
+
+// Same honesty rule as the per-job path: an applied pin that is NOT a closing frame is a hand-picked
+// still, and it points nowhere.
+test('render: a hand-picked opening still points at no source', PENDING, async () => {
+  const spec = writeSpec('rn-pin-still', TWO_JOBS);
+  const jobDir = path.join(work.dir, 'rn-still-take', 'renders', 't2', 'K4');
+  fs.mkdirSync(jobDir, { recursive: true });
+  const other = path.join(jobDir, 'cover.png');
+  fs.writeFileSync(other, ONE_PX_PNG);
+  const runDir = path.join(work.dir, 'rn-pin-still-out');
+  const r = await runCli('src/cli/render.js', [
+    '--spec', spec, '--out', runDir, '--first-frame-from', other,
+  ], { env: CHILD_ENV });
+  assert.equal(r.code, 0, r.stderr);
+  const first = JSON.parse(fs.readFileSync(path.join(runDir, 'K1', 'prompts.json'), 'utf8'));
+  assert.equal(first.seam_in.from, null);
+});
+
 test('both CLIs fail FAST with a clear message when a frame path does not exist', PENDING, async () => {
   const spec = writeSpec('rj-missing', TWO_JOBS);
   const before = fal.requests.length;

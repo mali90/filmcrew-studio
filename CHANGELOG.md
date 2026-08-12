@@ -575,6 +575,14 @@
   same endpoint, so where that pin keeps the join it says so ("K2 and everything after it can stay
   exactly as they are") instead of predicting a seam, and its **+ downstream** button — and the
   price quoted on it — appear only where the join really breaks.
+- **A whole render pinned to a neighbouring clip keeps that join on record too.** The opening pin
+  brackets the run: it starts the first segment, and when the frame comes off a neighbouring clip —
+  the clip itself, or the `last_frame.png` beside it — that segment really does continue where the
+  other one ended. The frame was applied, but where it came from went unrecorded, so putting the two
+  clips next to each other read the join as broken: the strip called it a cut and the seamless
+  stitcher hard-cut the very seam the run had been pinned to keep. The run's opening pin now records
+  the take/job/clip it points at, exactly as a single re-rendered segment already did. A hand-picked
+  still still points nowhere, and the pin stays on the one segment it brackets.
 
 ### Changed
 - **Segmind's prices are on file — and they are roughly half fal's for the same model.** Every

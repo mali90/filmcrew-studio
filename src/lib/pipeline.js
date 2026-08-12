@@ -262,7 +262,13 @@ export async function renderSpec(spec, { runDir, probe = false, upscale = false,
     // job.first_frame both outrank the chained still, and a `from` recorded for a frame that was
     // never used is the same false continuation claim as no record at all.
     const usedChainedFrame = !startPin && !job.first_frame && startFrame;
-    const seamInFrom = usedChainedFrame && prev ? { take: takeId, job: prev.jobId, clip: prev.clip } : null;
+    let seamInFrom = usedChainedFrame && prev ? { take: takeId, job: prev.jobId, clip: prev.clip } : null;
+    // …and the run's opening pin carries its OWN provenance, by the same rule renderJob applies: a
+    // --first-frame-from naming a genuine closing frame (a clip, or the last_frame.png beside it) says
+    // this run starts where that clip ended, and nothing in THIS run could derive that. Left null, the
+    // joint the pin paid for reads as a scene cut and the stitcher hard-cuts it. Any other still is
+    // hand-picked and points nowhere. Scoped to the job the pin brackets — startPin is the first one.
+    if (startPin) seamInFrom = isClosingFrame(firstFrameFrom) ? await seamPointerFor(firstFrameFrom) : null;
     const r = await RENDERERS[be].render({ job: jobWithPins(job, { startPin: !!startPin, endPin: !!endPin }), spec, runDir, seed, lowRes: probe, startFrame: openFrame, endFrame: endPin, feedsNext, seamInFrom, nonce: take ?? 0 })
       .catch((e) => { log.error(`[${job.job_id}] failed: ${e.message}`); return { jobId: job.job_id, error: e.message }; });
     results.push(r);
