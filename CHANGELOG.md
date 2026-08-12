@@ -465,6 +465,13 @@
   and the lineage now tell one story: an applied closing pin leaves the downstream list empty, and a
   pin that was absent, dropped by the reference budget or refused by the provider still lists every
   job whose seam was chained from the take just replaced.
+- **A re-render you paid to open on the previous clip really opens on it.** When that neighbour had
+  no closing still on disk — a run rendered with frame chaining off, a cleaned run, or a take from
+  before those stills were kept — the request was still priced, reserved and queued, and the clip
+  then rendered with no opening condition at all: you were charged for a join nobody applied. The
+  neighbour's clip is now handed to the renderer instead, which reads its last frame — the very
+  image that missing still held. Only when neither the still nor the clip is on disk is there
+  nothing to pin, and the reply says so up front rather than selling a join the take cannot have.
 
 ### Changed
 - **Segmind's prices are on file — and they are roughly half fal's for the same model.** Every

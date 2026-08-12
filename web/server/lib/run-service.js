@@ -797,7 +797,14 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
       seamFrom = path.join(dir, 'renders', m.cuts.at(-1).take);
     }
     const openingFrame = seamFrom && prevJobId ? path.join(seamFrom, prevJobId, 'last_frame.png') : null;
-    const firstFrameFrom = openingFrame && fs.existsSync(openingFrame) ? openingFrame : undefined;
+    // A PAID opening pin is delivered, not dropped. Where no closing still was ever written for the
+    // previous segment — chaining off (KLING_CHAIN_FRAMES=0), a cleaned or a legacy take — the
+    // neighbour's CLIP is handed over instead: the child reads its LAST frame, which is the very
+    // image that still would have held (pipeline.js resolveBoundaryFrame, the documented
+    // --first-frame-from <clip> usage). Reserving a take and queueing the spend with neither was how
+    // a `start`/`both` request rendered as if it had asked for nothing.
+    const firstFrameFrom = openingFrame && fs.existsSync(openingFrame) ? openingFrame
+      : (prevClip && fs.existsSync(prevClip) ? prevClip : undefined);
     // Seam-out: the NEXT segment's own clip, handed to the child as a CLIP — grabbing its opening
     // frame is the renderer's job (one implementation of that grab, and it is the one that already
     // knows which end of a neighbour a closing pin wants).
@@ -825,7 +832,9 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     // end is judged on `firstFrameFrom`, never on `seamFrom`: the take dir only says WHERE to look,
     // and renderJob chains from it solely when <seamFrom>/<prevJob>/last_frame.png is really there
     // (it warns and renders without continuity otherwise) — so a resolved dir with no frame in it
-    // is exactly the case that used to be reported as a pin nobody would get.
+    // is exactly the case that used to be reported as a pin nobody would get. With neither that
+    // still nor the neighbour's clip on disk there is nothing to read a frame out of, and the reply
+    // says so rather than selling a join this take cannot have.
     const applied = {
       mode,
       start: firstFrameFrom ? opening.start : null,

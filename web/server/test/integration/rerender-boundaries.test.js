@@ -166,11 +166,13 @@ test('both REPAIRS the joint auto left alone', () => {
 });
 
 // `--seam-from` is a place to LOOK, never evidence that anything is there. When the previous clip's
-// own take carries no closing still, the fallback aims at the latest cut's take dir — which, for a
-// cut assembled from several takes, need not hold that segment at all. renderJob then warns and
-// renders without cross-job continuity, so a reply that still said `start` sold a joint the take was
-// never going to have, and the strip would afterwards report it as broken for no visible reason.
-test('a seam dir with no frame in it is reported as no opening pin at all', () => {
+// own take carries no closing still — a KLING_CHAIN_FRAMES=0 render, a cleaned or legacy take — the
+// fallback aims at the latest cut's take dir, which for a cut assembled from several takes need not
+// hold that segment at all. The user PAID for that opening join, so the neighbour's CLIP is handed
+// over instead and the child reads the missing still out of it: dropping the pin here queued a spend
+// that rendered as if nobody had asked for one, and the strip afterwards reported the joint broken
+// for no visible reason.
+test("a paid opening pin whose closing still is gone is derived from the neighbour's CLIP", () => {
   const runId = 'web-19990101000006-noframe';
   const { dir, svc, enqueued } = fakeService(runId, mixed);
   // K1 lives in t2; take away its closing still. The cut's take is t1, which never held a K1.
@@ -180,12 +182,28 @@ test('a seam dir with no frame in it is reported as no opening pin at all', () =
 
   const child = enqueued.at(-1);
   assert.equal(flag(child, '--seam-from'), path.join(dir, 'renders', 't1'), 'the child is still told where to look');
-  assert.equal(flag(child, '--first-frame-from'), undefined, 'but there is no frame to pin, and none is claimed');
-  assert.equal(r.boundaries.start, null, 'so the reply promises no opening join');
-  assert.equal(r.boundaries.startMode, 'none');
+  assert.equal(flag(child, '--first-frame-from'), clipOf(runId, 't2', 'K1'),
+    "the clip itself — its LAST frame is exactly the still that is missing");
+  assert.equal(r.boundaries.start.from.take, 't2', 'and the reply promises the join this take will really have');
+  assert.notEqual(r.boundaries.startMode, 'none');
   // the other end is judged on its own file and is untouched by any of this
   assert.equal(r.boundaries.end.to.jobId, 'K3');
   assert.notEqual(r.boundaries.endMode, 'none');
+});
+
+test('with neither the still nor the clip on disk, no opening pin is claimed', () => {
+  const runId = 'web-19990101000010-nothing';
+  const { svc, enqueued } = fakeService(runId, mixed);
+  // Nothing is left of K1 to read a frame out of — the honest answer is that this take opens on
+  // nothing, not a promise the render cannot keep.
+  fs.rmSync(frameOf(runId, 't2', 'K1'));
+  fs.rmSync(clipOf(runId, 't2', 'K1'));
+
+  const r = svc.rerenderJob(runId, { jobId: 'K2', boundaries: 'both' });
+
+  assert.equal(flag(enqueued.at(-1), '--first-frame-from'), undefined);
+  assert.equal(r.boundaries.start, null, 'so the reply promises no opening join');
+  assert.equal(r.boundaries.startMode, 'none');
 });
 
 test('start and end each pin one side only; none renders standalone', () => {
