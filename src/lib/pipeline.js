@@ -314,7 +314,9 @@ export async function renderSpec(spec, { runDir, probe = false, upscale = false,
  * `seamFrom` (optional): a PRIOR render dir whose previous-job `last_frame.png` seeds this job's
  * opening frame, matching renderSpec's cross-job chaining. Returns the renderer result plus
  * `staleDownstream`: job ids whose seams were chained from the OLD take of this job — re-render
- * them too (cascade) for a continuous seam, or expect a visible cut.
+ * them too (cascade) for a continuous seam, or expect a visible cut. Empty when an APPLIED
+ * `lastFrameFrom` already made this clip arrive on the next one's opening frame: that joint is
+ * recorded, so nothing downstream needs re-rendering.
  * @param {object} spec
  * @param {string} jobId
  * @param {{runDir:string, backend?:string, take?:number, feedback?:string, seamFrom?:string,
@@ -402,13 +404,24 @@ export async function renderJob(spec, jobId, { runDir, backend, take = 0, feedba
   // An APPLIED end pin knows its destination — the clip --last-frame-from named. Recorded only when
   // the pin survived (a budget-dropped soft pin records mode 'none', and a destination for a frame
   // nothing consumed would be a false continuation claim from this side of the joint).
+  let endPinned = false;
   if (lastFrameFrom && r.seamOut && !['none', 'unsupported'].includes(r.seamOut.mode)) {
     const to = await seamPointerFor(lastFrameFrom);
-    if (to) { r.seamOut.to = to; stampSeamOut(runDir, job.job_id, { to }); }
+    if (to) { r.seamOut.to = to; stampSeamOut(runDir, job.job_id, { to }); endPinned = true; }
   }
 
-  if (staleDownstream.length) {
-    log.warn(`Seam note: ${staleDownstream.join(', ')} chained from the previous ${jobId} take — re-render them too for a continuous seam.`);
+  // …and a joint that pin really made is not stale. This clip was rendered to ARRIVE on the next
+  // one's opening frame and wrote down where it lands, which is the evidence BOTH judges of a joint
+  // accept from this side (seam-rule.js closesOnNext — the stitcher and the lineage badge ask the
+  // same function). Advising a cascade over it would sell a paid re-render of footage nothing
+  // changed. Only an APPLIED pin clears the list: an absent one, a soft pin the reference budget
+  // dropped ('none') or one the provider refused ('unsupported') leaves every downstream seam
+  // chained from the take this render just replaced.
+  const stale = endPinned ? [] : staleDownstream;
+  if (stale.length) {
+    log.warn(`Seam note: ${stale.join(', ')} chained from the previous ${jobId} take — re-render them too for a continuous seam.`);
+  } else if (endPinned && staleDownstream.length) {
+    log.info(`Seam note: ${jobId} was rendered to arrive on its pinned closing frame — nothing downstream needs re-rendering (${staleDownstream.join(', ')} unchanged).`);
   }
 
   // Merge into any render.json already in this dir (a cascade renders several jobs into ONE take
@@ -419,7 +432,7 @@ export async function renderJob(spec, jobId, { runDir, backend, take = 0, feedba
   merged.set(r.jobId, r);
   const ordered = jobs.map((j) => merged.get(j.job_id)).filter(Boolean);
   await writeJson(rjPath, { project: spec.project.title, backend: be, take, jobs: ordered });
-  return { ...r, backend: be, staleDownstream };
+  return { ...r, backend: be, staleDownstream: stale };
 }
 
 /** The provider a run rendered on ('fal' | 'segmind'), or null when the backend is unrecorded — an

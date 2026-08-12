@@ -458,6 +458,13 @@
   names a take's job — its clip, or the `last_frame.png` beside it — now records that
   take/job/clip, exactly as the chain would have. A hand-picked still still points nowhere, because
   it genuinely does.
+- **A segment re-rendered onto its neighbour's opening frame no longer advises a cascade it does not
+  need.** `render-job` listed every later job as stale whenever it re-rendered a middle segment —
+  even when `--last-frame-from` had just made this clip *arrive* on the next one's first frame and
+  recorded that it lands there, which is the joint both continuity judges read as intact. The advice
+  and the lineage now tell one story: an applied closing pin leaves the downstream list empty, and a
+  pin that was absent, dropped by the reference budget or refused by the provider still lists every
+  job whose seam was chained from the take just replaced.
 
 ### Changed
 - **Segmind's prices are on file — and they are roughly half fal's for the same model.** Every
