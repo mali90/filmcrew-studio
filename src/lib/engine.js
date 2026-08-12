@@ -467,18 +467,22 @@ export function topUpStarredElements(spec, ctx) {
   };
   const trimmed = trimToBudget(els, rosterBudget, castSlugs);
   if (trimmed.length) {
-    const gone = new Set(trimmed.map((e) => e.id));
+    const gone = new Map(trimmed.map((e) => [e.id, e]));
+    const rosterById = new Map(els.map((e) => [e.id, e]));
     for (const job of jobs) {
       if (!Array.isArray(job?.elements) || !job.elements.length) continue;
       const kept = job.elements.filter((id) => !gone.has(id));
-      // An explicit subset must never be left EMPTY: that means "inherit the whole roster"
-      // (characterGroups), which would cast every character in the plan into a job the planner
-      // wrote for one. Each character it named keeps a seat instead — the subset fill below then
-      // widens that seat to the job's own share.
-      job.elements = kept.length ? kept : castSlugs
-        .filter((cs) => job.elements.some((id) => ownedBy(trimmed.find((e) => e.id === id), cs)))
-        .map((cs) => els.find((e) => ownedBy(e, cs))?.id)
-        .filter(Boolean);
+      // A trim must never UNCAST a character the subset named. The subset renders exactly what it
+      // lists (characterGroups) and the fill below only widens seats that ALREADY ride, so the
+      // character whose one listed reference was the one trimmed drops out of the paid job —
+      // silently, because a surviving co-star keeps `kept` non-empty. Every character the subset
+      // cast is re-seated on a surviving roster reference instead, and the fill then widens that
+      // seat to the job's own share. An emptied subset is the same repair, not a separate one:
+      // leaving it empty would mean "inherit the whole roster", casting every character in the plan
+      // into a job the planner wrote for one.
+      const uncast = castSlugs.filter((cs) => job.elements.some((id) => ownedBy(gone.get(id), cs))
+        && !kept.some((id) => ownedBy(rosterById.get(id), cs)));
+      job.elements = kept.concat(uncast.map((cs) => els.find((e) => ownedBy(e, cs))?.id).filter(Boolean));
     }
   }
   const added = [];

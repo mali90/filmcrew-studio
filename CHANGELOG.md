@@ -270,6 +270,12 @@
   first upload had already begun. Over-budget reference sets are now trimmed to what the model
   carries, the same way undersized ones are topped up: evenly, from the biggest set first, and never
   below one reference per character.
+- **Giving a reference back no longer writes a character out of the segment that cast them.** A job
+  that names its own reference subset renders exactly what it names, and when the one image it
+  carried for a character was the image the trim gave back, the job simply went on with whoever was
+  left — so a segment you paid for came back without a character the plan had cast in it, and
+  nothing said so. Every character a subset names now keeps a seat on a reference that survived, and
+  is filled back up to that job's share from there.
 - **Approving a reopened run again really does write a new final beside the old one.** When nothing
   had been re-rendered and no upscale was asked for, the second approval delivered the *same file*:
   the delivery history grew a second row pointing at the first row's path, the genuine first

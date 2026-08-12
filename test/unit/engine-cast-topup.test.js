@@ -211,6 +211,31 @@ test('a subset whose only reference is trimmed keeps its character, never inheri
   assert.ok(spec.kling.jobs[0].elements.length <= 49);
 });
 
+// …and the same has to hold when the subset is only PARTLY trimmed. A surviving co-star keeps
+// `kept` non-empty, so the character whose one listed reference went was accepted as uncast — and
+// because the fill below only widens seats that ALREADY ride, the paid job rendered without them.
+test('a subset keeps every character it cast, not only the one whose reference survived', () => {
+  const inv = [...refsFor('keeper', 60), ...refsFor('gull', 60)];
+  // 50 on a 49-image budget: the trim takes from the biggest set, i.e. the LAST keeper reference —
+  // which is the very one J1 cast Keeper with.
+  const roster = [el('gull-01', 'Gull'), ...refsFor('keeper', 49).map((r) => el(r.id, 'Keeper'))];
+  const spec = {
+    spec_version: '1.0',
+    kling: {
+      elements: roster,
+      jobs: [{ job_id: 'J1', shots: ['S1'], elements: ['gull-01', 'keeper-49'] }],
+    },
+    audio: { voice: { lines: [line('S1', 'Keeper')] } },
+  };
+  topUpStarredElements(spec, ctxFor('seedance-2.5@fal', ['keeper', 'gull'], inv, voiced('Keeper')));
+  assert.equal(spec.kling.elements.length, 49, 'the voice clip took the 50th slot back');
+  assert.ok(!spec.kling.elements.some((e) => e.id === 'keeper-49'), 'and it took it from the crowded set');
+  const cast = spec.kling.jobs[0].elements;
+  assert.ok(cast.some((id) => id.startsWith('keeper-')), 'J1 was cast with Keeper — a trim re-seats them, never uncasts them');
+  assert.ok(cast.some((id) => id.startsWith('gull-')), 'and Gull still rides');
+  for (const id of cast) assert.ok(spec.kling.elements.some((e) => e.id === id), `${id} is not in the roster`);
+});
+
 test('two voiced speakers reserve two slots; an unregistered speaker reserves none', () => {
   const inv = refsFor('keeper', 60);
   const specFor = (clipFor, lines) => {
