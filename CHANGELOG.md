@@ -349,7 +349,10 @@
   sending). Takes rendered before this was recorded read exactly as they always did.
 - **The starred-cast top-up no longer holds a reference slot back for the seam frame** — seam pins
   yield to cast references at render (a pin is a nicety, identity is not), so reserving the slot
-  only starved a starred character of one view without saving the pin. Voice references are the
+  only starved a starred character of one view without saving the pin. The instructions the casting
+  step actually reads now say the same thing — they still reserved that slot, both in the rule and
+  in the worked example the arithmetic is copied from — so a relevant subject or object reference is
+  no longer left out of a plan to keep room for a pin the render gives up first. Voice references are the
   opposite case and are now reserved: on a model that counts images and audio against ONE budget
   (fal Seedance 2.5's 50), a starred character used to be topped up into all 50 image slots, and a
   single voiced line with a minted clip then made the renderer count 51 references and throw before

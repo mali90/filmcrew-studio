@@ -11,6 +11,7 @@
 // Fixtures are SYNTHETIC (inventory arrays ride ctx.inventory) — no real profiles/references.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { neutralizeDotenv } from '../helpers/env.js';
 
 neutralizeDotenv();
@@ -441,4 +442,15 @@ test('contextBlock states the combined-refs cap and Kling\'s per-character ceili
   assert.ok(kling.includes('≤4 images per character (1 frontal + 3 references)'));
   const s20 = contextBlock({ ...base, backend: 'seedance-2.0@fal', caps: capsFor('seedance-2.0@fal') });
   assert.ok(!s20.includes('combined across') && !s20.includes('per character'), 'models declaring neither cap keep the historic line');
+});
+
+// The Casting agent's own brief is injected verbatim beside that context, so the two have to agree.
+// A slot held back for the seam frame under-fills a starred cast to protect a pin SEAM_PRIORITY
+// drops FIRST — and this layer tops up starred references only, so an un-starred pin left out to
+// make room for the pin is a subject or object simply missing from the render.
+test('4-casting.md holds no slot back for the seam frame — the brief matches contextBlock', () => {
+  const md = readFileSync(new URL('../../engine/agents/4-casting.md', import.meta.url), 'utf8');
+  assert.ok(!/seam slot reserved|belongs to the seam frame/i.test(md), 'the brief still reserves a slot the render gives up before it gives up a reference');
+  assert.ok(md.includes('budget 9') && !md.includes('budget 8'),
+    'the worked example is the arithmetic the agent pattern-matches — it must spend the WHOLE 9-image cap');
 });
