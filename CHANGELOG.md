@@ -8,13 +8,15 @@
   control, defaulting to fal.ai (its per-output-second rate usually lands under Segmind's flat
   $0.125 per input second — usually, which is exactly why "trust the default" is not the offer).
   Each option carries its own live figure, quoted from that vendor's published Topaz rate, and
-  switching re-quotes everything that hangs off the estimate: the paid button's price, the target
-  the card promises, and the "already HD" gate — all follow the *picked* provider's delivered
-  short side, so a Segmind pick honors `UPSCALE_TARGET_RESOLUTION` while fal keeps lifting toward
-  ~1080p, and neither can promise a target the other would deliver. A provider whose key is not on
-  file renders disabled with the reason in plain words instead of failing after the click; when
-  only one vendor has a key, that one is the default and the approval can never die on a missing
-  key. The pick rides the approve payload (`provider: fal|segmind`, anything else is a 400 before
+  switching re-quotes everything that hangs off the estimate: the paid button's price and the
+  target the card promises follow the *picked* provider's delivered short side, so a Segmind pick
+  honors `UPSCALE_TARGET_RESOLUTION` while fal keeps lifting toward ~1080p, and neither can promise
+  a target the other would deliver. Whether the upscale is *offered* at all is decided per vendor
+  against that same figure: the toggle is withheld only when no reachable vendor aims above the cut
+  you are approving, and the default falls to the first one that can actually lift it. A provider
+  that cannot serve this cut — no key on file, or a target the cut has already reached — renders
+  disabled with the reason in plain words instead of failing after the click; when only one vendor
+  can, that one is the default and the approval can never die on a missing key. The pick rides the approve payload (`provider: fal|segmind`, anything else is a 400 before
   any money moves), is pinned into that one finalize child as an explicit `UPSCALE_PROVIDER` —
   never written to `.env`, so it cannot leak into the next run — and the cost ledger's upscale
   line records the vendor that actually billed. Approving without the toggle sends no provider at
@@ -426,6 +428,27 @@
 - The first-run wizard's end-to-end walkthrough followed the old step order and stalled on a key
   field that had moved: the backend picker comes **before** the render key now (which key you are
   asked for depends on which provider your backend bills), and the test walks it that way.
+- **A 4K upscale is no longer unreachable because the other vendor was already at its target.** The
+  approve card judged "already HD" by the *picked* provider alone, so a 1080p cut with fal picked
+  (the default) read as at-target and disabled the upscale toggle — and the provider control only
+  renders while that toggle is on, so a Segmind install with `UPSCALE_TARGET_RESOLUTION=4k` had no
+  way in at all. Each vendor is judged against its own delivered target now, both for the toggle
+  and for its own option in the picker.
+- **A re-render that can afford only one boundary pin reports each end on its own terms.** When the
+  reference budget kept the opening pin and dropped the closing one (eight cast references on a
+  nine-image Seedance model), the dialog collapsed both ends to the weaker answer: it called the
+  reference-guided opening a scene cut, hid the soft-pin caveat that belonged to it, and still told
+  you the ending you asked for would hold the join into the next segment. Each boundary now carries
+  its own strength into the words — a sentence per end when they differ — the *"near-seamless
+  (reference-guided)"* caveat appears whenever either end rides on a reference, and the downstream
+  warning keys on the pin that will really be applied rather than the one that was requested.
+- **The clip strip says which cut its badges describe.** The cut switcher changes the master on the
+  stage, but the strip keeps drawing the latest render's clips with the continuity the server
+  aligned to that render — no older cut's composition is recorded to draw instead. A joint
+  re-rendered since could therefore claim the opposite of the video playing. While an older cut is
+  on the stage the strip now names the cut its clips and joins belong to, and its region label says
+  the same to assistive tech; the joins stay readable, because a blank strip trades one wrong
+  impression for another.
 
 ### Changed
 - **Segmind's prices are on file — and they are roughly half fal's for the same model.** Every
