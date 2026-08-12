@@ -256,6 +256,13 @@
   produced a clip — which is how picking a cut explicitly has always been priced. A full render
   quotes exactly what it did before; a probe, or a take some jobs failed in, now quotes what you
   will really pay.
+- **A queued re-render no longer shows the previous take's clips as finished.** The server
+  deliberately reports "no current render" the moment a full or probe render is launched after a
+  completed take — the old take's clips are not the new one's — but the live page treated that
+  answer as a gap in the payload and put the finished take straight back on screen. So the render
+  page showed green, completed segments for work that was still sitting in the queue. The refreshed
+  run is now taken as it is sent, so a queued take shows its jobs waiting, and the first real tick
+  from the new render is the first thing that goes green.
 - **A shot written for one prop can no longer be sent the entire cast.** When a plan's references
   do not fit the model's budget, the engine trims the roster — and if what it took was the last
   reference a job had explicitly named, that job's list was left empty. An empty list means "use

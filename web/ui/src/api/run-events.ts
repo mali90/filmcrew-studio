@@ -85,10 +85,16 @@ export function reduceRunEvents(state: RunLive, event: ClientRunEvent, nowMs = D
       // In-flight agent timers/log stay as they are; but when there is NO live texture yet (page
       // opened without an SSE snapshot), seed the agent states from the disk-derived progress.
       const hasLiveTexture = state.agents.some((a) => a.state !== 'waiting') || state.run !== null;
-      // disk has no render.json until the render finishes — don't let a refetch wipe live job ticks
-      const latestRender = event.run.latestRender ?? state.run?.latestRender ?? null;
-      const run = latestRender === event.run.latestRender ? event.run : { ...event.run, latestRender };
-      return { ...state, run, agents: hasLiveTexture ? state.agents : seedAgents(event.run) };
+      // The run arrives WHOLE — GET /api/runs/:id serializes every field of the detail, `latestRender`
+      // included, as null when there is none — so it replaces what we hold rather than being merged
+      // into it. Keeping the previous render whenever the fresh one was null read as protecting live
+      // job ticks; what it actually did was overrule the server's ONE way of saying "no current
+      // render": a full or probe render queued after a finished take, whose clips are not this
+      // render's. The page then showed the old take's clips as completed while nothing of the sort
+      // was happening. Nothing honest is lost by obeying it — a render with a live child reports that
+      // take's own in-progress view (never null), and after an explicit null the next `job` event
+      // rebuilds the job list from the plan below.
+      return { ...state, run: event.run, agents: hasLiveTexture ? state.agents : seedAgents(event.run) };
     }
     case 'status': {
       if (!state.run) return state;
