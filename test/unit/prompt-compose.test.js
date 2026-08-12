@@ -245,6 +245,32 @@ test('promptFingerprint is stable, per-job, and sensitive to exactly the authore
     assert.notEqual(fp(s), ref, `an authored change must invalidate the fingerprint: ${mutate}`);
   }
 
+  // The CAST is an authored input too: characterGroups turns it into the Seedance identity clause
+  // and the Kling @ElementN speaker mapping, so a re-cast that never touches a shot still rewrites
+  // this job's prompt — and an override written before it really is stale.
+  const GULL = { id: 'gull-01', role: 'subject', image: 'elements/references/gull-01.png', character: 'Gull' };
+  for (const mutate of [
+    (s) => { s.kling.elements[0].character = 'Keeper'; },                          // the group is renamed
+    (s) => { s.kling.jobs[0].elements = ['subject', 'gull-01']; s.kling.elements.push(GULL); }, // a second group
+  ]) {
+    const s = goldenSpec();
+    mutate(s);
+    assert.notEqual(fp(s), ref, `a cast change must invalidate the fingerprint: ${mutate}`);
+  }
+  // …but only this job's cast. A roster entry no job of K1's names is not K1's prompt.
+  const otherCast = goldenSpec();
+  otherCast.kling.elements.push(GULL);
+  assert.equal(fp(otherCast), ref, 'a roster addition K1 does not name leaves K1 alone');
+  // …unless K1 named no subset at all, in which case the roster IS its cast (characterGroups).
+  const inherits = (extra) => {
+    const s = goldenSpec();
+    s.kling.jobs[0].elements = [];
+    if (extra) s.kling.elements.push(extra);
+    return fp(s);
+  };
+  assert.equal(inherits(null), ref, 'inheriting a one-element roster composes exactly what naming it does');
+  assert.notEqual(inherits(GULL), ref, 'a roster addition an inheriting job WILL send must stale its override');
+
   // Per-JOB scope: editing K2's shots must not stale K1's saved override.
   const otherJob = goldenSpec();
   otherJob.shots.find((s) => s.shot_id === 'S4').kling.content_prompt = 'A different scene entirely.';

@@ -487,10 +487,11 @@ export function pinBytesOf(backend, job, spec, settings, opts = {}) {
 // ── The staleness oracle behind the "this prompt was edited before X changed" banner ────────────
 
 /**
- * A stable hash of exactly the AUTHORED inputs one job's prompt is composed from. A saved prompt
- * override records the fingerprint it was written against; when a revise pass moves any of these,
- * the UI marks the override stale. Cosmetic churn (title, logline, QC report) must NOT: those never
- * reach the prompt, and staling an edit for them would train users to ignore the banner.
+ * A stable hash of exactly the AUTHORED inputs one job's prompt is composed from — its shots, its
+ * dialogue, its transitions and its cast. A saved prompt override records the fingerprint it was
+ * written against; when a revise pass moves any of these, the UI marks the override stale. Cosmetic
+ * churn (title, logline, QC report) must NOT: those never reach the prompt, and staling an edit for
+ * them would train users to ignore the banner.
  * @param {object} spec
  * @param {string} jobId
  * @returns {string} a short hex digest
@@ -513,7 +514,17 @@ export function promptFingerprint(spec, jobId) {
   const transitions = (spec?.assembly?.transitions ?? [])
     .filter((t) => ids.includes(t?.after_shot))
     .map((t) => [t.after_shot, t.type ?? null]);
-  const payload = JSON.stringify({ jobId, shots, lines, transitions, audio: spec?.kling?.generate_audio ?? null });
+  // The job's CAST, resolved the way characterGroups resolves it — an absent/empty `job.elements`
+  // inherits the WHOLE roster, so a Casting revise moves this job's prompt without touching a shot.
+  // The groups it builds are what the Seedance identity clause names and what Kling's `@ElementN`
+  // speaker tokens count from, so a re-cast roster changes the composed prompt with the shots
+  // untouched, and an override written before it is genuinely stale. Only the fields that reach the
+  // TEXT are hashed: swapping an element's image file changes which picture is uploaded, not a byte
+  // of the prompt, and staling an edit for that would train users to ignore the banner.
+  const roster = spec?.kling?.elements ?? [];
+  const cast = (job?.elements?.length ? job.elements : roster.map((e) => e?.id))
+    .map((id) => [id ?? null, roster.find((e) => e?.id === id)?.character ?? null]);
+  const payload = JSON.stringify({ jobId, shots, lines, transitions, cast, audio: spec?.kling?.generate_audio ?? null });
   return createHash('sha256').update(payload, 'utf8').digest('hex').slice(0, 16);
 }
 
