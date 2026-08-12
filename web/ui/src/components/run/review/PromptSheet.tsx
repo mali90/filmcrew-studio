@@ -509,7 +509,11 @@ function SheetPanel({ run, target, onClose }: { run: RunDetail; target: PromptTa
           {version === 'plan' ? 'This plan has no jobs yet.' : `take ${version} sent nothing for this segment.`}
         </p>
       ) : (
-        views.map((v) => <JobPrompt key={v.jobId} run={run} view={v} />)
+        // Keyed by VERSION as well as job: a take already in the cache resolves synchronously, so a
+        // key of job id alone let React reuse the mounted JobPrompt and carry its open editor across
+        // the switch — draft textareas and a zero-byte budget on a page whose own footer says past
+        // takes cannot be edited. Switching versions is a different document, so it remounts.
+        views.map((v) => <JobPrompt key={`${version}:${v.jobId}`} run={run} view={v} />)
       )}
 
       {version === 'plan' && orphaned.length > 0 && (

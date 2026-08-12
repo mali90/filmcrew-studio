@@ -131,6 +131,41 @@ describe('PromptSheet', () => {
     expect(within(panel).queryByRole('button', { name: /edit|save|use this as my draft/i })).not.toBeInTheDocument();
   });
 
+  it('switching versions closes the editor — a cached take cannot inherit an open draft', async () => {
+    servePrompts({
+      K2: promptView('K2', { availableTakes: ['t1'] }),
+      'K2@t1': sentPromptView('K2', 't1'),
+    });
+    renderRunPage(makeRun('review'));
+    await screen.findByRole('region', { name: 'Review stage' });
+    await openFromStrip('K2');
+
+    const panel = await screen.findByTestId('prompt-sheet');
+    const picker = await screen.findByRole('radiogroup', { name: 'Prompt version' });
+    const pick = (name: string) => userEvent.click(within(picker).getByRole('radio', { name }));
+
+    // Warm the cache first: this bug only bites once the take resolves SYNCHRONOUSLY, which is the
+    // second visit, not the first — a pending fetch renders the "Composing…" line and unmounts the
+    // editor by itself, so a test that only ever switches once passes over the hole.
+    await pick('take t1');
+    await waitFor(() => expect(panel).toHaveTextContent('the words take t1 really sent for K2'));
+    await pick('Current plan');
+    await userEvent.click(await within(panel).findByRole('button', { name: /edit prompt/i }));
+    expect(within(panel).getByRole('textbox')).toBeInTheDocument();
+
+    await pick('take t1');
+    await waitFor(() => expect(panel).toHaveTextContent('the words take t1 really sent for K2'));
+    // The footer of this very view says past takes cannot be edited, so nothing may offer to.
+    expect(panel).toHaveTextContent("Past takes can't be edited.");
+    expect(within(panel).queryByRole('textbox')).not.toBeInTheDocument();
+    expect(within(panel).queryByRole('button', { name: /save|use this as my draft|cancel/i })).not.toBeInTheDocument();
+
+    // …and coming back to the plan is a fresh read of it, not the abandoned draft.
+    await pick('Current plan');
+    await waitFor(() => expect(within(panel).queryByRole('textbox')).not.toBeInTheDocument());
+    expect(await within(panel).findByRole('button', { name: /edit prompt/i })).toBeInTheDocument();
+  });
+
   it('a run that has sent nothing yet gets a static label, not a one-segment control', async () => {
     renderRunPage(makeRun('review')); // default handler: availableTakes []
     await screen.findByRole('region', { name: 'Review stage' });
