@@ -535,12 +535,15 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
   }
 
   function enqueueRenderJob(runId, { jobId, takeDir, seamFrom, firstFrameFrom, lastFrameFrom, feedback, take, promptOverrides }) {
-    const dir = dirFor(runId);
     return mgr.enqueue({
       runId, lane: 'spend', kind: 'render-job',
       script: CLI(root, 'render-job.js'),
       args: [
-        '--spec', path.join(dir, 'spec.json'), '--job', jobId, '--out', takeDir,
+        // The take's OWN plan — snapshotted by snapshotSpec before this take cost anything — never
+        // the run's live spec.json, which a revision landing on the plan lane can replace while this
+        // job is still queued. A cascade job enqueued later reads the same frozen copy, so every
+        // segment of one chain renders one plan.
+        '--spec', path.join(takeDir, 'spec.json'), '--job', jobId, '--out', takeDir,
         // --seam-from names the take the opening frame came off (that is what makes the joint
         // readable afterwards); --first-frame-from names the frame itself, so the boundary the user
         // chose is honoured however the chaining default is configured.
@@ -595,6 +598,29 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
       fs.rmSync(takeDir, { recursive: true, force: true });
       throw e;
     }
+  }
+
+  /**
+   * Freeze the plan this take is PAID to render into the take dir, and hand back the path the child
+   * will read.
+   *
+   * The estimate, the take's `estUsd`, the cost-ledger row, `promptSource` and the recorded
+   * `revision` are all computed from the spec read HERE, at enqueue — while the child re-read the
+   * run's live spec.json at spawn. Those are not the same document: a revise runs on the PLAN lane,
+   * which drains beside the spend lane, so a revision landing while a render waits its turn promotes
+   * a new spec.json under a take that was quoted, recorded and labelled against the old one. The
+   * child then renders jobs nobody priced, for a figure nobody was shown, in a take whose record
+   * names the revision it did NOT render.
+   *
+   * The take is immutable, so it gets its own copy — exactly as its prompt overrides do, at the same
+   * moment and for the same reason. (Both render children write this same file themselves when they
+   * finish; writing it here just makes it true from the moment the money is committed, which is also
+   * what lets an interrupted take still say what it was going to render.)
+   */
+  function snapshotSpec(takeDir, spec) {
+    const file = path.join(takeDir, 'spec.json');
+    fs.writeFileSync(file, JSON.stringify(spec, null, 2) + '\n');
+    return file;
   }
 
   function snapshotPromptOverrides(dir, takeDir, jobIds) {
@@ -843,6 +869,9 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
     const specJobs = (spec.kling?.jobs ?? []).map((j) => j.job_id);
     // a probe renders only the FIRST job, so only its edit can be in play
     const overrides = reserved(takeDir, () => snapshotPromptOverrides(dir, takeDir, mode === 'probe' ? specJobs.slice(0, 1) : specJobs));
+    // …and the PLAN those words belong to is frozen beside them (see snapshotSpec): `est` above
+    // priced this exact document, so this exact document is what the child must render.
+    const specFile = reserved(takeDir, () => snapshotSpec(takeDir, spec));
     updateManifest(dir, (m) => {
       m.takes.push({ id: takeId, mode, revision: m.revisions.at(-1)?.id ?? null, createdAt: now().toISOString(), estUsd: est.totalUsd, promptSource: overrides.promptSource });
       m.costLedger.push({ ts: now().toISOString(), action: mode, ...ledgerLine(est) });
@@ -852,7 +881,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
     const queued = mgr.enqueue({
       runId, lane: 'spend', kind: mode === 'probe' ? 'probe' : 'render',
       script: CLI(root, 'render.js'),
-      args: ['--spec', path.join(dir, 'spec.json'), '--out', takeDir, '--out-name', outNameFor(runId, spec, takeId),
+      args: ['--spec', specFile, '--out', takeDir, '--out-name', outNameFor(runId, spec, takeId),
         ...(mode === 'probe' ? ['--probe'] : []), ...overrides.args],
       env: env(runId), cwd: root,
     });
@@ -950,6 +979,10 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
     // Every job this take will render — the cascade jobs land in the SAME take dir, so they read the
     // same snapshot (that is why it is taken once, here, and not per enqueue).
     const overrides = reserved(takeDir, () => snapshotPromptOverrides(dir, takeDir, [jobId, ...cascadeJobs]));
+    // …and so does the PLAN (see snapshotSpec). Taken once, before the ledger row: `est`, the job
+    // list this cascade walks and the boundary plan above all read this document, and a revision
+    // promoted onto the plan lane while the chain is still draining must not swap it underneath.
+    reserved(takeDir, () => snapshotSpec(takeDir, spec));
     updateManifest(dir, (mm) => {
       mm.takes.push({ id: takeId, mode: 'job', jobId, cascade, revision: mm.revisions.at(-1)?.id ?? null, createdAt: now().toISOString(), estUsd: est.totalUsd, feedback: feedback ?? null, promptSource: overrides.promptSource });
       mm.costLedger.push({ ts: now().toISOString(), action: `rerender ${jobId}${cascade ? ' + downstream' : ''}`, ...ledgerLine(est) });

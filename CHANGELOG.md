@@ -258,6 +258,15 @@
   vendor is now pinned exactly what it consumes, resolved once, at the same moment its vendor is:
   what approve priced is what the child spends. Editing `.env` after that changes the *next* upscale,
   as it always should have.
+- **A render renders the plan you were quoted for.** The estimate on the button, the take's recorded
+  cost, the cost-ledger row and the prompt overrides that ride along are all computed from the plan
+  as it stands when you click — while the render child re-read the run's `spec.json` when it started.
+  Revisions run on their own lane, beside the paid one, so a revision that landed while a render was
+  queued swapped the plan underneath a take that had already been quoted and recorded against the old
+  one: you paid for jobs nobody priced, or a scoped re-render died looking for a job the new plan no
+  longer had — after the money row was written. Each take now freezes the plan it was paid to render,
+  beside the prompt overrides it already froze, and the child renders that. A revision still governs
+  the *next* render, and the take you can still open says what it was actually charged for.
 - **A `.env` written in ordinary dotenv style now decides the defaults the create page starts
   from — quotes, `export`, trailing comments and repeated keys included.** The endpoints that report
   your effective defaults read the file through the *settings editor*, which exists to rewrite one
