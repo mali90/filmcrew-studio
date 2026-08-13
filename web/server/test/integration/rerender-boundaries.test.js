@@ -60,24 +60,27 @@ const seamIn = (runId, take, job) => (job
 function seedRun(runId, layout, over = {}) {
   const backend = over.backend ?? 'seedance';
   const elements = over.elements ?? [{ id: 'subject', image: 'subject.png' }];
+  const jobIds = over.jobs ?? JOBS;
   const dir = path.join(runsDir, runId);
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'spec.json'), JSON.stringify({
     spec_version: '1.0',
     render_backend: backend,
     project: { title: 'Boundary Drill', aspect_ratio: '9:16' },
-    shots: JOBS.map((_, i) => ({ shot_id: `S${i + 1}`, duration_s: 5, description: 'a shot' })),
+    shots: jobIds.map((_, i) => ({ shot_id: `S${i + 1}`, duration_s: 5, description: 'a shot' })),
     kling: {
       elements,
-      jobs: JOBS.map((j, i) => ({ job_id: j, shots: [`S${i + 1}`], elements: elements.map((e) => e.id) })),
+      jobs: jobIds.map((j, i) => ({ job_id: j, shots: [`S${i + 1}`], elements: elements.map((e) => e.id) })),
       // ABSENT is "whatever the .env defaults to"; `false` is the plan itself turning audio off
       ...(over.specAudio === undefined ? {} : { generate_audio: over.specAudio }),
     },
     ...(over.voiceLines ? { audio: { voice: { lines: over.voiceLines } } } : {}),
   }, null, 2));
 
-  const jobClips = {};
-  const clipLineage = {};
+  // Null-prototype, exactly like the manifest maps run-service writes: a plan may legitimately name
+  // a job `__proto__`, and a plain `{}` would swallow it HERE, before any assertion could see it.
+  const jobClips = Object.create(null);
+  const clipLineage = Object.create(null);
   for (const { job, take, from } of layout) {
     fs.mkdirSync(path.join(dir, 'renders', take, job), { recursive: true });
     fs.writeFileSync(clipOf(runId, take, job), 'FAKE-MP4');
@@ -380,6 +383,32 @@ test('a model with no combined budget has nothing to report', () => {
   const { svc } = fakeService(runId, intact, { voiceLines: lineFor('keeper') });
 
   assert.equal(svc.detail(runId).voiceRefs, null, 'per-kind caps never make a voice clip and a pin compete');
+});
+
+// ── the lineage mirror `auto` reads ─────────────────────────────────────────────────────────────
+// Every `auto` plan above answers out of m.clipLineage, so composing a cut has to leave an entry
+// there for EVERY job it composed — including one the plan named `__proto__` (the spec asks only for
+// a non-empty string, and this build supports such an id everywhere else). On a manifest that
+// predates clipLineage the mirror was recreated as a plain `{}`, where that assignment hits
+// Object.prototype's setter: the cut was written, but the job's seams silently vanished from
+// web.json and every later `auto` plan lost the joint.
+
+test('composing a cut on a pre-lineage manifest keeps a `__proto__` job\'s seams', () => {
+  const runId = 'web-19990101000017-protolineage';
+  const jobs = ['K1', '__proto__'];
+  const layout = [{ job: 'K1', take: 't1', from: null }, { job: '__proto__', take: 't1', from: { take: 't1', job: 'K1' } }];
+  const { dir, svc } = fakeService(runId, layout, { jobs });
+  // a run rendered before WS2-P2: clips on record, no lineage at all
+  const pre = readManifest(dir);
+  delete pre.clipLineage;
+  writeManifest(dir, pre);
+
+  svc.assemble(runId, { composition: { ['__proto__']: 't1' } }); // computed key: `{__proto__: …}` is the OTHER thing
+
+  const lineage = readManifest(dir).clipLineage;
+  assert.ok(Object.hasOwn(lineage, '__proto__'), 'the oddly named job is an OWN key, not a swallowed prototype write');
+  assert.equal(lineage['__proto__'].take, 't1');
+  assert.equal(lineage.K1.take, 't1', 'and the ordinary job is mirrored beside it');
 });
 
 // ── guards ──────────────────────────────────────────────────────────────────────────────────────

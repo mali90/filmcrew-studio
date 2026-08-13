@@ -448,7 +448,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
     // it describing the NEWEST take's seams — auto would then pin the wrong boundary against the
     // wrong neighbour. Same shape as mergeLineage writes; a jobless clip replaces nothing.
     updateManifest(dir, (mm) => {
-      mm.clipLineage = mm.clipLineage ?? {};
+      mm.clipLineage = jobMap(mm.clipLineage); // never `{}`: a job named `__proto__` writes to the setter
       for (const rec of jobs) {
         if (!rec.clip) continue;
         mm.clipLineage[rec.jobId] = { take: rec.take, seamIn: rec.seamIn ?? null, seamOut: rec.seamOut ?? null };
