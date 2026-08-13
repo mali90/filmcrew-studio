@@ -19,6 +19,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { isSafeSegment } from './paths.js';
+import { writeFileAtomic } from './atomic-file.js';
 // Config-free siblings (no host import, so the lazy-import idiom above still holds): the voices
 // registry and the two voice knobs are read the same way here and by the seam budget in
 // run-service.js — a second reader is how a preview and a paid render start disagreeing.
@@ -138,7 +139,12 @@ function readOverrides(runDir) {
 }
 
 /** Read-modify-write the sidecar. An empty result removes the file, so nothing downstream ever has
- *  to distinguish "no edits" from "a file full of nothing". */
+ *  to distinguish "no edits" from "a file full of nothing".
+ *
+ *  Written atomically (tmp + rename, the same helper web.json uses): truncating this file in place
+ *  means a save killed halfway leaves bytes that do not parse, `readOverrides` above reads that as
+ *  NO edits, and the next save writes a sidecar with every earlier edit missing — the user's words
+ *  lost by a crash they never saw. */
 function writeOverrides(runDir, mutate) {
   const file = path.join(runDir, OVERRIDES_FILE);
   const current = readOverrides(runDir);
@@ -147,7 +153,7 @@ function writeOverrides(runDir, mutate) {
     try { fs.rmSync(file, { force: true }); } catch { /* already gone */ }
     return next;
   }
-  fs.writeFileSync(file, JSON.stringify(next, null, 2) + '\n');
+  writeFileAtomic(file, JSON.stringify(next, null, 2) + '\n');
   return next;
 }
 

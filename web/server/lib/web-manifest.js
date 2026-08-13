@@ -4,6 +4,7 @@
 // lineage, cost ledger, approval, the last persisted error, and the active child process.
 import fs from 'node:fs';
 import path from 'node:path';
+import { writeFileAtomic } from './atomic-file.js';
 
 export const MANIFEST_V = 1;
 export const MANIFEST_FILE = 'web.json';
@@ -55,12 +56,11 @@ export function readManifest(dir) {
   }
 }
 
-/** Atomic write (tmp + rename) so a crash can never leave a half-written manifest. */
+/** Atomic write (tmp + rename) so a crash can never leave a half-written manifest — the shared
+ *  primitive, because the prompt-overrides sidecar needs exactly the same guarantee. */
 export function writeManifest(dir, manifest) {
   fs.mkdirSync(dir, { recursive: true });
-  const tmp = path.join(dir, `.${MANIFEST_FILE}.${process.pid}.tmp`);
-  fs.writeFileSync(tmp, JSON.stringify(manifest, null, 2) + '\n');
-  fs.renameSync(tmp, path.join(dir, MANIFEST_FILE));
+  writeFileAtomic(path.join(dir, MANIFEST_FILE), JSON.stringify(manifest, null, 2) + '\n');
   return manifest;
 }
 

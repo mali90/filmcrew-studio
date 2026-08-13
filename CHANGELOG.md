@@ -262,6 +262,13 @@
   starred cast gets before rendering. Where the naming genuinely leaves a character nothing of their
   own, the top-up attaches **nothing** for them rather than someone else: a less-pinned render is a
   disappointment, a stranger's face is a paid mistake.
+- **A crash while saving a prompt edit can no longer wipe the edits you had already saved.** All of
+  a run's prompt edits live in one small file, and saving rewrote it in place — so a process killed
+  (or a disk filled) partway through left bytes that no longer parse. The preview reads an
+  unreadable file as *no edits*, so the next save wrote a fresh file with every earlier job's words
+  missing. The new words now go to a temporary file that is swapped into place in one step: a save
+  either lands completely or leaves the previous one exactly as it was, which is the same guarantee
+  the run manifest has always had (they now share the one implementation).
 - **First-run setup now offers every aspect ratio the backend you just picked can render.** The
   backend card says Seedance 2.5 — and Seedance 2.0 on Segmind — renders six ratios, and the very
   next step then showed the same three tiles it always had, so 4:3, 3:4 and 21:9 could not be saved

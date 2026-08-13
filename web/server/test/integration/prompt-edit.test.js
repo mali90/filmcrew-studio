@@ -457,6 +457,38 @@ test('prompt-edit history is capped — a long tuning session does not grow the 
     0, 'this fixture only ever filed edits — nothing else was touched');
 });
 
+// …and the sidecar must not be able to CORRUPT ITSELF. A plain writeFileSync truncates the file
+// before it refills it, so a process killed (or a disk filled) mid-save left unparseable bytes —
+// which readOverrides reads as "no edits", and the next save then overwrites every edit the user
+// had. The bytes go to a temp file that is renamed into place instead, so the sidecar is either the
+// old save or the new one.
+test('a save that dies mid-write leaves the previous edit intact', async () => {
+  const runId = await plannedRun();
+  const jobId = await firstJob(runId);
+  const keep = 'The words I already saved and cannot afford to lose.';
+  assert.equal((await put(`/api/runs/${runId}/prompt`, { job: jobId, prompt: keep })).statusCode, 200);
+
+  // A disk that fills mid-write: the bytes that fit land, then the write fails.
+  const realWrite = fs.writeFileSync;
+  fs.writeFileSync = (file, data, ...rest) => {
+    if (!String(file).includes('prompt-overrides')) return realWrite(file, data, ...rest);
+    realWrite(file, String(data).slice(0, 12), ...rest);
+    throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+  };
+  let res;
+  try {
+    res = await put(`/api/runs/${runId}/prompt`, { job: jobId, prompt: 'a second thought, lost to the disk' });
+  } finally {
+    fs.writeFileSync = realWrite;
+  }
+  assert.equal(res.statusCode, 500, 'the failed save is reported, never swallowed');
+
+  assert.equal(readJson(sidecarOf(runId)).jobs[jobId].prompt, keep, 'the earlier edit is still on disk, parseable');
+  const view = (await get(`/api/runs/${runId}/prompt?job=${jobId}`)).json();
+  assert.equal(view.source, 'override', 'and still the words this job will send');
+  assert.ok(view.prompt.includes(keep));
+});
+
 test('a corrupt overrides sidecar REFUSES the render (409) rather than quietly rendering the plan', async () => {
   const planned = await plannedRun();
   const spec = readJson(specOf(planned));
