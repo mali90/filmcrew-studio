@@ -397,11 +397,21 @@ function stampResolution(spec, ctx) {
  * a plan the schema accepts — it counts images against maxImages, and the combined cap is only
  * checked by the renderer, right before a paid upload round — so an over-budget starred set is
  * trimmed here rather than left to fail at submit.
+ *
+ * Those are two DIFFERENT jobs sharing one budget, and only the second is the cast's: trimming to
+ * what the model will accept runs unconditionally, allocating the cast's share of it does not.
  */
 export function topUpStarredElements(spec, ctx) {
+  // Budget normalization is not gated on stardom. The combined cap belongs to the MODEL: a plan that
+  // starred nobody still carries a roster the Casting agent filled and voice clips spending the same
+  // 50, and the renderer counts images + audio for it exactly as it does for a starred plan. Bailing
+  // out on an empty cast skipped the ONLY layer that subtracts audio demand, so the final gate —
+  // which counts images against maxImages alone — passed a plan seedance-args refuses at submit.
+  // Everything below therefore runs for any plan; the CAST's half (the top-up, and the per-job fill)
+  // is what an empty cast makes a no-op, and says so where it is skipped.
   const cast = ctx?.castNames ?? [];
   const k = spec?.kling;
-  if (!cast.length || !k || typeof k !== 'object') return spec;
+  if (!k || typeof k !== 'object') return spec;
   const caps = ctx.caps ?? capsFor(ctx.backend);
   const inv = ctx.inventory ?? buildInventory();
   // The voice registry is per-install (and holds proprietary cast), so it is injectable for the
@@ -455,7 +465,10 @@ export function topUpStarredElements(spec, ctx) {
   // the last one then finds taken — an allocation that depended on cast ORDER rather than on the
   // budget (budget 9, three props, two stars: 4 and 2 instead of 3 each).
   const nonCast = els.filter((e) => !castSlugs.some((cslug) => ownedBy(e, cslug))).length;
-  const share = Math.min(Math.floor(Math.max(0, rosterBudget - nonCast) / cast.length), perElementCap);
+  // No cast, no share: the top-up and the per-job fill below are the cast's half of this layer and
+  // have nobody to seat. Spelled out because dividing by an empty cast yields Infinity/NaN, which
+  // would silently travel into every jobShare — a share of zero is the honest answer.
+  const share = cast.length ? Math.min(Math.floor(Math.max(0, rosterBudget - nonCast) / cast.length), perElementCap) : 0;
   /**
    * Give back the references the budget cannot carry, before anything is topped up — the top-up's
    * own `els.length >= budget` guard only stops it from making an over-budget set WORSE. Removed
@@ -567,12 +580,20 @@ export function topUpStarredElements(spec, ctx) {
     if (!Array.isArray(job?.elements) || !job.elements.length) continue; // inherits the whole roster
     const ownedInJob = (cslug) => job.elements.filter((id) => { const e = byId.get(id); return e && ownedBy(e, cslug); });
     const riding = castSlugs.filter((cslug) => ownedInJob(cslug).length);
-    if (!riding.length) continue;
     const budget = budgetFor(job);
     // …and a subset can be over its OWN budget for the same reason the roster can — the planner
     // named more references than this job's voice clips leave room for. Trimmed against the job's
-    // budget, which is the number the renderer will count.
-    cutFromJobs += trimToBudget(job.elements, budget, riding, (ids, cs) => ids.filter((id) => ownedBy(byId.get(id), cs))).length;
+    // budget, which is the number the renderer will count — and trimmed whatever `riding` says,
+    // for the same reason the roster trim above does not wait for a cast: the cap is the MODEL's.
+    // A subset of nothing but un-starred pins rides beside this job's voice clips exactly like a
+    // starred one, and skipping it here let a mixed plan carry 49 pins plus two clips (51 combined)
+    // in a job the final gate waves through on its image count alone. `riding` governs only WHO the
+    // trim protects and the allocation below, never whether the trim runs.
+    // Never down to `[]` though: an empty subset is how a plan says "inherit the whole roster"
+    // (see rewriteSubset), so the same one-reference floor holds here — a starred subset gets it
+    // from the per-character floor inside trimToBudget, an un-starred one needs it spelled out.
+    cutFromJobs += trimToBudget(job.elements, Math.max(budget, 1), riding, (ids, cs) => ids.filter((id) => ownedBy(byId.get(id), cs))).length;
+    if (!riding.length) continue; // nobody starred to widen — this job's share of the budget is settled
     const others = job.elements.filter((id) => { const e = byId.get(id); return !e || !riding.some((cslug) => ownedBy(e, cslug)); }).length;
     const jobShare = Math.min(share, Math.floor(Math.max(0, budget - others) / riding.length));
     for (const cslug of riding) {

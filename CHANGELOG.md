@@ -247,6 +247,18 @@
   install commands.
 
 ### Fixed
+- **A plan is now trimmed to the model's reference budget whether or not you starred anyone.** On
+  fal's Seedance 2.5 a single 50-reference budget covers images and voice clips together, and the
+  engine layer that subtracts what a job's registered voices will spend only ran when the run had a
+  starred cast. A run with nobody starred could therefore be planned with all 50 image slots filled
+  *and* carry a voiced line — 51 references, waved through by the final check (which counts images
+  against the image cap alone) and refused by the renderer the instant it went to submit, after the
+  planning was paid for. The same hole sat one level down inside a starred plan: a job that named
+  its own references and named only un-starred ones — a props shot — was skipped by the per-job trim
+  for exactly the same reason, so it could ride 49 pins beside two voice clips. Trimming to what the
+  model will accept is now unconditional, because the budget is the *model's*; who is starred decides
+  only how the room left over is shared out. A job that named its own references still never ends up
+  with none of them.
 - **The fal.ai Topaz upscale quote now matches what fal actually bills.** It was a single flat
   ballpark rate for every upscale, so a 15-second clip was quoted **$1.80** — while the real charge
   for a 15-second 480p vertical clip came to **≈ $1.28**. fal does not bill Topaz flat: it charges

@@ -190,6 +190,56 @@ test('an over-budget EXPLICIT subset is trimmed to the job\'s own budget', () =>
   }
 });
 
+// A subset made of nothing but UN-STARRED references has no starred character riding in it — but it
+// still rides beside the job's voice clips, and the renderer counts images + audio against ONE cap.
+// Skipping the trim for such a job let a mixed plan ship 49 pins plus two clips (51 combined) in a
+// job the final gate waves through on its image count alone.
+test('a job subset of only UN-STARRED references is still trimmed to its own budget', () => {
+  const props = Array.from({ length: 49 }, (_, i) => `prop-${String(i + 1).padStart(2, '0')}`);
+  const inv = [...refsFor('keeper', 60), ...props.map((id) => ref(id))];
+  const spec = {
+    spec_version: '1.0',
+    kling: {
+      elements: [el('keeper-01', 'Keeper'), ...props.map((id) => el(id, null, 'object'))],
+      jobs: [
+        { job_id: 'J1', shots: ['S1'], elements: ['keeper-01', ...props] }, // silent — the whole 50 fits
+        { job_id: 'J2', shots: ['S2'], elements: [...props] },              // props only, two voiced speakers
+      ],
+    },
+    audio: { voice: { lines: [line('S2', 'Keeper'), line('S2', 'Gull')] } },
+  };
+  topUpStarredElements(spec, ctxFor('seedance-2.5@fal', ['keeper'], inv, voiced('Keeper', 'Gull')));
+  assert.equal(spec.kling.elements.length, 50, 'no job inherits the roster, so the widest (silent J1) sizes the pool');
+  assert.equal(spec.kling.jobs[0].elements.length, 50, 'the silent job keeps the whole 50');
+  assert.ok(spec.kling.jobs[1].elements.length <= 48,
+    `J2 sends ${spec.kling.jobs[1].elements.length} images beside 2 voice clips — over the 50 combined`);
+  for (const id of spec.kling.jobs[1].elements) {
+    assert.ok(spec.kling.elements.some((e) => e.id === id), `${id} is not in the roster`);
+  }
+});
+
+// …and the floor that keeps a trimmed subset from meaning "the whole roster" holds when nothing
+// starred rides either: `[]` is the one spelling no job that named a subset may be left with.
+test('a budget of zero leaves an un-starred subset one reference, never the empty roster sentinel', () => {
+  const caps = { ...capsFor('seedance-2.5@fal'), maxCombinedRefs: 2 }; // synthetic: the voice clips take it all
+  const spec = {
+    spec_version: '1.0',
+    kling: {
+      elements: [el('prop-01', null, 'object'), el('prop-02', null, 'object')],
+      jobs: [
+        { job_id: 'J1', shots: ['S1'], elements: ['prop-01', 'prop-02'] }, // silent — budget 2
+        { job_id: 'J2', shots: ['S2'], elements: ['prop-01', 'prop-02'] }, // two clips → budget 0
+      ],
+    },
+    audio: { voice: { lines: [line('S2', 'Keeper'), line('S2', 'Gull')] } },
+  };
+  topUpStarredElements(spec, {
+    backend: 'seedance-2.5@fal', caps, castNames: ['keeper'], inventory: [ref('prop-01'), ref('prop-02')],
+    voiceClipFor: voiced('Keeper', 'Gull'),
+  });
+  assert.equal(spec.kling.jobs[1].elements.length, 1, 'an empty subset would send the whole roster instead');
+});
+
 // A subset left EMPTY inherits the whole roster (characterGroups), which is a bigger change than the
 // trim was asked for: the job would suddenly carry every character in the plan.
 test('a subset whose only reference is trimmed keeps its character, never inherits the roster', () => {
@@ -304,6 +354,30 @@ test('an over-budget roster whose excess is UN-STARRED gives back the un-starred
   assert.equal(countFor(spec, 'keeper'), 1, 'the starred floor holds — identity is never what yields');
   assert.ok(!spec.kling.elements.some((e) => e.id === 'prop-49'), 'the last un-starred pin is what gives');
   assert.ok(spec.kling.jobs[0].elements.length <= 49, 'and the job that named them all comes with it');
+});
+
+// The combined cap belongs to the MODEL, not to stardom. A plan that starred nobody still has a
+// roster the Casting agent filled and voice clips sharing the same 50 — and the final gate counts
+// images against maxImages alone, so gating the whole normalization on a starred cast shipped
+// precisely the plan seedance-args refuses at submit.
+test('a plan with NO starred cast is still normalized to the combined budget', () => {
+  const props = Array.from({ length: 50 }, (_, i) => `prop-${String(i + 1).padStart(2, '0')}`);
+  const inv = [...props.map((id) => ref(id)), ...refsFor('keeper', 5)];
+  const spec = {
+    spec_version: '1.0',
+    kling: {
+      elements: props.map((id) => el(id, null, 'object')),
+      jobs: [{ job_id: 'J1', shots: ['S1'] }],
+    },
+    audio: { voice: { lines: [line('S1', 'Narrator')] } },
+  };
+  topUpStarredElements(spec, ctxFor('seedance-2.5@fal', [], inv, voiced('Narrator')));
+  const caps = capsFor('seedance-2.5@fal');
+  assert.equal(spec.kling.elements.length, 49, '50 images beside one voice clip is 51 combined — the renderer refuses it');
+  assert.ok(Math.min(spec.kling.elements.length, caps.maxImages) + 1 <= caps.maxCombinedRefs,
+    `the roster still cannot ride beside its voice clip in ${nameOf(caps)}'s combined budget`);
+  assert.ok(!spec.kling.elements.some((e) => e.id.startsWith('keeper-')),
+    'and nobody was topped up — the top-up is the CAST\'s half of this layer, and there is no cast');
 });
 
 test('un-starred pins are the LAST resort — a cast that can still give one back keeps them all', () => {
