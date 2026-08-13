@@ -46,6 +46,7 @@ const cache = mkTmp('seam-cache');
 config.paths.out = out.dir;
 config.paths.cache = cache.dir;
 const { renderSpec, renderJob, assembleRun } = await import('../../src/lib/pipeline.js');
+const { probeDims } = await import('../../src/lib/upscale.js');
 
 test.after(async () => { await fal.close(); out.cleanup(); cache.cleanup(); voices.cleanup(); });
 
@@ -119,6 +120,14 @@ test('render.json carries seamIn/seamOut for every job, and SURVIVES finishRende
     }
     assert.equal(first.jobs[1].seamIn.from.job, 'K1');
     assert.equal(first.jobs[0].seamOut.to.job, 'K2');
+    // …and each clip's own measured FRAME, for the same reason the seams are here: it is a fact
+    // about the clip file, and the master cannot answer for it once an approve-time upscale has
+    // rewritten this record with the HD master it delivered (the web estimator prices the clips
+    // Topaz is really handed, and a $0 quote for a real charge is what that mix-up buys).
+    for (const j of first.jobs) {
+      const { width, height } = await probeDims(j.clip);
+      assert.deepEqual([j.width, j.height], [width, height], `${j.jobId}: the clip's own frame is on record`);
+    }
 
     // Re-finish from disk (`npm run assemble -- --from <dir>`): readRun→results→finishRender is a
     // SECOND chance to forget the lineage, because it rebuilds `results` from render.json by hand.
@@ -130,6 +139,8 @@ test('render.json carries seamIn/seamOut for every job, and SURVIVES finishRende
     }
     assert.deepEqual(second.jobs.map((j) => j.seamIn.from), first.jobs.map((j) => j.seamIn.from),
       're-finishing must not rewrite history, only re-stitch it');
+    assert.deepEqual(second.jobs.map((j) => [j.width, j.height]), first.jobs.map((j) => [j.width, j.height]),
+      'the measured frames survive the re-finish too — it re-probes the same clips');
   } finally { cleanup(); }
 });
 

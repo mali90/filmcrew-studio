@@ -404,11 +404,13 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
     const spec = readJson(path.join(dir, 'spec.json'));
     const m = readManifest(dir);
     if (!spec || !m?.jobClips) return;
-    // Each clip carries its OWN seams into the composition, read from the take it was rendered in
-    // (cached per take dir — a composition of N jobs usually spans one or two takes). Dropping them
-    // here is what made every mixed cut indistinguishable from an intact chain.
+    // Each clip carries its OWN seams — and its own measured frame — into the composition, read from
+    // the take it was rendered in (cached per take dir — a composition of N jobs usually spans one
+    // or two takes). Dropping the seams here is what made every mixed cut indistinguishable from an
+    // intact chain; dropping the frame would leave this cut's upscale quote unmeasurable until the
+    // assemble child re-probes and rewrites the record.
     const takeJobs = new Map();
-    const seamsFor = (jobId, clip) => {
+    const carriedFor = (jobId, clip) => {
       const takeId = takeOfClip(clip);
       const takeDirOf = clip ? path.dirname(path.dirname(String(clip))) : null;
       if (takeDirOf && !takeJobs.has(takeDirOf)) {
@@ -419,15 +421,19 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
       // The manifest's own record is the fallback for a take whose render.json is gone or predates
       // the composition (the CLI writes it before the web layer ever sees the take).
       const fb = m.clipLineage?.[jobId];
+      // The frame is a fact about the clip FILE, so it travels with the clip whatever take it came
+      // from; nothing derives it, and an unmeasured clip stays unmeasured (which prices UP).
+      const [width, height] = [Number(rec?.width) || 0, Number(rec?.height) || 0];
       return {
         take: takeId ?? fb?.take ?? null,
         seamIn: rec?.seamIn ?? (fb?.take === takeId ? fb?.seamIn : null) ?? null,
         seamOut: rec?.seamOut ?? (fb?.take === takeId ? fb?.seamOut : null) ?? null,
+        ...(width && height ? { width, height } : {}),
       };
     };
     const jobs = (spec.kling?.jobs ?? []).map((j) => {
       const clip = m.jobClips[j.job_id] ?? null;
-      return { jobId: j.job_id, clip, ...seamsFor(j.job_id, clip) };
+      return { jobId: j.job_id, clip, ...carriedFor(j.job_id, clip) };
     });
     const existing = readJson(path.join(takeDir, 'render.json')) ?? {};
     // Composition BREAKS the run-wide seam lineage: these clips come from different takes, so a
@@ -1031,7 +1037,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
       let est = null;
       try {
         est = estimateUpscale(
-          takeUpscaleClips(fromDir, { spec, aspect: m.aspect ?? spec?.kling?.aspect_ratio ?? null }),
+          takeUpscaleClips(fromDir, { spec }),
           {
             provider: upscaleProvider,
             targetShortSide: readUpscaleTargetShortSide(envRoot ?? root, m.backend, childEnv, upscaleProvider),

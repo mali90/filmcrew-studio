@@ -428,9 +428,11 @@ export function registerRunRoutes(app) {
       // the model knob are part of the quote, not decoration around it.
       const upscaleOpts = { provider, targetShortSide, model: readUpscaleModel(app.ctx.envRoot, app.ctx.childEnv) };
       // A take is upscaled clip by clip, so its price is what THAT take actually holds — its own
-      // spec, its own clips, its own measured size. approve's ledger line reads the take the same
-      // way (estimator.takeUpscaleClips), so the quote and the ledger row are one number.
-      const clipsOfTake = (takeDir) => takeUpscaleClips(takeDir, { spec: run.spec, aspect: run.aspect });
+      // spec, its own clips, each measured off the clip FILE Topaz would be handed (never off the
+      // master, which an earlier upscale of this same take rewrote to the HD size it delivered).
+      // approve's ledger line reads the take the same way (estimator.takeUpscaleClips), so the
+      // quote and the ledger row are one number.
+      const clipsOfTake = (takeDir) => takeUpscaleClips(takeDir, { spec: run.spec });
       // no cut ⇒ the LATEST RENDER take — the one approve's default upscales (approve reads it the
       // same way). A probe take holds a single clip, so quoting every job in the spec named a charge
       // bigger than the bill; over-quoting a paid button is the same lie as under-quoting it. Only

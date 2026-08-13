@@ -171,9 +171,11 @@ test('the ledger row records the SAME figure the estimate quoted', { skip: FF ? 
 });
 
 // fal tiers Topaz by the OUTPUT frame, so a quote is only honest if the clip dimensions reach the
-// estimator at all. This harness renders 128×128 clips into a 9:16 run, which the 4× factor cap
-// lifts to a 912-tall frame — fal's MIDDLE tier. Before the take exists there is nothing to
-// measure, and the same endpoint must round UP to the dearest tier instead of guessing cheap.
+// estimator at all — and it is the CLIPS that go to Topaz, one job at a time, not the stitched
+// master. This harness's mock renders 128×128 clips, which the 4× factor cap lifts to a 512-tall
+// frame: fal's CHEAPEST tier, whatever shape the run's master ends up. Before the take exists there
+// is nothing to measure, and the same endpoint must round UP to the dearest tier instead of
+// guessing cheap.
 test('the fal quote rides the tier the OUTPUT lands in — and rounds up before a take exists', async () => {
   const runId = await makePlannedRun('tier my output');
   const unrendered = (await get(`/api/runs/${runId}/estimate?mode=upscale&provider=fal`)).json();
@@ -182,9 +184,30 @@ test('the fal quote rides the tier the OUTPUT lands in — and rounds up before 
   await post(`/api/runs/${runId}/render`, { mode: 'full' });
   await waitForStatus(runId, 'review');
   const rendered = (await get(`/api/runs/${runId}/estimate?mode=upscale&provider=fal`)).json();
-  assert.equal(rendered.tier, '1080p', '128×228 lifted 4× is 512×912 — under 1080 tall, so the middle tier');
+  assert.equal(rendered.tier, '720p', '128×128 clips lifted 4× are 512×512 — under 720 tall, so the cheapest tier');
   assert.ok(rendered.totalUsd < unrendered.totalUsd, 'a measured take is quoted cheaper than an unmeasurable one');
   assert.equal(rendered.targetShortSide, 1080, 'and the label the UI prints still describes fal\'s ~1080p target');
+});
+
+// The reopen → upscale-again case, priced. An approve-time upscale lifts the CLIPS, stitches them,
+// and rewrites the take's render.json with the HD master it delivered — while `jobs[].clip` still
+// names the original SD clips, which is exactly what a second upscale of that cut hands Topaz. The
+// three lines below are that rewrite (the mock Topaz returns the same tiny clip, so a real run of
+// it cannot move the recorded size). A quote read off the master would answer "already at target,
+// nothing to pay" for a charge the user is then billed in full.
+test('a cut whose master was already upscaled is still quoted for its own SD clips', { skip: FF ? false : 'ffmpeg not installed' }, async () => {
+  const { runId, run } = await makeReviewedRun('an upscale that comes round twice');
+  const cut = run.manifest.cuts.at(-1);
+  const priced = (await get(`/api/runs/${runId}/estimate?mode=upscale&cut=${cut.id}&provider=fal`)).json();
+  assert.ok(priced.totalUsd > 0, 'the take is priced to begin with');
+
+  const rjPath = path.join(runsDir, runId, 'renders', cut.take, 'render.json');
+  const rj = JSON.parse(fs.readFileSync(rjPath, 'utf8'));
+  fs.writeFileSync(rjPath, JSON.stringify({ ...rj, master: rj.master.replace(/\.mp4$/, '-final.mp4'), masterShortSide: 1080 }, null, 2));
+
+  const after = (await get(`/api/runs/${runId}/estimate?mode=upscale&cut=${cut.id}&provider=fal`)).json();
+  assert.ok(after.totalUsd > 0, 'the clips Topaz would be handed are unchanged — so is the bill');
+  assert.equal(after.totalUsd, priced.totalUsd, 'the master\'s size is not part of the quote at all');
 });
 
 // U2c — the deliver card quotes the size of the file it is showing, so the DELIVERY has to carry

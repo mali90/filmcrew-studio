@@ -473,6 +473,20 @@ export async function finishRender(spec, results, { runDir, upscale = false, bac
   const name = slug(outName || spec.project.title || 'video');
   const nativeAudio = spec.kling.generate_audio !== undefined ? !!spec.kling.generate_audio : config.kling.nativeAudio;
 
+  // Each job clip's SOURCE frame, measured BEFORE the optional upscale off the very file the record
+  // below names. The master cannot stand in for it: an approve-time upscale lifts these clips into
+  // NEW files, stitches those, and rewrites this same render.json with the HD master it delivered —
+  // while `jobs[].clip` still points at the originals, which is exactly what a second upscale of
+  // this take hands Topaz. A quote read off the master would then call that paid work a no-op.
+  // Unreadable dimensions are simply not recorded (probeDims answers 0 rather than throwing): the
+  // estimator prices an unmeasured clip at the dearest tier, and a missing field must never read
+  // as a measured zero.
+  const clipFrames = new Map();
+  for (const clip of clipPaths) {
+    const d = await probeDims(clip);
+    if (d.width && d.height) clipFrames.set(clip, { width: d.width, height: d.height });
+  }
+
   // Optional fal Topaz upscale runs PER CLIP, before the stitch: assembleVideo scales everything to
   // the delivery frame (config.video), so a sub-1080p source (a 480p/720p Seedance render, a probe
   // clip) must be lifted first — after assembly the master is nominally full-size and Topaz would
@@ -515,7 +529,7 @@ export async function finishRender(spec, results, { runDir, upscale = false, bac
   // would forget the seam lineage and silently downgrade to a hard-cut stitch.
   // The seam LINEAGE must survive this rewrite too — it is the only record of which clip each
   // segment really continues from, and re-deriving it later is exactly the guess P2 exists to end.
-  const summary = { runDir, project: spec.project.title, backend: backend ?? null, master, cover, masterShortSide, chained, stitch, jobs: results.map((r) => ({ jobId: r.jobId, job: r.jobId, clip: r.clip, error: r.error, seamIn: r.seamIn ?? null, seamOut: r.seamOut ?? null })) };
+  const summary = { runDir, project: spec.project.title, backend: backend ?? null, master, cover, masterShortSide, chained, stitch, jobs: results.map((r) => ({ jobId: r.jobId, job: r.jobId, clip: r.clip, error: r.error, ...(clipFrames.get(r.clip) ?? {}), seamIn: r.seamIn ?? null, seamOut: r.seamOut ?? null })) };
   await writeJson(path.join(runDir, 'render.json'), summary);
   log.info(`\n✅ Master: ${master}  (${clipPaths.length} job clip(s), ${stitch.stitcher === 'seamless' ? `seamless stitch, ${stitch.matched}/${stitch.joints} joint(s) colour-matched` : 'hard-cut stitch'})`);
   return { runDir, master, cover, masterShortSide, stitch, jobs: results };

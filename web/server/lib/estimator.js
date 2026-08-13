@@ -234,20 +234,6 @@ export function readUpscaleModel(envRoot, childEnv) {
   return readEnvVar(envRoot, 'FAL_TOPAZ_MODEL', childEnv);
 }
 
-/** Source dimensions for a clip whose take recorded only its SHORT side: the run's aspect says which
- *  way round they go. Anything unparseable is null — "unknown", which prices UP (see clipTier),
- *  never down and never to zero. */
-export function clipDims(shortSide, aspect) {
-  const short = Number(shortSide);
-  if (!Number.isFinite(short) || short <= 0) return null;
-  const m = /^\s*(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)\s*$/.exec(String(aspect ?? ''));
-  if (!m) return null;
-  const [a, b] = [Number(m[1]), Number(m[2])];
-  if (!(a > 0) || !(b > 0)) return null;
-  const long = Math.round((short * Math.max(a, b)) / Math.min(a, b));
-  return a >= b ? { width: long, height: short } : { width: short, height: long };
-}
-
 /** OUTPUT frame height → the row's tier key. fal tiers Topaz by the output, and this app's 9:16
  *  default makes that a portrait 1080×1920 frame — which fal bills as ABOVE 1080p (see the row's
  *  _source: inferred from a real invoice, not documented). A row with no ladder is flat (Segmind),
@@ -319,23 +305,29 @@ export function estimateUpscale(clips, { provider = 'fal', targetShortSide = 108
  * approve's ledger line share it so a quote and the ledger row it becomes cannot drift apart.
  *   - the take's saved spec, because a pre-revision take may rename jobs or change durations;
  *   - only the jobs that produced a clip: finishRender upscales exactly those paths;
- *   - the master's measured short side, which with the run's aspect is the only record of the frame
- *     fal tiers on. The stitch never upscales (assemble.js), so that short side is at most the
- *     clips' own — which can over-quote a no-op but can never under-quote a charge.
+ *   - each clip's OWN frame, measured off that file at assembly time (finishRender). The MASTER's
+ *     size may not stand in for it: an approve-time upscale lifts the clips into new files and
+ *     rewrites this render.json with the HD master it delivered, leaving `jobs[].clip` pointing at
+ *     the originals — so a master-derived quote calls a real second charge a free no-op. A take
+ *     rendered before that record existed carries no dimensions at all, and prices UP for it
+ *     (clipTier), which over-quotes a no-op but can never under-quote a charge.
  * @param {string|null} takeDir
- * @param {{spec?:object|null, aspect?:string|null}} p the run's spec (fallback) and aspect ratio
+ * @param {{spec?:object|null}} p the run's spec, for a take that saved none of its own
  */
-export function takeUpscaleClips(takeDir, { spec = null, aspect = null } = {}) {
+export function takeUpscaleClips(takeDir, { spec = null } = {}) {
   if (!takeDir) return [];
   const readTakeJson = (name) => {
     try { return JSON.parse(fs.readFileSync(path.join(takeDir, name), 'utf8')); } catch { return null; }
   };
   const takeSpec = readTakeJson('spec.json') ?? spec; // the spec the take was rendered from
   const render = readTakeJson('render.json');
-  const dims = clipDims(render?.masterShortSide, aspect) ?? {};
   return ((render?.jobs) ?? [])
     .filter((j) => j.clip) // only jobs Topaz will actually process
-    .map((j) => { const jobId = j.jobId ?? j.job; return { jobId, seconds: jobSeconds(takeSpec, jobId), ...dims }; });
+    .map((j) => {
+      const jobId = j.jobId ?? j.job;
+      const [width, height] = [Number(j.width) || 0, Number(j.height) || 0];
+      return { jobId, seconds: jobSeconds(takeSpec, jobId), ...(width && height ? { width, height } : {}) };
+    });
 }
 
 export const VOICE_MINT_USD = PRICES.voiceMintUsd;

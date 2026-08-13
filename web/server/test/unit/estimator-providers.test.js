@@ -20,9 +20,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { estimateRender, estimateUpscale, jobSeconds } from '../../lib/estimator.js';
+import { estimateRender, estimateUpscale, jobSeconds, takeUpscaleClips } from '../../lib/estimator.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
 const PRICES = JSON.parse(fs.readFileSync(path.join(ROOT, 'web/server/lib/prices.json'), 'utf8'));
@@ -265,6 +266,59 @@ test('prices.json states the Topaz tiers, the invoice they came from, and that g
   assert.equal(PRICES['topaz@segmind'].perSecondUsd, 0.125);
   assert.ok(!PRICES['topaz@segmind'].tierMaxOutputHeight, 'no tiers to model — Segmind publishes one number');
   assert.ok(!PRICES['topaz@segmind'].gaia2Multiplier, 'no model parameter either');
+});
+
+// ── the take a quote is read FROM ───────────────────────────────────────────
+// takeUpscaleClips feeds BOTH the estimate endpoint and approve's ledger row, so what it measures
+// decides whether a paid button tells the truth. It measures the CLIPS — the files Topaz is really
+// handed, one job at a time — because the MASTER cannot answer for them: an approve-time upscale
+// lifts the clips, stitches them, and rewrites the take's render.json with the HD master it just
+// delivered, while `jobs[].clip` still names the original SD clips. Priced off that master, a
+// second upscale of the same take reads "already at target" and quotes $0 for work fal bills in
+// full — the one direction this estimator refuses to err in.
+function takeWith(jobs, extra = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-take-'));
+  fs.writeFileSync(path.join(dir, 'spec.json'), JSON.stringify(threeJobs()));
+  fs.writeFileSync(path.join(dir, 'render.json'), JSON.stringify({ master: '/out/v.mp4', jobs, ...extra }));
+  return dir;
+}
+const clipRec = (jobId, dims) => ({ jobId, job: jobId, clip: `/r/t1/${jobId}/clip.mp4`, error: null, ...dims });
+
+test('a re-upscale is quoted from the CLIPS, never from the HD master an earlier upscale left behind', () => {
+  const dir = takeWith(
+    [clipRec('K1', { width: 480, height: 854 }), clipRec('K2', { width: 480, height: 854 }), { jobId: 'K3', job: 'K3', clip: null, error: 'content policy' }],
+    { masterShortSide: 1080 }, // exactly what finishRender writes back after Topaz lifted those clips
+  );
+  try {
+    assert.deepEqual(takeUpscaleClips(dir), [
+      { jobId: 'K1', seconds: 5, width: 480, height: 854 },
+      { jobId: 'K2', seconds: 4, width: 480, height: 854 },
+    ], 'each clip carries its OWN recorded frame; a job with no clip is no Topaz job');
+
+    const e = estimateUpscale(takeUpscaleClips(dir), { provider: 'fal' });
+    assert.ok(e.totalUsd > 0, 'these SD clips go to Topaz again — a $0 quote would be a lie about a real charge');
+    assert.equal(e.totalUsd, billed(0.08, [5, 4]), '480×854 lifts to 1080×1920 — fal\'s above-1080p tier');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a clip measured AT the target still quotes nothing — the skip is per clip, off its own record', () => {
+  const dir = takeWith([clipRec('K1', { width: 1080, height: 1920 })]);
+  try {
+    assert.equal(estimateUpscale(takeUpscaleClips(dir), { provider: 'fal' }).totalUsd, 0,
+      'upscaleVideoFal returns this input untouched — there is no job to bill');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a take whose clips were never measured rounds UP — including when its master claims to be HD', () => {
+  // Every take rendered before the per-clip record existed reads like this. "We cannot measure it"
+  // must price like the dearest tier, never like the free one, whatever the master says it is.
+  const dir = takeWith([clipRec('K1'), clipRec('K2')], { masterShortSide: 1080 });
+  try {
+    assert.deepEqual(takeUpscaleClips(dir), [{ jobId: 'K1', seconds: 5 }, { jobId: 'K2', seconds: 4 }]);
+    const e = estimateUpscale(takeUpscaleClips(dir), { provider: 'fal' });
+    assert.equal(e.totalUsd, billed(0.08, [5, 4]));
+    assert.equal(e.tier, 'above1080p');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 // ── the path for a vendor that publishes nothing ────────────────────────────

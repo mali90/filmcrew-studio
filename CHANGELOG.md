@@ -252,8 +252,13 @@
   for a 15-second 480p vertical clip came to **≈ $1.28**. fal does not bill Topaz flat: it charges
   per second **by the resolution of the frame it hands back** ($0.01/s up to 720p, $0.02/s for
   720p–1080p, $0.08/s above 1080p). That is now what the estimate does — it works out the frame the
-  upscale will really deliver, from the take's own measured size and the run's aspect, and prices
-  the tier that frame lands in. The vertical default is the expensive case and always was: lifting
+  upscale will really deliver, from the measured frame of each clip the upscale is handed (Topaz
+  runs per clip, before the stitch, and each clip's size is written down when the take is
+  assembled), and prices the tier that frame lands in. Reading the *master's* size instead would
+  under-quote the one case that matters most: an upscale rewrites the take's record with the HD
+  master it delivered while the clips on file stay the originals, so re-opening a delivered run and
+  upscaling that cut again — a real charge, in full — was quoted at **$0**. The vertical default is
+  the expensive case and always was: lifting
   a 480p 9:16 clip to a 1080 short side delivers a **1080×1920** frame, which fal bills above 1080p
   — the same clip in landscape comes back 1920×1080 and costs a quarter as much. Clips already at
   the target are quoted at nothing, because the upscaler skips them. Where the size cannot be known
