@@ -234,6 +234,16 @@ export function readUpscaleModel(envRoot, childEnv) {
   return readEnvVar(envRoot, 'FAL_TOPAZ_MODEL', childEnv);
 }
 
+/** The Topaz factor CAP the fal upscale is bound by (FAL_TOPAZ_MAX_FACTOR → config.fal.topazMaxFactor
+ *  → upscalePlan) — also a price knob: it decides how far a small clip is lifted, and so which
+ *  OUTPUT tier fal bills for it. Unset is `undefined`, which leaves upscalePlan's own default rather
+ *  than restating 4 here. Anything unparseable stays NaN, exactly as config.js keeps it — an
+ *  unusable cap must price like any other unknown (the dearest tier), never like a cheap one. */
+export function readUpscaleMaxFactor(envRoot, childEnv) {
+  const raw = readEnvVar(envRoot, 'FAL_TOPAZ_MAX_FACTOR', childEnv);
+  return raw === '' ? undefined : Number(raw);
+}
+
 /** OUTPUT frame height → the row's tier key. fal tiers Topaz by the output, and this app's 9:16
  *  default makes that a portrait 1080×1920 frame — which fal bills as ABOVE 1080p (see the row's
  *  _source: inferred from a real invoice, not documented). A row with no ladder is flat (Segmind),
@@ -247,12 +257,13 @@ function tierOf(rates, outputHeight) {
 /** What one clip rides: the tier its OUTPUT lands in, or `skipped` when the source is already at or
  *  above the target — both engines return that input untouched (src/lib/upscale.js), so there is no
  *  job and no bill. Unknown dimensions are NEITHER: the tier stays undefined so rateFor falls to the
- *  row's defaultResolution, which is deliberately the dearest one. */
-function clipTier(rates, clip, targetShort) {
+ *  row's defaultResolution, which is deliberately the dearest one. `maxFactor` is the CONFIGURED cap
+ *  the render child binds; undefined leaves the planner's own default. */
+function clipTier(rates, clip, targetShort, maxFactor) {
   const width = Number(clip?.width) || 0;
   const height = Number(clip?.height) || 0;
   if (!width || !height) return { tier: undefined, skipped: false };
-  const plan = upscalePlan(width, height, { targetShort });
+  const plan = upscalePlan(width, height, { targetShort, maxFactor });
   if (!plan.needsUpscale) return { tier: undefined, skipped: true };
   return { tier: tierOf(rates, Math.round(height * plan.upscaleFactor)), skipped: false };
 }
@@ -271,11 +282,13 @@ function modelMultiplier(rates, model) {
  * providers bill on completely different shapes and neither may be quoted with the other's number:
  * Segmind is flat per INPUT second, while fal tiers by the OUTPUT frame — so each clip carries the
  * dimensions its tier is chosen from, and a clip already at the target costs nothing.
+ * `maxFactor` is fal's configured factor cap; Segmind takes an explicit target and no factor at all,
+ * so its flat row simply ignores it.
  * @param {{jobId:string, seconds:number, width?:number, height?:number}[]} clips
- * @param {{provider?:string, targetShortSide?:number, model?:string|null}} opts
+ * @param {{provider?:string, targetShortSide?:number, model?:string|null, maxFactor?:number}} opts
  * @returns {{perJob:{jobId:string,seconds:number,usd:number|null}[], totalUsd:number|null, currency:'USD', label:'estimate', tier?:string, unknownPrice?:object}}
  */
-export function estimateUpscale(clips, { provider = 'fal', targetShortSide = 1080, model = null } = {}) {
+export function estimateUpscale(clips, { provider = 'fal', targetShortSide = 1080, model = null, maxFactor } = {}) {
   const priceKey = provider === 'fal' ? 'topaz' : `topaz@${provider}`;
   const { key, rates } = tableFor(priceKey);
   if (!rates) throw new Error(`no price table for upscale provider "${provider}" (have: ${priceKeys().join(', ')})`);
@@ -288,7 +301,7 @@ export function estimateUpscale(clips, { provider = 'fal', targetShortSide = 108
   let dearest = null; // the tier that explains the quote — the UI labels the price with it
   const rows = list.map((clip) => {
     const job = { jobId: clip.jobId, seconds: clip.seconds };
-    const { tier, skipped } = clipTier(rates, clip, targetShortSide);
+    const { tier, skipped } = clipTier(rates, clip, targetShortSide, maxFactor);
     if (skipped) return { ...job, usd: 0 };
     const perSecond = rateFor(rates, tier) * multiplier;
     if (!dearest || perSecond > dearest.perSecond) dearest = { perSecond, tier: tier ?? rates.defaultResolution };
@@ -332,4 +345,4 @@ export function takeUpscaleClips(takeDir, { spec = null } = {}) {
 
 export const VOICE_MINT_USD = PRICES.voiceMintUsd;
 
-export default { estimateRender, estimateUpscale, takeUpscaleClips, jobSeconds, readRenderResolution, readSeedanceResolution, readUpscaleProvider, readUpscaleModel, VOICE_MINT_USD };
+export default { estimateRender, estimateUpscale, takeUpscaleClips, jobSeconds, readRenderResolution, readSeedanceResolution, readUpscaleProvider, readUpscaleModel, readUpscaleMaxFactor, VOICE_MINT_USD };

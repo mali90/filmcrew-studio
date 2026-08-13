@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { estimateRender, estimateUpscale, jobSeconds, readEnvVar, readProbeResolution, readRenderResolution, readSeedanceResolution, readUpscaleProvider, readUpscaleTargetShortSide } from '../../lib/estimator.js';
+import { estimateRender, estimateUpscale, jobSeconds, readEnvVar, readProbeResolution, readRenderResolution, readSeedanceResolution, readUpscaleMaxFactor, readUpscaleProvider, readUpscaleTargetShortSide } from '../../lib/estimator.js';
 import { voiceKnobs } from '../../lib/voice-refs.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
@@ -302,6 +302,34 @@ test('readUpscaleTargetShortSide: an explicit provider beats the env derivation'
     fs.writeFileSync(path.join(dir, '.env'), 'UPSCALE_PROVIDER=segmind\nUPSCALE_TARGET_RESOLUTION=720p\nSEGMIND_API_KEY=y\n');
     assert.equal(readUpscaleTargetShortSide(dir, 'kling-o3@fal'), 720, 'env segmind honors the 720p target');
     assert.equal(readUpscaleTargetShortSide(dir, 'kling-o3@fal', undefined, 'fal'), 1080, 'picking fal beats UPSCALE_PROVIDER=segmind');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// fal tiers Topaz by the OUTPUT frame, and the factor CAP decides how far a small clip is lifted
+// toward the target — so `FAL_TOPAZ_MAX_FACTOR` is a price knob, not a tuning detail. The render
+// child binds it (config.fal.topazMaxFactor → upscalePlan); an estimate that assumed the default 4
+// would quote a tier the child would not deliver on any install that changed it.
+test('the Topaz factor cap is read from the .env the child reads — and it moves the tier', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-topazcap-'));
+  try {
+    const clip = [{ jobId: 'K1', seconds: 10, width: 256, height: 256 }];
+    assert.equal(readUpscaleMaxFactor(dir), undefined, 'nothing configured ⇒ the planner\'s own default, never a second copy of 4');
+    assert.equal(estimateUpscale(clip, { provider: 'fal' }).tier, '1080p', '256 lifted 4× is a 1024-tall output');
+
+    fs.writeFileSync(path.join(dir, '.env'), 'export FAL_TOPAZ_MAX_FACTOR=2 # this box only pays for 2×\n');
+    assert.equal(readUpscaleMaxFactor(dir), 2);
+    assert.equal(readUpscaleMaxFactor(dir), buildConfig({ FAL_TOPAZ_MAX_FACTOR: '2' }).fal.topazMaxFactor, 'the same number the child binds');
+    const capped = estimateUpscale(clip, { provider: 'fal', maxFactor: readUpscaleMaxFactor(dir) });
+    assert.equal(capped.tier, '720p', 'capped at 2× the same clip comes back 512 tall — a cheaper tier');
+    assert.ok(capped.totalUsd < estimateUpscale(clip, { provider: 'fal' }).totalUsd);
+
+    // An unreadable cap is NaN in the child too (config.js keeps it NaN on purpose). Here that must
+    // round UP like any other unknown, never collapse to a free or a cheap tier.
+    fs.writeFileSync(path.join(dir, '.env'), 'FAL_TOPAZ_MAX_FACTOR=lots\n');
+    assert.ok(Number.isNaN(readUpscaleMaxFactor(dir)));
+    const unreadable = estimateUpscale(clip, { provider: 'fal', maxFactor: readUpscaleMaxFactor(dir) });
+    assert.equal(unreadable.tier, 'above1080p', 'an unusable cap prices at the dearest tier');
+    assert.ok(unreadable.totalUsd > 0);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 

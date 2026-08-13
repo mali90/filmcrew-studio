@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { isRunId, safeChild } from '../lib/paths.js';
-import { estimateRender, estimateUpscale, jobSeconds, readProbeResolution, readRenderResolution, readUpscaleModel, readUpscaleProvider, readUpscaleTargetShortSide, takeUpscaleClips } from '../lib/estimator.js';
+import { estimateRender, estimateUpscale, jobSeconds, readProbeResolution, readRenderResolution, readUpscaleMaxFactor, readUpscaleModel, readUpscaleProvider, readUpscaleTargetShortSide, takeUpscaleClips } from '../lib/estimator.js';
 // The registry is the ONE static import this server takes from the host src/ tree. It is safe
 // precisely because it has zero imports and reads no env (test/unit/render-models.test.js pins
 // that), so it cannot drag config.js — and a developer's real .env — into web/server's static
@@ -424,9 +424,14 @@ export function registerRunRoutes(app) {
       }
       const provider = picked ?? readUpscaleProvider(app.ctx.envRoot, run.backend, app.ctx.childEnv);
       const targetShortSide = readUpscaleTargetShortSide(app.ctx.envRoot, run.backend, app.ctx.childEnv, provider);
-      // fal tiers Topaz by the OUTPUT frame and halves the rate for Gaia 2 output, so the target and
-      // the model knob are part of the quote, not decoration around it.
-      const upscaleOpts = { provider, targetShortSide, model: readUpscaleModel(app.ctx.envRoot, app.ctx.childEnv) };
+      // fal tiers Topaz by the OUTPUT frame and halves the rate for Gaia 2 output, so the target,
+      // the model knob and the factor CAP (which decides how far a small clip is lifted, and so
+      // which tier it lands in) are part of the quote, not decoration around it.
+      const upscaleOpts = {
+        provider, targetShortSide,
+        model: readUpscaleModel(app.ctx.envRoot, app.ctx.childEnv),
+        maxFactor: readUpscaleMaxFactor(app.ctx.envRoot, app.ctx.childEnv),
+      };
       // A take is upscaled clip by clip, so its price is what THAT take actually holds — its own
       // spec, its own clips, each measured off the clip FILE Topaz would be handed (never off the
       // master, which an earlier upscale of this same take rewrote to the HD size it delivered).

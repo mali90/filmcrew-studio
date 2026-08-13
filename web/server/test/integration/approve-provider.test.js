@@ -210,6 +210,32 @@ test('a cut whose master was already upscaled is still quoted for its own SD cli
   assert.equal(after.totalUsd, priced.totalUsd, 'the master\'s size is not part of the quote at all');
 });
 
+// FAL_TOPAZ_MAX_FACTOR is the cap the render child binds into its factor plan, so it decides how
+// far a clip is lifted and therefore which OUTPUT tier fal bills for it. The endpoint has to read
+// the same file the child reads, or a configured cap moves the charge and not the quote. (The take
+// is re-recorded at 256×256 first — this harness renders 128×128 clips, which no legal cap can lift
+// past fal's cheapest tier, so nothing would be visible either way.)
+test('the estimate honours a configured FAL_TOPAZ_MAX_FACTOR, not upscalePlan\'s default', { skip: FF ? false : 'ffmpeg not installed' }, async () => {
+  const { runId, run } = await makeReviewedRun('cap my factor');
+  const cut = run.manifest.cuts.at(-1);
+  const rjPath = path.join(runsDir, runId, 'renders', cut.take, 'render.json');
+  const rj = JSON.parse(fs.readFileSync(rjPath, 'utf8'));
+  fs.writeFileSync(rjPath, JSON.stringify({ ...rj, jobs: rj.jobs.map((j) => (j.clip ? { ...j, width: 256, height: 256 } : j)) }, null, 2));
+
+  const envFile = path.join(envRoot, '.env');
+  const dotenv = fs.readFileSync(envFile, 'utf8');
+  const quote = async () => (await get(`/api/runs/${runId}/estimate?mode=upscale&cut=${cut.id}&provider=fal`)).json();
+  try {
+    const uncapped = await quote();
+    assert.equal(uncapped.tier, '1080p', '256 lifted by the default 4× is a 1024-tall output');
+
+    fs.writeFileSync(envFile, `${dotenv}FAL_TOPAZ_MAX_FACTOR=2\n`);
+    const capped = await quote();
+    assert.equal(capped.tier, '720p', 'capped at 2× the same clips come back 512 tall — the cheapest tier');
+    assert.ok(capped.totalUsd < uncapped.totalUsd, 'and the paid button follows the tier the child would really deliver');
+  } finally { fs.writeFileSync(envFile, dotenv); }
+});
+
 // U2c — the deliver card quotes the size of the file it is showing, so the DELIVERY has to carry
 // its own measured short side. Nothing else can answer for it: the approved cut records the
 // PRE-upscale size (which is what a 1080p delivery used to be labelled 480p from), and after a

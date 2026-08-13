@@ -10,7 +10,7 @@ import { newManifest, writeManifest, readManifest, updateManifest } from './web-
 import { scanRun, listRuns, defaultIsAlive, finalizedFinal } from './run-scan.js';
 import { createRingLog } from './ring-log.js';
 import { watchRun } from './artifact-watch.js';
-import { estimateRender, estimateUpscale, readEnvVar, readProbeResolution, readRenderResolution, readUpscaleModel, readUpscaleProvider, readUpscaleTargetShortSide, takeUpscaleClips } from './estimator.js';
+import { estimateRender, estimateUpscale, readEnvVar, readProbeResolution, readRenderResolution, readUpscaleMaxFactor, readUpscaleModel, readUpscaleProvider, readUpscaleTargetShortSide, takeUpscaleClips } from './estimator.js';
 import { safeChild } from './paths.js';
 // Both config-free by construction (the runs-caps canary walks this graph): the continuity rule is a
 // pure function over a run record, and the model registry imports nothing at all.
@@ -1042,6 +1042,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
             provider: upscaleProvider,
             targetShortSide: readUpscaleTargetShortSide(envRoot ?? root, m.backend, childEnv, upscaleProvider),
             model: readUpscaleModel(envRoot ?? root, childEnv),
+            maxFactor: readUpscaleMaxFactor(envRoot ?? root, childEnv),
           },
         );
       } catch { /* no rate row for this provider at all — recorded as unpriced below */ }

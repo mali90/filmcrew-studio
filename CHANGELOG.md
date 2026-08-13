@@ -261,7 +261,10 @@
   the expensive case and always was: lifting
   a 480p 9:16 clip to a 1080 short side delivers a **1080×1920** frame, which fal bills above 1080p
   — the same clip in landscape comes back 1920×1080 and costs a quarter as much. Clips already at
-  the target are quoted at nothing, because the upscaler skips them. Where the size cannot be known
+  the target are quoted at nothing, because the upscaler skips them, and `FAL_TOPAZ_MAX_FACTOR` is
+  read from your `.env` the way the render reads it — lowering the cap lowers how far a small clip
+  is lifted, and the quote follows it down instead of pricing a 4× the render would not do. Where
+  the size cannot be known
   — nothing rendered yet, or no dimensions on record — the quote deliberately takes the **dearest**
   tier rather than the cheapest: an estimate that reads a little high costs far less than a bill
   that arrives high. The figure beside the toggle, the one on the paid button and the row written
