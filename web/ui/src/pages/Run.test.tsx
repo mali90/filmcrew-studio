@@ -212,6 +212,36 @@ describe('Run page — phase morphing', () => {
     expect(screen.queryByText(/Live updates dropped/)).not.toBeInTheDocument();
   });
 
+  it('a page whose stream has not opened YET is not a drop — the REST snapshot alone never warns (U8)', async () => {
+    // The real race: the REST fetch answers first (or the stream is blocked by a proxy / the
+    // browser's per-origin connection cap), so the page is fully up with `connected` still false.
+    MockEventSource.autoOpen = false;
+    const run = makeRun('rendering');
+    renderRunPages([run]);
+    await screen.findByRole('region', { name: 'Render jobs' });
+    expect(screen.queryByText(/Live updates dropped/)).not.toBeInTheDocument();
+
+    // …and once this run's stream HAS been open, an error is a real drop again
+    const [es] = MockEventSource.instances.get(`/api/runs/${run.id}/events`) ?? [];
+    act(() => { es.onopen?.(); });
+    act(() => { es.onerror?.(); });
+    expect(screen.getByText(/Live updates dropped/)).toBeInTheDocument();
+  });
+
+  it('a NEW run starts silent again — the run we LEFT having been connected proves nothing (U8)', async () => {
+    MockEventSource.autoOpen = false;
+    const a = makeRun('rendering');
+    const b = makeRun('rendering', { id: 'web-20260704110000-cd34', idea: 'a second run' });
+    renderRunPages([a, b]);
+    await screen.findByRole('region', { name: 'Render jobs' });
+    const [esA] = MockEventSource.instances.get(`/api/runs/${a.id}/events`) ?? [];
+    act(() => { esA.onopen?.(); });
+
+    await userEvent.click(screen.getByTestId(`goto-${b.id}`));
+    expect(await screen.findByText('a second run')).toBeInTheDocument();
+    expect(screen.queryByText(/Live updates dropped/)).not.toBeInTheDocument();
+  });
+
   // ── Run-scoped page state must not cross a /runs/A → /runs/B navigation ────────────────────────
   it('the prompt sheet left open on one run does not open the next run with it (Router reuse)', async () => {
     const a = makeRun('review');

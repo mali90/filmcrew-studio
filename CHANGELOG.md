@@ -247,6 +247,15 @@
   install commands.
 
 ### Fixed
+- **"Live updates dropped" now only appears when updates were actually live first.** The notice
+  went up whenever the page had a run to show and the event stream was not open — but the page gets
+  that run from an ordinary request, which routinely answers before the stream finishes opening. So
+  a perfectly healthy page said the connection had dropped for the moment in between, and said it
+  indefinitely wherever the stream is slow to open or blocked outright (a proxy, or simply too many
+  run tabs at once for the browser's per-origin connection limit). The page now waits until *this*
+  run's stream has actually been open before it can call anything a drop, and a stream that goes
+  away mid-run still says so at once — while moving to another run starts silent again, since the
+  run you left having been connected says nothing about the one you opened.
 - **Opening a second run no longer opens it with the first run's prompt sheet.** Moving from one
   run to another keeps the same page in place (only the address changes), and the sheet's open
   target — a job id — went along for the ride. The new run would then read its prompt API with the

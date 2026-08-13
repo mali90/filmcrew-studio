@@ -111,13 +111,11 @@ export default function RunPage() {
   const latestCutId = run?.manifest?.cuts?.at(-1)?.id ?? null;
   useEffect(() => { setCutId(null); }, [id, latestCutId]);
 
-  // A real stream drop, never the initial connect (U8): only after we HAD a live snapshot does a
-  // disconnected EventSource mean the picture on screen may be going stale.
-  const [linkDropped, setLinkDropped] = useState(false);
-  useEffect(() => {
-    if (live.connected) setLinkDropped(false);
-    else if (live.run) setLinkDropped(true); // we HAD a snapshot — this is a drop, not a first connect
-  }, [live.connected, live.run]);
+  // A real stream drop, never the initial connect (U8): only once THIS run's stream has actually
+  // been open does a disconnected EventSource mean the picture on screen may be going stale. A live
+  // snapshot is no proof of that — the REST fallback fills `live.run` too, and it routinely answers
+  // first, so reading it here warned on healthy page loads (and forever on a blocked stream).
+  const linkDropped = live.hasConnected && !live.connected;
 
   if (!run) return null; // sub-400ms fetch — no skeleton flash
 
