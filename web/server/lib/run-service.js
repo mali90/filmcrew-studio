@@ -103,7 +103,93 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
     return ringLogs.get(runId);
   };
   const dirFor = (runId) => safeChild(runsDir, runId);
-  const env = (runId) => ({ ...childEnv, ...resolutionOverride(runId), RUNS_DIR: runsDir, OUT_DIR: outDir });
+  /**
+   * The environment every job this service enqueues runs in — the one choke point where a decision
+   * the app already made is put beyond a child's reach. Every mgr.enqueue below builds its `env`
+   * from this call and nothing else, which covers plan, revise, render, probe, job re-render,
+   * assemble and the approve-time upscale: every child that can reach a render, and so every child
+   * that can spend on one. The pins come LAST on purpose: a host or a test may hand us a childEnv,
+   * and a per-run pick may ride in resolutionOverride, but neither may out-resolve a value the app
+   * is answerable for.
+   *
+   * Two children the SERVER spawns are outside this function, and both are meant to be. POST
+   * /api/doctor (routes/setup.js) runs src/cli/doctor.js on the box's own environment on purpose:
+   * doctor's entire job is to report what THIS machine's `.env` says, so a doctor handed the app's
+   * pin would tell you the flag is off while `npm run doctor` in a terminal on the same box, reading
+   * the same file, told you it is on — the report would be about us instead of about you. And
+   * routes/cast.js enqueues src/cli/mint-voice.js, which mints a voice and never renders a clip, so
+   * there is no upscale in it to suppress. Those two are licensed BY CHILD, not by file, in
+   * web/server/test/integration/upscale-flag-pin.test.js: setup.js may spawn doctor.js and cast.js
+   * may enqueue mint-voice.js, and each licence clears that one pair and nothing else, so a second,
+   * different child added inside either of those same two files turns that suite red and names both
+   * the file and what it starts.
+   *
+   * Worth being exact about what that canary is, because three rounds of it were exact about the
+   * wrong thing. It does not try to RECOGNISE a paid spawn — that is a losing game, since the ways to
+   * spell a path are not a finite set, and each version that tried was beaten by one more spelling.
+   * It casts a coarse text net instead: any enqueue/spawn/execFile/fork under web/server, plus any
+   * repo-CLI path in any spelling it can cheaply detect, and every single catch must then be either
+   * provably built from this function or named in its EXEMPT map with the reason it cannot spend.
+   * False positives are the cheap direction and it leans that way on purpose. What it still cannot
+   * hold is worth saying plainly, since a scanner over source text is all it is: a callee computed at
+   * runtime, a spawn reached through a dependency, work handed to a shell, or a helper in a file it
+   * does not read all walk straight past it. Its job is the ordinary mistake — the next lane that
+   * copies the wrong neighbour's `env:` — not an adversary. The adversary's job belongs to review.
+   *
+   * UPSCALE_ENABLED is pinned OFF because it is a CLI convenience with no honest meaning in here:
+   * it means "act as if `--upscale` had been typed on every run", which is a fine thing to want from
+   * a terminal, where the person typing the command is the person choosing to spend. This app never
+   * offers that bargain. Its upscale is the one at approve — explicitly asked for, priced before the
+   * button is pressed, billed to the vendor approve resolved, and written into the run's cost ledger
+   * (see enqueueAssemble below). Without this pin a spawned child re-reads `.env` for itself at
+   * startup and finds the flag we never passed it, and paid Topaz then runs in two places the money
+   * was never accounted for: on the auto-assemble the app labelled lane 'free' and shows as "Finish
+   * free", which writes no ledger row at all, and on top of every full render, whose estimate and
+   * whose ledger row priced the render ALONE. Unpriced, unrecorded and mislabelled, three ways of
+   * saying the same thing — the user is charged for something nobody quoted them.
+   *
+   * The pin BEATS that `.env` because `dotenv/config` (config.js:7) loads with override:false, so a
+   * variable already present in the child's process.env is left exactly as it was handed over.
+   * Nothing here re-reads `.env` to compare — the whole guarantee is that dotenv declines to
+   * overwrite us. Swap that entrypoint for one that overrides (dotenvx, or an explicit
+   * dotenv.config({ override: true })) and every pin in this object silently stops meaning anything,
+   * which is why web/server/test/integration/upscale-flag-pin.test.js spawns a REAL child against a
+   * REAL .env that says true and asserts the child's own config still answers false.
+   *
+   * That default is the first of THREE switches on the same decision, and the other two are live
+   * wires worth naming, because neither is visible at the call site here. `dotenv/config` merges its
+   * options from lib/env-options.js, which reads DOTENV_CONFIG_OVERRIDE straight out of the child's
+   * environment, and from lib/cli-options.js, which regex-matches every bare element of the child's
+   * process.argv against ^dotenv_config_(encoding|path|quiet|debug|override|DOTENV_KEY)=(.+)$ (that
+   * is dotenv 16.6.1's own pattern, `quiet` included). Either one flips override to true and the
+   * `.env` wins over everything below.
+   *
+   * Both are unreachable, and structurally rather than carefully — which is the only reason it is
+   * safe to leave them unguarded. The variable has no channel: server.js builds childEnv as a strict
+   * allowlist (PATH/HOME/USER/LOGNAME/TERM/TMPDIR), so there is nothing for a DOTENV_CONFIG_OVERRIDE
+   * to ride in on. The argv element has no author: on the lanes whose child can actually reach
+   * finishRender — render.js and assemble.js — every argument is a path we built or an --out-name
+   * from outNameFor, which runs through slugify and turns '=' into '-'. Free text does reach argv on
+   * other lanes (a --brief, a --feedback), but engine.js is only ever asked to plan here and neither
+   * render-job.js nor revise.js calls finishRender, so none of them has a clip to upscale. Add a
+   * free-text argument to render.js or assemble.js, or a --render to the plan lane, and that second
+   * reason evaporates — which is what the "three switches" test in the file above is for. It asks
+   * that question of the SHAPE of every argument those lanes build (a flag from a closed list, a path
+   * inside the run, or a slug) rather than of the text a fixture happened to drive, because the
+   * earlier payload-matching version of it let exactly such an argument through.
+   *
+   * Approve is untouched by this. That path passes `--upscale` in argv, and the child's own test is
+   * `if (upscale || config.upscale.enabled)` (src/lib/pipeline.js) — the flag is never even read
+   * when the argument is there. The pin removes the SILENT upscale and only that one.
+   *
+   * 'false' rather than '': both read as off (envBool maps '' to the default, and the default here
+   * is false), but the literal says what it means at a glance and survives a platform that drops
+   * empty-valued variables.
+   */
+  const env = (runId) => ({
+    ...childEnv, ...resolutionOverride(runId),
+    RUNS_DIR: runsDir, OUT_DIR: outDir, UPSCALE_ENABLED: 'false',
+  });
 
   /**
    * The per-run resolution pick, as the .env knob THIS run's model actually reads

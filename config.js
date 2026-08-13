@@ -289,7 +289,19 @@ export function buildConfig(env = process.env) {
     //    endpoint (endpoint/model/factor live under `fal` above) or Segmind's `topaz-video-upscale`
     //    slug (under `segmind`), which takes a target resolution + fps instead of a factor. ──
     upscale: {
-      enabled: boolEnv('UPSCALE_ENABLED', false), // auto-lift the master toward 1080p when it's smaller
+      // Auto-lift the master toward 1080p when it's smaller — a CLI convenience meaning "act as if
+      // --upscale had been typed". It is read wherever a run is FINISHED from a terminal, which is
+      // both halves of that: a `npm run render`, and a bare `npm run assemble` of clips you already
+      // paid for, because assemble reaches the same finishRender and the same test below. Terminal
+      // only, though: the web app pins this OFF in env(runId) (web/server/lib/run-service.js), the
+      // one environment every job it enqueues is built from, which is every child of it that can
+      // reach a render — and upscales at approve instead, where the charge is quoted, the vendor is
+      // chosen and the run's cost ledger records it. A clip already at or above the target is skipped
+      // without an upload or a charge (see src/lib/upscale.js), so this costs nothing on a take that
+      // already CLEARS THE TARGET — 1080p unless UPSCALE_TARGET_RESOLUTION says otherwise, which only
+      // Segmind's Topaz reads. Set that to 4k and a 1080p clip is no longer skipped and IS billed;
+      // fal's path has no resolution input and measures against a fixed 1080 instead.
+      enabled: boolEnv('UPSCALE_ENABLED', false),
       // 'auto' (default) upscales wherever the run RENDERED — so a master never round-trips through a
       // second vendor — and falls back to whichever provider actually has a key (that fallback is what
       // lets a Segmind-only install, with no FAL_KEY anywhere, still finish a 1080p film).

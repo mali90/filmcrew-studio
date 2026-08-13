@@ -145,7 +145,27 @@ reports its actual cost and your remaining credit balance, which are logged and 
   `SEEDANCE_RESOLUTION` above 480p, drop it back for a genuinely cheap single-job test render.
 - If a probe gave you a take you like, finish it for **free** with
   `npm run assemble -- --from runs/<run-id>` (no re-render). A probe clip is low-res, so add `--upscale`
-  for higher quality, or do a full `npm run render` to regenerate at full resolution.
+  for higher quality, or do a full `npm run render` to regenerate at full resolution. One caveat, and
+  it is the expensive one: `UPSCALE_ENABLED=true` in your `.env` means "as if `--upscale` had been
+  typed", and that covers everything you finish from a terminal — the stitch as much as the render —
+  so that free finish is no longer free. Topaz runs on every clip in the take that is still under
+  1080p, and a probe's clips usually are. How far under depends on the backend, and the two answer
+  differently:
+  - **Seedance** probes ride the cheap 480p tier (`SEEDANCE_PROBE_RESOLUTION` /
+    `SEEDANCE25_PROBE_RESOLUTION`, both `480p` by default), so every clip is a paid Topaz job.
+  - **Kling** — the default backend — has no resolution knob that reaches the endpoint: fal's Kling o3
+    endpoint takes no resolution parameter, so whatever `KLING_RESOLUTION` says is never sent, and a
+    probe comes out at whatever the endpoint renders natively (~720p on the default `o3/standard`,
+    1080p on `o3/pro`). Those knobs above do nothing here, so on a standard Kling probe every clip is
+    a paid Topaz job too, and only `o3/pro` escapes it.
+
+  Either way the test is the clip against the target, not the knob: anything that already clears the
+  target is skipped without an upload or a charge. The target is 1080p unless you set
+  `UPSCALE_TARGET_RESOLUTION`, which only Segmind's Topaz reads — at `4k` a 1080p clip no longer
+  clears it, so it is uploaded and billed. (The web app is unaffected: it pins the flag off for every
+  child that could act on it — every job it queues, plus the one it spawns directly — bar two that
+  cannot spend on an upscale at all, the doctor button and `mint-voice`; it upscales at approve,
+  where it is priced first.)
 - **The cheap Seedance path**: set `SEEDANCE_RESOLUTION=480p` (or `SEEDANCE25_RESOLUTION=480p` for
   2.5, which otherwise renders 720p) and render with `--upscale` — Topaz lifts each sub-1080p clip to
   ~1080p before the stitch. Compare the combined cost against a native 1080p render for your clip

@@ -247,6 +247,29 @@
   install commands.
 
 ### Fixed
+- **The app never upscales without being asked, whatever your `.env` says.** `UPSCALE_ENABLED=true`
+  is a terminal convenience — it means "act as if `--upscale` had been typed", which is an honest
+  bargain when the person typing the command is the person choosing to spend. The app never offered
+  that bargain, but it could not stop it either: every piece of work it starts runs as
+  its own process, and each one read your `.env` for itself and found a flag the app had not passed
+  it. So a paid Topaz pass ran in two places nobody had priced. It ran on the stitch that happens by
+  itself the moment clips land — the lane the app offers as "Finish free", and the one lane it both
+  calls free and writes no line in the run's money history for, because there was never anything to
+  write. And it ran on top of every full render, whose estimate and whose ledger row
+  covered the render alone, adding one paid job per sub-1080p clip to a figure you had already agreed
+  to. Unquoted, unrecorded and called free: three ways of saying you were charged for something nobody
+  offered you. The flag is now switched off in the environment of every job the app queues — planning,
+  revising, rendering, probing, re-rendering one job, stitching, and the upscale at approve itself,
+  which is everything that can reach a render — bar two that cannot spend on an upscale at all, named
+  just below. So it governs what you finish from a *terminal*, which is every CLI render and every
+  `npm run assemble` too, and nothing in the app that could act on it. The app's upscale
+  is still exactly where it always was — at approve, where you choose
+  it, see the price before you press the button, pick which vendor performs it, and get a line in the
+  run's cost ledger recording what it cost. Two of the app's own CLIs are deliberately left reading
+  your own `.env`, and neither can spend on an upscale: the `npm run doctor` button (spawned straight
+  from its route rather than queued like the rest), because a doctor that
+  reported the app's setting instead of yours would disagree with the same doctor run from a terminal
+  on the same machine, and `mint-voice`, which mints a voice and renders no clip at all.
 - **"Live updates dropped" now only appears when updates were actually live first.** The notice
   went up whenever the page had a run to show and the event stream was not open — but the page gets
   that run from an ordinary request, which routinely answers before the stream finishes opening. So

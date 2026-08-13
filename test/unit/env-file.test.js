@@ -66,6 +66,27 @@ test('envBool is config.js\'s boolean rule — a padded dotenv value included', 
   assert.equal(buildConfig({ KLING_CHAIN_FRAMES: ' false ' }).kling.chainFrames, false);
 });
 
+// The same oracle, guarding a knob where the coercion is worth actual money. UPSCALE_ENABLED means
+// "act as if --upscale had been typed", which covers everything finished from a terminal — every CLI
+// render and every `npm run assemble` alike. That is an honest offer in a terminal and no offer at
+// all in the web app — so the web app pins it OFF in env(runId)
+// (web/server/lib/run-service.js), the one environment every job it enqueues is built from and so
+// every child of it that can reach a render, and upscales only at approve, where the charge is
+// quoted, billed to a chosen vendor and written into the run's cost ledger. That pin is only as
+// good as what the child does with the literal: if boolEnv ever stopped reading 'false' as off,
+// paid Topaz would quietly resume on a lane the app labels free and on renders whose estimate
+// covered the render alone, and every test on the web side would still be green. Pinned here, on
+// the exact bytes. (That the literal BEATS a real .env is the other half, and it belongs to a real
+// spawned child — web/server/test/integration/upscale-flag-pin.test.js does that one.)
+test('the literal the web pins for UPSCALE_ENABLED really reads as off in the child', async () => {
+  const { buildConfig } = await import('../../config.js');
+  assert.equal(buildConfig({ UPSCALE_ENABLED: 'false' }).upscale.enabled, false, 'the pin run-service writes');
+  assert.equal(buildConfig({ UPSCALE_ENABLED: '' }).upscale.enabled, false, "and the '' spelling the knob pins use");
+  // …and the flag is still LIVE — the pin is what turns it off, not a knob that stopped working.
+  assert.equal(buildConfig({ UPSCALE_ENABLED: 'true' }).upscale.enabled, true, 'a CLI render still honours it');
+  assert.equal(buildConfig({}).upscale.enabled, false, 'unset is off, as it always was');
+});
+
 test('readEnvFileOrExample prefers .env, falls back to .env.example, always targets <root>/.env', () => {
   const { dir, cleanup } = mkTmp('envfile');
   try {

@@ -167,7 +167,7 @@ async function main() {
     const preset = await resolvePreset(intent);
     if (preset.aspectRatio !== '9:16') updates.KLING_ASPECT = preset.aspectRatio;
     if (preset.resolution !== '1080p') updates.KLING_RESOLUTION = preset.resolution;
-    if (preset.upscale) updates.UPSCALE_ENABLED = 'true';
+    if (preset.upscale) updates.UPSCALE_ENABLED = 'true'; // terminal only (renders AND assembles) — the web app upscales at approve
 
     // Step 5 — Configure the fal renderer + validate its key live (no spend)
     log.step('Step 5 — Connect the video renderer (fal.ai)');
@@ -279,7 +279,11 @@ async function resolvePreset(intent) {
       );
       preset = sanitizePreset(extractJson(text));
       process.stdout.write('done ✅\n');
-      process.stdout.write(`  Suggested: shape=${preset.aspectRatio}, quality=${preset.resolution}, character voices=${preset.wantsVoices ? 'yes' : 'no'}, upscale=${preset.upscale ? 'yes' : 'no'}\n`);
+      // The upscale line carries its SCOPE here and not only in the menu question below, because on
+      // this path (and under --yes, which takes it unconditionally) the confirm returns before that
+      // question is ever asked. This print is then the only thing a user is shown before
+      // UPSCALE_ENABLED=true is written to their .env, so it has to say what the flag governs.
+      process.stdout.write(`  Suggested: shape=${preset.aspectRatio}, quality=${preset.resolution}, character voices=${preset.wantsVoices ? 'yes' : 'no'}, upscale=${preset.upscale ? 'yes (CLI renders + stitches)' : 'no'}\n`);
       if (AUTO || await confirm('  Use these settings?', true)) return preset;
     } catch (e) { process.stdout.write('skipped (AI unavailable)\n'); log.debug(`preset AI failed: ${e.message}`); preset = null; }
   }
@@ -296,7 +300,11 @@ async function resolvePreset(intent) {
     { label: '4k (most expensive)', value: '4k' },
   ], d.resolution === '720p' ? 1 : d.resolution === '4k' ? 2 : 0);
   const wantsVoices = await confirm('  Do your videos have talking characters with distinct voices?', d.wantsVoices);
-  const upscale = await confirm('  Upscale every render with fal Topaz (extra cost)?', d.upscale);
+  // Names the surface it governs, because it governs only one: UPSCALE_ENABLED is read by work
+  // FINISHED from the terminal — a render, and equally a bare `npm run assemble`, which is the case
+  // that surprises people, since it turns a free re-stitch of clips they already own into a bill.
+  // The web app pins it off and offers the upscale at approve, priced.
+  const upscale = await confirm('  Upscale every render and stitch you run from the CLI with fal Topaz (extra cost)?', d.upscale);
   return sanitizePreset({ aspectRatio, resolution, wantsVoices, upscale });
 }
 
