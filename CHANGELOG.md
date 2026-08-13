@@ -267,6 +267,16 @@
   longer had — after the money row was written. Each take now freezes the plan it was paid to render,
   beside the prompt overrides it already froze, and the child renders that. A revision still governs
   the *next* render, and the take you can still open says what it was actually charged for.
+- **Setup answers about your keys the way the render does.** The wizard's "keyed" badges and the
+  `complete` gate that lets you out of Setup read `.env` through the settings *line editor*, which
+  reports the FIRST assignment where dotenv keeps the last and does not recognise an `export ` prefix
+  at all. So a key set with `export`, or an old line left above a new one, could show a keyed
+  provider whose very first paid call dies for want of a key — or trap a perfectly good install in
+  Setup forever. The same reading decided which LLM provider's key to look for, so an
+  `export LLM_PROVIDER=openai` had the wizard checking Anthropic. And the Segmind model probe
+  validated `SEGMIND_SEEDANCE25_SLUG="my-slug"` with its quotes still attached — a 404 that blamed
+  your key for a setup that was fine. All of these now read the file exactly as the child that spends
+  the money reads it. A first run with no `.env` yet is still seeded from `.env.example`, unchanged.
 - **A `.env` written in ordinary dotenv style now decides the defaults the create page starts
   from — quotes, `export`, trailing comments and repeated keys included.** The endpoints that report
   your effective defaults read the file through the *settings editor*, which exists to rewrite one

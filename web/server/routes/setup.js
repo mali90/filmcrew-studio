@@ -50,12 +50,26 @@ export function registerSetupRoutes(app) {
 
   app.get('/api/setup/status', async () => {
     const { source, get } = await envSettings.read();
-    const provider = get('LLM_PROVIDER') || 'claude';
-    const transport = get('LLM_TRANSPORT') || 'api';
+    // The child's reading FIRST, the example's seed only when nothing is configured yet. Which
+    // provider the engine runs decides WHICH key this endpoint has to find, so reading it the
+    // editor's way answered for the wrong one: `export LLM_PROVIDER=openai` is an assignment dotenv
+    // obeys and the line editor does not see at all, so the wizard checked ANTHROPIC_API_KEY —
+    // reporting a complete setup whose very first (paid) planning call dies for want of a key, or
+    // trapping a perfectly good one in /setup forever. The `get` fallback is what keeps a FRESH
+    // install seeded from .env.example (which ships LLM_PROVIDER=claude / LLM_TRANSPORT=cli, and so
+    // a complete-looking first screen); once a real .env exists, envGet answers from it.
+    const provider = envGet('LLM_PROVIDER') || get('LLM_PROVIDER') || 'claude';
+    const transport = envGet('LLM_TRANSPORT') || get('LLM_TRANSPORT') || 'api';
     const { PROVIDER_KEY_ENV } = await import(path.join(root, 'src/lib/llm.js'));
-    const llmKeySet = transport === 'cli' || !!(get(PROVIDER_KEY_ENV[provider] ?? '') || get('LLM_API_KEY'));
-    const falKeySet = !!(get('FAL_KEY') || get('FAL_API_KEY'));
-    const segmindKeySet = !!get('SEGMIND_API_KEY');
+    // …and the KEYS themselves are the child's reading alone: a key is either in the environment the
+    // engine/render child gets or it is not, and .env.example ships every key line blank, so there
+    // is no seed to preserve here. Read through the line editor, a duplicated `FAL_KEY=` (dotenv
+    // keeps the LAST, the editor the FIRST) or an `export `-prefixed one made `hasKey` disagree with
+    // the process that spends the money — a keyed badge and `complete: true` over a render that
+    // fails on submit, or the reverse.
+    const llmKeySet = transport === 'cli' || !!(envGet(PROVIDER_KEY_ENV[provider] ?? '') || envGet('LLM_API_KEY'));
+    const falKeySet = !!(envGet('FAL_KEY') || envGet('FAL_API_KEY'));
+    const segmindKeySet = !!envGet('SEGMIND_API_KEY');
     // Completion is gated on the key the DEFAULT BACKEND actually bills: a Segmind-only install
     // (no fal account anywhere) is a valid, documented setup — requiring FAL_KEY here would trap it
     // in /setup forever while the wizard happily offers Segmind cards. The registry is config-free,
@@ -77,7 +91,7 @@ export function registerSetupRoutes(app) {
     const renderKeySet = renderProvider === 'segmind' ? segmindKeySet : falKeySet;
     return {
       envSource: fs.existsSync(path.join(envRoot, '.env')) ? '.env' : source === '.env.example' ? '.env.example' : 'none',
-      llm: { provider, transport, model: get('LLM_MODEL') || null, hasKey: llmKeySet },
+      llm: { provider, transport, model: envGet('LLM_MODEL') || get('LLM_MODEL') || null, hasKey: llmKeySet },
       fal: { hasKey: falKeySet },
       segmind: { hasKey: segmindKeySet },
       renderProvider,
@@ -115,6 +129,13 @@ export function registerSetupRoutes(app) {
     // is optional and buildUpdates preserves an existing FAL_KEY — whose mere presence keeps
     // steering uploads to fal-storage. Setup must judge the key that will actually be used;
     // with nothing stored either, validateFal('') still answers { ok:false, reason:'missing' }.
+    //
+    // STORED is the word, and that is why this one stays on the settings reader while /setup/status
+    // reads its `hasKey` flags with the child's dotenv semantics: the question here is "is the key
+    // in the file any good", asked about the file the wizard just wrote. envGet would answer for the
+    // server's own inherited environment first, so a FAL_KEY exported in the shell that started the
+    // studio would come back "ok" for a file that stores nothing — and "nothing stored either" would
+    // stop meaning what the card says it means.
     const typed = String(req.body?.apiKey ?? '');
     if (typed) return validateFal(typed);
     const { get } = await envSettings.read();
@@ -126,15 +147,22 @@ export function registerSetupRoutes(app) {
     // Probe the MODEL the user picked, at its CONFIGURED slug: validating the default 2.5 slug for
     // a 2.0 setup would let a bad SEGMIND_SEEDANCE20_SLUG pass setup and fail on the first paid
     // render — and a customized 2.5 slug reject a perfectly valid 2.0 pick.
+    //
+    // Read the CHILD's way (dotenv grammar, childEnv first), because the whole point of this probe
+    // is that the slug it validates is the slug the render child will POST. Through the settings
+    // reader, a perfectly ordinary `SEGMIND_SEEDANCE25_SLUG="my-slug"` validated `"my-slug"` quotes
+    // and all — a 404 telling the user their key is bad — and an `export `-prefixed one, or a
+    // second assignment lower down, validated the DEFAULT slug and then let the first paid render
+    // fail on a slug setup never touched. Nothing is seeded from .env.example here (both slug lines
+    // ship commented out), so the `|| default` below covers a fresh install exactly as before.
     let slug;
     try {
       const { normalizeBackend } = await import(path.join(root, 'src/lib/render-models.js'));
       const { model, provider } = normalizeBackend(String(req.body?.backend ?? ''));
       if (provider === 'segmind') {
-        const { get } = await envSettings.read();
         slug = model === 'seedance-2.0'
-          ? (get('SEGMIND_SEEDANCE20_SLUG') || 'seedance-2.0')
-          : (get('SEGMIND_SEEDANCE25_SLUG') || 'seedance-2.5');
+          ? (envGet('SEGMIND_SEEDANCE20_SLUG') || 'seedance-2.0')
+          : (envGet('SEGMIND_SEEDANCE25_SLUG') || 'seedance-2.5');
       }
     } catch { /* no/invalid backend sent — validateSegmind's default slug stands */ }
     return validateSegmind(String(req.body?.apiKey ?? ''), slug ? { slug } : undefined);
