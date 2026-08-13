@@ -247,6 +247,18 @@
   install commands.
 
 ### Fixed
+- **The prompt preview measures a voice clip with the render's own `ffprobe`, not the server's.**
+  Seedance 2.5 on Segmind states a two-second floor for a reference audio clip, so the renderer
+  drops a shorter one rather than pay for a rejected submit — which makes a clip's *duration* a
+  prompt input: it decides the `@Audio` labels, the prompt bytes and how many of the model's
+  reference slots the job spends. The preview probed the clip with whatever `ffprobe` **the web
+  server** started with, while the render child uses the `FFPROBE_BIN` from your run's `.env`. On a
+  machine where only the configured binary can read the clip — an ffmpeg build kept outside `PATH`,
+  which is the reason to set the knob at all — the preview kept a reference the paid render then
+  dropped, and every promise on that screen was about a different prompt from the one that shipped.
+  The preview now resolves the binary the same way the child does (an explicit value in the child's
+  environment first, then the run's `.env`, a relative path anchored at the project root) and runs
+  the identical probe.
 - **A custom `VOICES_DIR` now counts in the seam budget it actually affects.** `VOICES_DIR` is the
   documented way to keep character voice clips somewhere other than `<project>/voices`, and the
   render child honors it — but the server's continuity budget scanned the default folder anyway. On

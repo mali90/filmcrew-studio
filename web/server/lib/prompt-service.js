@@ -201,12 +201,20 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
   // per-clip minimum before the paid submit, and a preview counting a doomed @AudioN would differ
   // from the wire prompt (the exactness this whole module exists for). Probed once here — the view
   // functions stay sync — and an unprobeable clip stays IN, exactly as the renderer sends it as-is.
-  const { probeClip } = await import(path.join(root, 'src/lib/assemble.js'));
+  //
+  // The BINARY comes from the run's environment, not from assemble.js: that module's probe is bound
+  // to config.video.ffprobe, i.e. to whatever FFPROBE_BIN this SERVER process started with, and
+  // importing it would drag `import 'dotenv/config'` in here besides (the rule at the top of this
+  // file). Where only the configured binary can read a clip, that server-side probe fails, the
+  // preview keeps a clip the child successfully probes and DROPS, and the labels, the prompt bytes
+  // and the reference budget all differ from the render that gets paid for.
+  const { ffprobeBinFor, probeClipWith } = await import(path.join(root, 'src/lib/ffprobe.js'));
+  const ffprobeBin = ffprobeBinFor(get('FFPROBE_BIN'), root);
   const voiceDurS = new Map();
   for (const sp of new Set((spec?.audio?.voice?.lines ?? []).map((l) => l?.speaker).filter(Boolean))) {
     const clip = voiceClipFor(sp);
     if (!clip) continue;
-    try { voiceDurS.set(slug(sp), (await probeClip(clip)).duration); } catch { /* unprobeable — kept */ }
+    try { voiceDurS.set(slug(sp), (await probeClipWith(ffprobeBin, clip)).duration); } catch { /* unprobeable — kept */ }
   }
   const jobs = spec?.kling?.jobs ?? [];
   const overrides = readOverrides(runDir);
