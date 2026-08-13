@@ -64,6 +64,29 @@ describe('StepBackend — the cards are the registry', () => {
       patch: { backend: 'seedance-2.5@fal', segmindCheck: { state: 'idle' } },
     });
   });
+
+  it('an aspect the new pair cannot render trims to its first, like the tier does', async () => {
+    // The presets step offers the SELECTED backend's ratios, so a 21:9 picked on 2.5 must not stay
+    // selected after a switch to a three-ratio pair — it would be saved as KLING_ASPECT and every
+    // run would start from a ratio the renderer refuses.
+    const { dispatch, group } = renderStep({ backend: 'seedance-2.5@fal', aspect: '21:9', resolution: '720p' });
+    await userEvent.click(within(group).getByRole('radio', { name: /Kling 3\.0 Omni fal/ }));
+    expect(dispatch).toHaveBeenCalledWith({
+      type: 'patch',
+      patch: { backend: 'kling-o3@fal', segmindCheck: { state: 'idle' }, aspect: '16:9', resolution: null },
+    });
+  });
+
+  it('a ratio the new pair also renders survives the switch (no spurious trim)', async () => {
+    // The same MODEL can offer different ratios per provider (2.0 renders six on Segmind, three on
+    // fal), so the trim asks the PAIR — and leaves a ratio both of them render alone.
+    const { dispatch, group } = renderStep({ backend: 'seedance-2.5@fal', aspect: '9:16', resolution: '720p' });
+    await userEvent.click(within(group).getByRole('radio', { name: /Seedance 2\.0 Segmind/ }));
+    expect(dispatch).toHaveBeenCalledWith({
+      type: 'patch',
+      patch: { backend: 'seedance-2.0@segmind', segmindCheck: { state: 'idle' } },
+    });
+  });
 });
 
 describe('StepBackend — honest money copy', () => {

@@ -247,6 +247,14 @@
   install commands.
 
 ### Fixed
+- **First-run setup now offers every aspect ratio the backend you just picked can render.** The
+  backend card says Seedance 2.5 — and Seedance 2.0 on Segmind — renders six ratios, and the very
+  next step then showed the same three tiles it always had, so 4:3, 3:4 and 21:9 could not be saved
+  as a default during setup at all; you had to finish the wizard and change it in Settings. The
+  tiles now come from the chosen model's own list, exactly as the create page and the Settings
+  defaults card already did. Switching backend trims an aspect the new pair cannot render to that
+  pair's first, the same way the resolution tier already snapped — the wizard can no longer write a
+  default aspect the renderer would refuse.
 - **A plan is now trimmed to the model's reference budget whether or not you starred anyone.** On
   fal's Seedance 2.5 a single 50-reference budget covers images and voice clips together, and the
   engine layer that subtracts what a job's registered voices will spend only ran when the run had a

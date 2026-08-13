@@ -82,11 +82,14 @@ export function StepBackend({ state, dispatch }: { state: WizardState; dispatch:
                 // A Segmind validation is MODEL-scoped (validate-segmind probes the picked model's
                 // configured slug), so switching cards resets it — a check that passed for the 2.5
                 // slug says nothing about a bad SEGMIND_SEEDANCE20_SLUG. A resolution off the new
-                // model's ladder trims to that model's default — the presets step must never carry
-                // (and buildUpdates never write) a tier the chosen backend cannot render.
+                // model's ladder trims to that model's default, and a ratio the new pair cannot
+                // render trims to its first — the presets step must never carry (and buildUpdates
+                // never write) a tier or an aspect the chosen backend cannot render. Same rule the
+                // create hero and the Settings defaults card apply on their own model switch.
                 patch: {
                   backend: b.id,
                   ...(b.id !== state.backend ? { segmindCheck: { state: 'idle' as const } } : {}),
+                  ...(aspectsFor(b.id).includes(state.aspect) ? {} : { aspect: aspectsFor(b.id)[0]! }),
                   ...(state.resolution && resolutionsFor(b.id).includes(state.resolution) ? {} : { resolution: defaultResolutionFor(b.id) ?? null }),
                 },
               })}
