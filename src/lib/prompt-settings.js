@@ -25,8 +25,13 @@ export function knobsFor(caps, bag) {
   return knobs && typeof knobs === 'object' ? knobs : null;
 }
 
-/** spec.kling.generate_audio wins wherever it is set; an ABSENT flag falls back, never reads false. */
-const audioFlag = (spec, fallback) =>
+/**
+ * spec.kling.generate_audio wins wherever it is set; an ABSENT flag falls back, never reads false.
+ * Exported because the answer decides more than a prompt: audio off means a voiced character's clip
+ * does not ride, so web/server's reference budget has to resolve the flag the SAME way the renderer
+ * does, or it quotes a boundary pin against a slot nobody will spend.
+ */
+export const audioFlag = (spec, fallback) =>
   (spec?.kling?.generate_audio !== undefined ? !!spec.kling.generate_audio : !!fallback);
 
 /**
@@ -114,4 +119,4 @@ export function seedancePromptSettings(spec, caps, defaults = {}) {
   };
 }
 
-export default { knobsFor, seedanceResolution, klingPromptSettings, seedancePromptSettings };
+export default { knobsFor, audioFlag, seedanceResolution, klingPromptSettings, seedancePromptSettings };

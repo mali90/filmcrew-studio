@@ -67,7 +67,12 @@ function seedRun(runId, layout, over = {}) {
     render_backend: backend,
     project: { title: 'Boundary Drill', aspect_ratio: '9:16' },
     shots: JOBS.map((_, i) => ({ shot_id: `S${i + 1}`, duration_s: 5, description: 'a shot' })),
-    kling: { elements, jobs: JOBS.map((j, i) => ({ job_id: j, shots: [`S${i + 1}`], elements: elements.map((e) => e.id) })) },
+    kling: {
+      elements,
+      jobs: JOBS.map((j, i) => ({ job_id: j, shots: [`S${i + 1}`], elements: elements.map((e) => e.id) })),
+      // ABSENT is "whatever the .env defaults to"; `false` is the plan itself turning audio off
+      ...(over.specAudio === undefined ? {} : { generate_audio: over.specAudio }),
+    },
     ...(over.voiceLines ? { audio: { voice: { lines: over.voiceLines } } } : {}),
   }, null, 2));
 
@@ -343,6 +348,21 @@ test('a speaker with no registered clip costs no slot at all', () => {
   const r = svc.rerenderJob(runId, { jobId: 'K2', boundaries: 'both' });
 
   assert.equal(r.boundaries.startMode, 'soft');
+});
+
+// …and the same is true when the PLAN is what turned audio off. The renderer resolves
+// `generate_audio` spec-first (prompt-settings.js `audioFlag`: a spec flag outranks the .env
+// default), so a plan with `generate_audio:false` ships no @Audio reference whatever
+// SEEDANCE_GENERATE_AUDIO says. Reading the environment alone here reserved a slot the render never
+// spends and answered `none` for an opening pin the PAID take was always going to keep.
+test('a spec that disables audio spends no voice slot — the pin it leaves free is still promised', () => {
+  const runId = 'web-19990101000016-specaudio';
+  const { svc } = fakeService(runId, intact, { ...on25, voiceLines: lineFor('keeper'), specAudio: false });
+
+  const r = svc.rerenderJob(runId, { jobId: 'K2', boundaries: 'both' });
+
+  assert.equal(r.boundaries.startMode, 'soft', 'audio off ⇒ no voice reference ⇒ the 50th slot is the opening pin\'s');
+  assert.deepEqual(svc.detail(runId).voiceRefs, { K1: 0, K2: 0, K3: 0, K4: 0 }, 'and the dialog is told the same');
 });
 
 test('the run payload carries the same count, because the browser cannot read the voices dir', () => {

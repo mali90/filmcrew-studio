@@ -360,7 +360,10 @@
   the render dropped: you paid for a take that came back on a scene cut, and the strip then offered
   a downstream cascade to repair it. Both now subtract what the job's voice clips will really spend
   — the speakers with a registered clip, capped by the model's audio slots, and zero when audio is
-  off or voices are model-native — so the promise matches the render or is not made at all.
+  off or voices are model-native — so the promise matches the render or is not made at all. Audio
+  being "off" is read the way the renderer reads it, plan first: a spec that sets
+  `generate_audio: false` sends no voice clip whatever your `.env` says, so that plan keeps the
+  boundary pin its cast alone could afford instead of paying for a seam nobody was going to spend.
 - **The prompt sheet keeps up with the run: a finished re-render and a revise both refresh it.**
   It stays open through the whole review while everything in it is composed by the server, and it
   was only ever refreshed when *you* edited a prompt. So the take you had just paid for was missing

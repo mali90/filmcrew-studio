@@ -15,6 +15,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { voiceRefDemand } from '../../../src/lib/seedance-args.js';
+// The one audio-flag rule (pure, config-free — every default reaches it as an argument), so the
+// budget below resolves `generate_audio` exactly as the render child will.
+import { audioFlag } from '../../../src/lib/prompt-settings.js';
 
 const CLIP_EXT = /\.(mp3|wav|mp4|mov)$/i;
 
@@ -52,6 +55,10 @@ export function voiceClipLookup(voicesDir, root, slug) {
  * The two voice knobs, mirrored from config.seedance for a server that may not import config.js.
  * The ONE mirror: prompt-service's promptDefaults reads them through here too, so the preview and
  * the seam budget can never disagree about whether a clip rides.
+ *
+ * `audioOn` is the environment's DEFAULT, not the effective answer: a spec's own
+ * `kling.generate_audio` outranks it (prompt-settings.js `audioFlag`), which is why every caller
+ * that has the spec resolves the two together rather than trusting this value alone.
  * @param {(key:string)=>string} get  a reader over the run's environment (as data)
  */
 export const voiceKnobs = (get) => ({
@@ -78,7 +85,12 @@ export const voiceKnobs = (get) => ({
  */
 export function voiceRefCountsFor(spec, { caps, speakersOf, voicesDir, root, slug, get }) {
   if (caps?.maxCombinedRefs == null) return null;
-  const { audioOn, voiceMode } = voiceKnobs(get);
+  const { audioOn: envAudio, voiceMode } = voiceKnobs(get);
+  // Spec over .env, the renderer's own precedence: seedancePromptSettings hands render-seedance.js
+  // `audioFlag(spec, config.seedance.generateAudio)`, so a plan that turned audio off ships no
+  // @Audio reference however the environment is set. Counting one anyway reserved a slot nobody
+  // spends and gave up a boundary pin the PAID re-render would have kept.
+  const audioOn = audioFlag(spec, envAudio);
   const hasClip = voiceClipLookup(voicesDir, root, slug);
   const jobs = spec?.kling?.jobs ?? [];
   return Object.fromEntries(jobs.map((job) => [job?.job_id, voiceRefDemand({
