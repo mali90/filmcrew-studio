@@ -247,6 +247,16 @@
   install commands.
 
 ### Fixed
+- **The price beside the create controls now follows the resolution you picked.** The per-run
+  Resolution control pins the render to the tier on screen, but the hint next to it still quoted
+  the model's *default* tier — so picking 4k on fal's Seedance 2.0 read "roughly $0.14 per second"
+  for a render that bills about $1.56, an order-of-magnitude under-quote on the one control that
+  decides the spend. The hint is now composed per pick: the figure comes from the same rate table
+  the run page's estimate prices against (`web/server/lib/prices.json`) at the tier you selected,
+  and the claims that ride with it follow too — it no longer says "renders at 480p" while 4k is
+  picked, and it only offers the approve-time lift to 1080p on a cut that is still under it. The
+  setup wizard's backend cards read from that table as well, at the tier each card would render at
+  if picked, so no screen carries a hand-copied rate that can drift from the estimate.
 - **A quoted, padded `true` in your `.env` now means the same thing to the preview as it does to
   the render.** `dotenv` keeps the padding inside a quoted value, so `KLING_CHAIN_FRAMES=" true "`
   reaches the render child as `" true "` — and `config.js` trims it before testing, which turns the

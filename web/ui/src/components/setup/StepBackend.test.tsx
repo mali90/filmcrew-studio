@@ -120,4 +120,21 @@ describe('StepBackend — honest money copy', () => {
     expect(rateOf(/Seedance 2\.5 Segmind/)).not.toEqual(rateOf(/Seedance 2\.5 fal/));
     expect(Number(rateOf(/Seedance 2\.5 Segmind/))).toBeLessThan(Number(rateOf(/Seedance 2\.5 fal/)));
   });
+
+  // The tier is picked one step LATER (StepPresets), and the wizard can be walked backwards. A card
+  // quoting the model's default tier while the wizard holds 4k is quoting a render this step will
+  // not produce: clicking it KEEPS a tier the new model can render. So each card quotes the tier it
+  // would actually render at — the same precedence its own click applies.
+  it('quotes the tier the card would render at, not the model\'s default, once a tier is picked', () => {
+    const { group } = renderStep({ backend: 'seedance-2.0@fal', resolution: '4k' });
+    // 4k survives a click on 2.0, so 2.0's card must quote 4k money ($1.5552/s), not 480p's $0.14.
+    const fal20 = within(group).getByRole('radio', { name: /Seedance 2\.0 fal/ });
+    expect(fal20).toHaveTextContent('$1.56');
+    expect(fal20).toHaveTextContent('4k');
+    expect(fal20).not.toHaveTextContent('$0.14');
+    // 2.5 has no 4k tier, so clicking it trims to 2.5's default (720p) — and the card says 720p money.
+    expect(within(group).getByRole('radio', { name: /Seedance 2\.5 fal/ })).toHaveTextContent('$0.47');
+    // Kling has no ladder at all: its endpoint's own output, one flat rate, no tier to name.
+    expect(within(group).getByRole('radio', { name: /Kling 3\.0/ })).toHaveTextContent('$0.11');
+  });
 });
