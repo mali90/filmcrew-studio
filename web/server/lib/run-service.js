@@ -493,9 +493,12 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
       runId, lane: upscale ? 'spend' : 'free', kind: upscale ? 'upscale' : 'assemble',
       script: CLI(root, 'assemble.js'),
       args: ['--from', fromDir, '--out-name', outNameFor(runId, spec, suffix ?? (upscale ? 'final' : null)), ...(upscale ? ['--upscale'] : [])],
-      // An explicit reviewer pick rides as UPSCALE_PROVIDER for THIS child only — an env var
-      // already present is never overwritten by the child's dotenv, so the pick cannot be
-      // out-resolved by .env or 'auto'. No pick injects nothing: the child derives exactly as before.
+      // The vendor APPROVE ALREADY RESOLVED rides as UPSCALE_PROVIDER for THIS child only — an env
+      // var already present is never overwritten by the child's dotenv, so it cannot be out-resolved
+      // by .env or 'auto'. Callers pass the resolved value, never the raw request field: the child
+      // must bill whoever the key check validated, the estimate quoted and the ledger row recorded,
+      // and a second derivation down here could answer differently (an .env edited between approve
+      // and spawn, or a typo'd UPSCALE_PROVIDER that only throws once the money row is written).
       env: { ...env(runId), ...(upscale && upscaleProvider ? { UPSCALE_PROVIDER: upscaleProvider } : {}) }, cwd: root,
     });
   }
@@ -1104,7 +1107,13 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
       m.lastError = null;
       return m;
     });
-    return { final: null, queued: enqueueAssemble(runId, fromDir, { upscale: true, suffix: 'final', upscaleProvider: provider }), spec: !!spec };
+    // …and the child is pinned to `upscaleProvider` — the vendor resolved ONCE above, before any
+    // mutation. Passing the raw `provider` here (null whenever the reviewer sent no pick) left the
+    // child to re-derive UPSCALE_PROVIDER for itself at spawn time: a .env edited in between would
+    // bill a vendor the key check never validated and the ledger row does not name, and a typo'd
+    // value — which the estimator's reader forgives as 'auto' — would throw in the child only AFTER
+    // that row was written. One resolution, used by the guard, the quote, the record and the spend.
+    return { final: null, queued: enqueueAssemble(runId, fromDir, { upscale: true, suffix: 'final', upscaleProvider }), spec: !!spec };
   }
 
   function cancel(runId) {

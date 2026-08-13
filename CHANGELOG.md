@@ -247,6 +247,17 @@
   install commands.
 
 ### Fixed
+- **An approve-time upscale now runs on the vendor the server actually validated, priced and
+  recorded.** Approving *with* a provider pick already pinned that vendor into the finalize child.
+  Approving without one did not. The server still resolved a vendor before it touched anything —
+  that one decision gates the API-key check, prices the estimate and is the name written into the
+  run's cost ledger — and then left the child to work it out again for itself at spawn time. Two
+  readings of the same setting, taken moments apart, can disagree: a `.env` edited in between would
+  bill a vendor the key check never cleared and the ledger line does not name, and a typo'd
+  `UPSCALE_PROVIDER` — which the estimate's reader deliberately forgives, so a bad setting can never
+  take a run page down — reached the child as a hard error, i.e. *after* "queued" came back and the
+  priced ledger line was written. The vendor resolved once at approve time is now the vendor the
+  child is handed, pick or no pick.
 - **An upscale on a vendor with no API key is now refused outright, instead of being billed to a
   history it never happened in.** The approve bar already disables a provider it has no key for,
   but that is presentation: a stale tab, or a click that lands while the setup check is still

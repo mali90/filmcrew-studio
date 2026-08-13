@@ -56,28 +56,30 @@ const app = await buildApp({ root: HOST_ROOT, runsDir, outDir, childEnv, envRoot
 
 test.after(async () => { await app.close(); await fal.close(); await sg.close(); fs.rmSync(tmpRoot, { recursive: true, force: true }); });
 
-const get = (url) => app.inject({ method: 'GET', url });
-const post = (url, payload) => app.inject({ method: 'POST', url, payload });
+// `on` names WHICH server answers — every test but the typo one at the bottom uses the harness app,
+// which is why it is a default rather than an argument at each of the call sites.
+const get = (url, on = app) => on.inject({ method: 'GET', url });
+const post = (url, payload, on = app) => on.inject({ method: 'POST', url, payload });
 
-async function waitForStatus(runId, statuses, timeoutMs = 90000) {
+async function waitForStatus(runId, statuses, { on = app, timeoutMs = 90000 } = {}) {
   const want = new Set([].concat(statuses));
   const t0 = Date.now();
   for (;;) {
-    const run = (await get(`/api/runs/${runId}`)).json().run;
+    const run = (await get(`/api/runs/${runId}`, on)).json().run;
     if (want.has(run.status)) return run;
     if (Date.now() - t0 > timeoutMs) throw new Error(`timeout waiting for ${[...want]} (last: ${run.status} err=${JSON.stringify(run.error)})`);
     await sleep(150);
   }
 }
-async function makePlannedRun(idea) {
-  const { runId } = (await post('/api/runs', { idea, backend: 'kling', aspect: '9:16', durationS: null })).json();
-  await waitForStatus(runId, 'plan-ready');
+async function makePlannedRun(idea, on = app) {
+  const { runId } = (await post('/api/runs', { idea, backend: 'kling', aspect: '9:16', durationS: null }, on)).json();
+  await waitForStatus(runId, 'plan-ready', { on });
   return runId;
 }
-async function makeReviewedRun(idea) {
-  const runId = await makePlannedRun(idea);
-  await post(`/api/runs/${runId}/render`, { mode: 'full' });
-  return { runId, run: await waitForStatus(runId, 'review') };
+async function makeReviewedRun(idea, on = app) {
+  const runId = await makePlannedRun(idea, on);
+  await post(`/api/runs/${runId}/render`, { mode: 'full' }, on);
+  return { runId, run: await waitForStatus(runId, 'review', { on }) };
 }
 
 const segmindTopazSubmits = () => sg.requests.filter((r) => r.method === 'POST' && r.path === '/v2/topaz-video-upscale').length;
@@ -259,4 +261,42 @@ test('a delivered final records the short side measured off the file that was wr
   assert.equal(m.approved.shortSide, Math.min(out.width, out.height), 'the DELIVERED file, after Topaz ran');
   assert.equal(m.finals.at(-1).shortSide, m.approved.shortSide);
   assert.notEqual(m.approved.final, m.cuts.at(-1).master, 'an upscale delivers a new file — the cut it came from is untouched');
+});
+
+// ── The vendor approve RESOLVED is the vendor the child bills ───────────────────────────────────
+// A no-pick approve still decides the vendor ONCE, before it mutates anything: that decision gates
+// the API-key check, prices the estimate and is written into the cost ledger. It has to travel to
+// the finalize child too. While the child re-derived UPSCALE_PROVIDER for itself, the two readers
+// could disagree — the server's forgives anything it does not recognise (it reads as 'auto', so the
+// estimate never takes a run page down), the child's throws. The observable consequence is the worst
+// kind: 202, a PRICED ledger row, and then a child that dies before a single Topaz submission.
+//
+// A typo'd value is the deterministic way to spell that gap; an .env edited between approve and
+// spawn is the same bug with a race in front of it. The typo rides in childEnv, i.e. in the child's
+// own process env, which is what makes this a test of the PIN: it can only pass if approve's
+// resolved vendor overwrites the value the child would otherwise have read.
+const typoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-approve-typo-'));
+const typoApp = await buildApp({
+  root: HOST_ROOT,
+  runsDir: path.join(typoRoot, 'runs'),
+  outDir: path.join(typoRoot, 'out'),
+  childEnv: { ...childEnv, UPSCALE_PROVIDER: 'topaz-on-a-potato' },
+  envRoot,
+});
+test.after(async () => { await typoApp.close(); fs.rmSync(typoRoot, { recursive: true, force: true }); });
+
+test('a no-pick approve pins the RESOLVED vendor — a typo\'d UPSCALE_PROVIDER never reaches the child', { skip: FF ? false : 'ffmpeg not installed' }, async () => {
+  const { runId } = await makeReviewedRun('pin what you priced', typoApp);
+  const before = falTopazSubmits();
+
+  const res = await post(`/api/runs/${runId}/approve`, { upscale: true }, typoApp);
+  assert.equal(res.statusCode, 202, res.body);
+
+  // 'auto' is what the server's reader makes of the typo, and this run rendered on fal — so fal is
+  // the vendor it key-checked, quoted and recorded, and fal is the only vendor allowed to bill.
+  const run = await waitForStatus(runId, ['complete', 'attention'], { on: typoApp });
+  assert.equal(run.status, 'complete', `the finalize child ran on the resolved vendor (err=${JSON.stringify(run.error)})`);
+  assert.ok(falTopazSubmits() > before, 'Topaz ran on fal — the vendor the ledger row names');
+  assert.equal(run.manifest.costLedger.findLast((l) => l.action === 'upscale').provider, 'fal');
+  assert.ok(fs.existsSync(run.manifest.approved.final), 'and the master the row was written for exists');
 });
