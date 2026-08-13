@@ -61,6 +61,13 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
   // its own field rather than pre-collapsed into `resolution`: the estimator ranks it the way the
   // render child does (above a spec pin, which only outranks the .env value) and the two cannot
   // disagree because they run the ONE function. Probes ride the separate probe knob either way.
+  //
+  // `resolution`/`probeResolution` are the CONFIGURED defaults, and they are deliberately left for
+  // the child to read again at spawn — the one value here that is not pinned into the render child.
+  // That is the recorded contract, not an oversight: a run that made no per-run pick recorded the
+  // intent "render at whatever this box is configured for", and the .env is where that lives. The
+  // per-run PICK is the decision, and it IS pinned (resolutionOverride, on every spawn), so it can
+  // never be out-resolved. The probe knob has no per-run pick at all and so is always the .env's.
   const estOpts = (backend, pick) => ({
     pick: pick || null,
     resolution: readRenderResolution(envRoot ?? root, backend, childEnv),
@@ -486,7 +493,28 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
     return `${slugify(spec?.project?.title)}-${short}${suffix ? `-${suffix}` : ''}`;
   }
 
-  function enqueueAssemble(runId, fromDir, { upscale = false, suffix, upscaleProvider = null } = {}) {
+  /**
+   * The .env knobs the finalize child must NOT re-derive: approve PRICES the ledger row from these
+   * exact values, so the child has to SPEND on them. Per vendor, because the two Topaz APIs read
+   * different knobs — fal takes a factor plan (FAL_TOPAZ_MAX_FACTOR, which decides how far a small
+   * clip is lifted and so which OUTPUT tier fal bills) plus a model (FAL_TOPAZ_MODEL, also a price
+   * knob: fal halves the rate for Gaia 2 output), while Segmind's Topaz takes a target resolution
+   * (UPSCALE_TARGET_RESOLUTION) and has no factor and no model at all. Each vendor is pinned only
+   * what it actually consumes; a knob it never reads cannot move its bill. Segmind's other input,
+   * `target_fps`, is PROBED off the source clip rather than configured — there is no knob to pin,
+   * and it moves no price (Segmind bills flat per INPUT second).
+   *
+   * An EMPTY value is pinned too, and deliberately: dotenv leaves an already-present variable alone
+   * whatever it holds, so '' is exactly "this knob was unset when we quoted you" — and every reader
+   * on both sides (config.js's numEnv and `||` defaults, the estimator's own) turns '' back into the
+   * same default. Pinning nothing instead would leave a knob ADDED to .env in the gap free to move
+   * the charge away from the recorded estUsd.
+   */
+  const upscaleKnobsFor = (provider) => (provider === 'segmind'
+    ? { UPSCALE_TARGET_RESOLUTION: envGet('UPSCALE_TARGET_RESOLUTION') }
+    : { FAL_TOPAZ_MODEL: envGet('FAL_TOPAZ_MODEL'), FAL_TOPAZ_MAX_FACTOR: envGet('FAL_TOPAZ_MAX_FACTOR') });
+
+  function enqueueAssemble(runId, fromDir, { upscale = false, suffix, upscaleProvider = null, upscaleKnobs = null } = {}) {
     const dir = dirFor(runId);
     const spec = readJson(path.join(dir, 'spec.json'));
     return mgr.enqueue({
@@ -499,7 +527,10 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
       // must bill whoever the key check validated, the estimate quoted and the ledger row recorded,
       // and a second derivation down here could answer differently (an .env edited between approve
       // and spawn, or a typo'd UPSCALE_PROVIDER that only throws once the money row is written).
-      env: { ...env(runId), ...(upscale && upscaleProvider ? { UPSCALE_PROVIDER: upscaleProvider } : {}) }, cwd: root,
+      // `upscaleKnobs` rides for exactly the same reason and from exactly the same resolution: the
+      // vendor alone was never the whole decision — the target, the model and the factor cap PRICE
+      // the row too (see upscaleKnobsFor).
+      env: { ...env(runId), ...(upscale && upscaleProvider ? { UPSCALE_PROVIDER: upscaleProvider, ...upscaleKnobs } : {}) }, cwd: root,
     });
   }
 
@@ -1018,6 +1049,11 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
     // The ledger line and the estimate beside it read this same value, so the guard, the money row
     // and the child can never name three different vendors.
     const upscaleProvider = upscale ? provider ?? readUpscaleProvider(envRoot ?? root, m0?.backend, childEnv) : null;
+    // …and the knobs that PRICE that vendor's job, read in the same breath and from the same reader
+    // (see upscaleKnobsFor). The quote below is computed THROUGH them and the child is spawned WITH
+    // them, so the target, the model and the factor cap are one resolution rather than two reads of
+    // a file that can change in between.
+    const upscaleKnobs = upscaleProvider ? upscaleKnobsFor(upscaleProvider) : null;
     // …and a vendor with no key cannot run at all: the child throws in falHeaders()/segmindHeaders()
     // before a single Topaz submission. Accepting that would return 202 and write a PRICED cost
     // ledger row for a charge that never happened — the run's money history is the one record that
@@ -1026,6 +1062,12 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
     // first) because that is the environment the finalize child gets, and the message names the
     // variable that is missing. The approve bar already disables a keyless provider; this is the
     // backstop for a stale or still-loading setup-status query.
+    //
+    // The key itself is deliberately NOT pinned into the child the way the vendor and its price
+    // knobs are. It is a CREDENTIAL, not a priced decision: it names no number in the ledger row, a
+    // key rotated while this job waits its turn in the queue SHOULD reach the child, and the only
+    // thing a .env edit in the gap can cost here is a refused call — loud (the run lands in
+    // attention with the missing variable named), never a charge that disagrees with the record.
     if (upscaleProvider) {
       // BOTH fal spellings — config.js accepts either, so demanding FAL_KEY alone would refuse an
       // install the child would have billed happily.
@@ -1090,14 +1132,19 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
       // that only said "see estimate" left the one durable record of a paid action with no number in
       // it — and fal's tiers mean the number is no longer derivable from seconds alone.
       let est = null;
+      // …and every knob in that quote is read through the PINNED environment — the very one the
+      // finalize child is spawned with — instead of the live .env a second time. A knob this vendor
+      // does not read is not in there and cannot move its price: fal never looks at Segmind's
+      // target, and Segmind's flat per-INPUT-second row ignores the factor cap and the model.
+      const pricedEnv = { ...childEnv, ...upscaleKnobs };
       try {
         est = estimateUpscale(
           takeUpscaleClips(fromDir, { spec }),
           {
             provider: upscaleProvider,
-            targetShortSide: readUpscaleTargetShortSide(envRoot ?? root, m.backend, childEnv, upscaleProvider),
-            model: readUpscaleModel(envRoot ?? root, childEnv),
-            maxFactor: readUpscaleMaxFactor(envRoot ?? root, childEnv),
+            targetShortSide: readUpscaleTargetShortSide(envRoot ?? root, m.backend, pricedEnv, upscaleProvider),
+            model: readUpscaleModel(envRoot ?? root, pricedEnv),
+            maxFactor: readUpscaleMaxFactor(envRoot ?? root, pricedEnv),
           },
         );
       } catch { /* no rate row for this provider at all — recorded as unpriced below */ }
@@ -1112,8 +1159,9 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
     // child to re-derive UPSCALE_PROVIDER for itself at spawn time: a .env edited in between would
     // bill a vendor the key check never validated and the ledger row does not name, and a typo'd
     // value — which the estimator's reader forgives as 'auto' — would throw in the child only AFTER
-    // that row was written. One resolution, used by the guard, the quote, the record and the spend.
-    return { final: null, queued: enqueueAssemble(runId, fromDir, { upscale: true, suffix: 'final', upscaleProvider }), spec: !!spec };
+    // that row was written. One resolution, used by the guard, the quote, the record and the spend —
+    // and `upscaleKnobs` closes the same gap for the values that decide the FIGURE in that row.
+    return { final: null, queued: enqueueAssemble(runId, fromDir, { upscale: true, suffix: 'final', upscaleProvider, upscaleKnobs }), spec: !!spec };
   }
 
   function cancel(runId) {

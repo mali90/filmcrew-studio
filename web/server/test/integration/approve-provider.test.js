@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { spawn } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
@@ -299,4 +300,87 @@ test('a no-pick approve pins the RESOLVED vendor — a typo\'d UPSCALE_PROVIDER 
   assert.ok(falTopazSubmits() > before, 'Topaz ran on fal — the vendor the ledger row names');
   assert.equal(run.manifest.costLedger.findLast((l) => l.action === 'upscale').provider, 'fal');
   assert.ok(fs.existsSync(run.manifest.approved.final), 'and the master the row was written for exists');
+});
+
+// ── …and so are the KNOBS that priced it ────────────────────────────────────────────────────────
+// The vendor was never the whole decision. approve computes the figure in the cost-ledger row from
+// the target resolution, the Topaz model and the factor cap it reads at approve time — and the
+// child re-read UPSCALE_TARGET_RESOLUTION / FAL_TOPAZ_MODEL / FAL_TOPAZ_MAX_FACTOR out of its own
+// environment at spawn, so an .env edited in between moved the charge away from the number the run
+// recorded forever.
+//
+// The gap is made deterministic rather than raced: this app's spawnCli rewrites the .env in the one
+// instant between the enqueue that PRICED the job and the exec that SPENDS the money. Nothing else
+// about the run changes, so any difference in what the vendor is asked for is the gap itself.
+const gapRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-approve-gap-'));
+const gapEnvRoot = path.join(gapRoot, 'envroot');
+fs.mkdirSync(gapEnvRoot, { recursive: true });
+const gapEnvFile = path.join(gapEnvRoot, '.env');
+let editInTheGap = null; // the .env the finalize child is spawned into (null ⇒ leave the file alone)
+const gapApp = await buildApp({
+  root: HOST_ROOT,
+  runsDir: path.join(gapRoot, 'runs'),
+  outDir: path.join(gapRoot, 'out'),
+  childEnv,
+  envRoot: gapEnvRoot,
+  spawnCli: (script, args, { env, cwd } = {}) => {
+    if (editInTheGap !== null && args.includes('--upscale')) {
+      fs.writeFileSync(gapEnvFile, editInTheGap);
+      editInTheGap = null;
+    }
+    return spawn(process.execPath, [script, ...args], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
+  },
+});
+test.after(async () => { await gapApp.close(); fs.rmSync(gapRoot, { recursive: true, force: true }); });
+
+const lastFalTopazArgs = () => JSON.parse(fal.requests.filter((r) => r.method === 'POST' && r.path.includes('topaz')).at(-1).body);
+const lastSegmindTopazArgs = () => JSON.parse(sg.requests.filter((r) => r.method === 'POST' && r.path === '/v2/topaz-video-upscale').at(-1).body);
+
+// fal's two price knobs, in one approve: the factor CAP decides how far each clip is lifted (and so
+// which OUTPUT tier fal bills it at), and the MODEL decides the rate itself (fal charges half for
+// Gaia 2 output). The take's clips are re-recorded at 256×256 so the cap actually moves the quoted
+// tier — the harness renders 128×128, where every legal cap lands in the same cheapest rung.
+test('fal bills at the factor cap and model approve PRICED, not the ones .env holds at spawn', { skip: FF ? false : 'ffmpeg not installed' }, async () => {
+  fs.writeFileSync(gapEnvFile, 'FAL_TOPAZ_MAX_FACTOR=2\nFAL_TOPAZ_MODEL=Proteus\n');
+  const { runId, run } = await makeReviewedRun('pin the knobs you quoted', gapApp);
+  const cut = run.manifest.cuts.at(-1);
+  const rjPath = path.join(gapRoot, 'runs', runId, 'renders', cut.take, 'render.json');
+  const rj = JSON.parse(fs.readFileSync(rjPath, 'utf8'));
+  fs.writeFileSync(rjPath, JSON.stringify({ ...rj, jobs: rj.jobs.map((j) => (j.clip ? { ...j, width: 256, height: 256 } : j)) }, null, 2));
+
+  const quoted = (await get(`/api/runs/${runId}/estimate?mode=upscale&cut=${cut.id}&provider=fal`, gapApp)).json();
+  assert.equal(quoted.tier, '720p', '256 lifted 2× is a 512-tall output — fal\'s cheapest rung');
+
+  // …and the .env says something else entirely by the time the child starts.
+  editInTheGap = 'FAL_TOPAZ_MAX_FACTOR=4\nFAL_TOPAZ_MODEL=Gaia 2\n';
+  assert.equal((await post(`/api/runs/${runId}/approve`, { upscale: true, cut: cut.id, provider: 'fal' }, gapApp)).statusCode, 202);
+  const done = await waitForStatus(runId, ['complete', 'attention'], { on: gapApp });
+  assert.equal(done.status, 'complete', `the finalize child ran (err=${JSON.stringify(done.error)})`);
+
+  assert.equal(editInTheGap, null, 'the edit really did land in the gap — otherwise this proves nothing');
+  assert.match(fs.readFileSync(gapEnvFile, 'utf8'), /FAL_TOPAZ_MAX_FACTOR=4/, 'and the file on disk now says 4');
+
+  const submitted = lastFalTopazArgs();
+  assert.equal(submitted.upscale_factor, 2, 'Topaz was asked for the cap the ledger row was priced at, not the .env\'s 4');
+  assert.equal(submitted.model, 'Proteus', 'and for the model that rate belongs to — Gaia 2 output is billed at half');
+  assert.equal(done.manifest.costLedger.findLast((l) => l.action === 'upscale').estUsd, quoted.totalUsd,
+    'so the one durable record of this spend still names the figure the button authorised');
+});
+
+// Segmind's Topaz takes no factor and no model at all — its knob is the target resolution, and 4k
+// is four times the pixels and four times the bill. Same gap, the other vendor's half of it.
+test('Segmind is asked for the target approve PRICED, not the one .env holds at spawn', { skip: FF ? false : 'ffmpeg not installed' }, async () => {
+  fs.writeFileSync(gapEnvFile, 'UPSCALE_TARGET_RESOLUTION=720p\n');
+  const { runId } = await makeReviewedRun('pin the target you quoted', gapApp);
+  const before = segmindTopazSubmits();
+
+  editInTheGap = 'UPSCALE_TARGET_RESOLUTION=4k\n';
+  assert.equal((await post(`/api/runs/${runId}/approve`, { upscale: true, provider: 'segmind' }, gapApp)).statusCode, 202);
+  const done = await waitForStatus(runId, ['complete', 'attention'], { on: gapApp });
+  assert.equal(done.status, 'complete', `the finalize child ran (err=${JSON.stringify(done.error)})`);
+
+  assert.equal(editInTheGap, null, 'the edit really did land in the gap');
+  assert.ok(segmindTopazSubmits() > before, 'Segmind\'s Topaz billed this approve');
+  assert.equal(lastSegmindTopazArgs().target_resolution, '720p', 'at the target the estimate quoted — a 4k lift is 4× the bill nobody approved');
+  assert.equal(done.manifest.costLedger.findLast((l) => l.action === 'upscale').provider, 'segmind');
 });

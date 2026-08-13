@@ -247,6 +247,17 @@
   install commands.
 
 ### Fixed
+- **The upscale you approve is billed at the settings it was quoted at.** Approve reads the Topaz
+  target resolution, the model and the factor cap to price the cost-ledger row it writes — and then
+  the finalize child read `UPSCALE_TARGET_RESOLUTION`, `FAL_TOPAZ_MODEL` and `FAL_TOPAZ_MAX_FACTOR`
+  out of `.env` all over again when it started. Two readings of one decision can disagree, and the
+  window between them is real: a paid upscale waits its turn in the spend queue. Saving Settings in
+  that window moved the charge away from the figure already written into the run's money history —
+  a 4k Segmind lift (four times the pixels, four times the bill) against a row priced at 1080p, or a
+  4× fal factor against a row priced at 2×, or Gaia 2 output against a rate quoted for Proteus. Each
+  vendor is now pinned exactly what it consumes, resolved once, at the same moment its vendor is:
+  what approve priced is what the child spends. Editing `.env` after that changes the *next* upscale,
+  as it always should have.
 - **A `.env` written in ordinary dotenv style now decides the defaults the create page starts
   from — quotes, `export`, trailing comments and repeated keys included.** The endpoints that report
   your effective defaults read the file through the *settings editor*, which exists to rewrite one
