@@ -747,9 +747,17 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
     return m;
   }
 
-  /** Has this exact file already gone out as a final? `approved` is checked too, so a run delivered
+  /** Every record this run holds of ONE delivered file. `approved` is included, so a run delivered
    *  before `finals` existed answers as well as one delivered after. */
-  const alreadyDelivered = (m, file) => (m?.finals ?? []).some((f) => f?.final === file) || m?.approved?.final === file;
+  const deliveriesOf = (m, file) => [...(m?.finals ?? []), ...(m?.approved ? [m.approved] : [])].filter((f) => f?.final === file);
+
+  /** Has this exact file already gone out as a final? */
+  const alreadyDelivered = (m, file) => deliveriesOf(m, file).length > 0;
+
+  /** Did this file come out of an upscale? That is a fact about the FILE and never changes, so any
+   *  record of the path answers it — and only the run's own history can, because the artifact does
+   *  not say so and re-deriving it from a size would guess. */
+  const deliveredUpscaled = (m, file) => deliveriesOf(m, file).some((f) => f.upscaled);
 
   /**
    * A second delivery of a file the run already delivered: `<name>-final.mp4`, then `-final-2`, …
@@ -1009,8 +1017,13 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
       // "approving again writes a new final beside it". So write that file: a copy, because there is
       // nothing new to render and the earlier delivery must stay byte-for-byte where it is.
       const final = alreadyDelivered(m0, master) ? copyOfDelivery(master) : master;
+      // `upscaled` describes the FILE that goes out, not what this approval did. An upscale rewrites
+      // its take's render.json with the HD master it delivered, so after a reopen the run's latest
+      // master IS that upscaled file and the copy above is it byte for byte — recording `false`
+      // would have the Final card's "Upscaled" row and the delivery history call a Topaz master a
+      // plain cut. Read off the run's own record of that exact path; nothing else knows.
       const m = updateManifest(dir, (mm) => recordFinal(mm, {
-        cut: chosen?.id ?? mm.cuts.at(-1)?.id ?? null, final, upscaled: false, shortSide, at: now().toISOString(),
+        cut: chosen?.id ?? mm.cuts.at(-1)?.id ?? null, final, upscaled: deliveredUpscaled(m0, master), shortSide, at: now().toISOString(),
       }));
       emitStatus(runId);
       return { final: m.approved.final, queued: null };

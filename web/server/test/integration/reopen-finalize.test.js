@@ -211,6 +211,32 @@ test('approving twice needs a reopen in between — the delivery history never d
   assert.equal((await get(`/api/runs/${runId}`)).json().run.finalFsPath, fresh.final);
 });
 
+// A delivery record describes the FILE that went out, not the button that sent it. An upscale
+// rewrites the take's render.json with the HD master it delivered, so after a reopen the run's
+// latest master IS that upscaled file — and a plain "Replace final" copies it byte for byte. Filing
+// that copy as `upscaled: false` makes the Final card's "Upscaled" row and the delivery history
+// call a 1080p Topaz master a plain cut, about a file the user can play.
+test('a plain redelivery of an upscaled master still records the file as upscaled', PENDING, async () => {
+  const { runId } = (await post('/api/runs', { idea: 'a keeper worth upscaling twice', backend: 'kling', aspect: '9:16', durationS: null })).json();
+  await waitForStatus(runId, 'plan-ready');
+  await post(`/api/runs/${runId}/render`, { mode: 'full' });
+  await waitForStatus(runId, 'review');
+  assert.equal((await post(`/api/runs/${runId}/approve`, { upscale: true })).statusCode, 202);
+  assert.equal((await waitForStatus(runId, ['complete', 'error'])).status, 'complete');
+  const upscaledFinal = manifestOf(runId).approved;
+  assert.equal(upscaledFinal.upscaled, true, 'the paid delivery is on record as upscaled');
+
+  assert.equal((await post(`/api/runs/${runId}/reopen`, {})).statusCode, 200);
+  assert.equal((await post(`/api/runs/${runId}/approve`, { upscale: false })).statusCode, 200);
+
+  const m = manifestOf(runId);
+  const fresh = m.finals.at(-1);
+  assert.equal(Buffer.compare(fs.readFileSync(fresh.final), fs.readFileSync(upscaledFinal.final)), 0,
+    'nothing was re-rendered and nothing was upscaled again — this IS the upscaled master, copied');
+  assert.equal(fresh.upscaled, true, 'so the record says upscaled: the approval ran no Topaz, but the file went through one');
+  assert.equal(m.approved.upscaled, true, 'and the card reads the same answer');
+});
+
 test('reopening twice is idempotent-ish: it never loses a final and never double-counts', PENDING, async () => {
   const runId = await approvedRun('a fourth keeper');
   await post(`/api/runs/${runId}/reopen`, {});
