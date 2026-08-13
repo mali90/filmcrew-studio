@@ -28,6 +28,14 @@ const PROVIDERS: UpscaleProvider[] = ['fal', 'segmind'];
 /** A short side as the card says it out loud: 2160 is "4K" to everyone, everything else is "720p". */
 const sizeLabel = (shortSide: number) => (shortSide >= 2160 ? '4K' : `${shortSide}p`);
 
+/** fal prices Topaz by the OUTPUT frame, not by the short side the card promises — and a vertical
+ *  clip lifted to a 1080 short side comes back 1920 tall, which fal bills at its dearest tier. Said
+ *  out loud, because "~1080p" beside a top-tier price otherwise reads as a mistake. Only the tiers
+ *  worth explaining get a line; the rest quote exactly what the label implies. */
+const TIER_NOTES: Record<string, string> = {
+  above1080p: 'fal.ai bills the taller frame at its above-1080p rate.',
+};
+
 export function ApproveBar({ run, cutId = null }: { run: RunDetail; cutId?: string | null }) {
   const { toast } = useToast();
   const [upscale, setUpscale] = useState(false);
@@ -125,6 +133,9 @@ export function ApproveBar({ run, cutId = null }: { run: RunDetail; cutId?: stri
   // Topaz runs on the PICKED provider, and the two bill differently — so the toggle may be
   // priceable, unknown (a provider with no published rate), or (already HD) irrelevant.
   const unknownPrice = upscaleEstimate.data?.unknownPrice ?? null;
+  // …and when the picked vendor's tier is not the one the target label implies, the caption says
+  // which rate the figure came from — the label and the price must never look like two answers.
+  const tierNote = (unknownPrice ? null : TIER_NOTES[upscaleEstimate.data?.tier ?? '']) ?? null;
 
   const label = `${reopened ? 'Replace final' : 'Approve'}${effectiveUpscale ? ' & upscale' : ''}`;
 
@@ -154,6 +165,7 @@ export function ApproveBar({ run, cutId = null }: { run: RunDetail; cutId?: stri
                   // the cut's actual resolution, stated where the upscale decision is made (U2d)
                   ? `This cut is ${shortSide}p — one Topaz job per clip lifts it toward ~${targetLabel}.`
                   : `One Topaz job per clip — skip it if the render is already ${targetLabel}.`}
+            {!noVendorLifts && !alreadyHD && tierNote ? ` ${tierNote}` : ''}
           </span>
         </label>
       </div>

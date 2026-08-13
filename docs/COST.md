@@ -113,7 +113,18 @@ differ by under 3%.
 
 - **Segmind's Topaz upscale** — **$0.125 per second, flat**, billed on the **input** video's duration.
   Segmind publishes this one rate and no per-target breakdown, so `UPSCALE_TARGET_RESOLUTION` changes
-  what you get, not what you pay. (fal's Topaz is ≈ $0.12/s — the one place the two are near-level.)
+  what you get, not what you pay. (fal's Topaz is tiered instead — see below — and lands at $0.08/s
+  for this app's default 9:16 shape, so it is the cheaper of the two there.)
+
+- **fal's Topaz upscale** — **tiered by the OUTPUT frame**: $0.01/s up to 720p, $0.02/s for
+  720p–1080p, **$0.08/s above 1080p**. The default 9:16 shape lands in that top tier: lifting a 480p
+  vertical clip to a 1080 short side delivers a **1080×1920** frame, and fal bills the 1920 (a real
+  invoice for a 15s clip came to ≈ $1.28). A **landscape** clip lifted the same way is 1920×1080 and
+  bills at $0.02/s — the same upscale, a quarter of the money, because the frame is not as tall.
+  Where the estimate cannot measure the source it quotes the top tier deliberately: a cautious quote
+  costs less trust than a surprise bill. The tier boundary for portrait output is **inferred from
+  that invoice, not documented by fal** — `web/server/lib/prices.json` records the reasoning so a
+  future invoice can correct it.
 
 Comparing like for like, Segmind is about half fal's price for the same model (fal 2.0: $0.135/$0.3024;
 fal 2.5: $0.2205/$0.4730). That gap is real, not a typo — it is worth re-checking on the model's own

@@ -155,7 +155,7 @@ Rendering is **paid, pay-as-you-go** at your render provider — every render sp
 | **Seedance 2.0** · 1080p | 1080p | $0.68/s | ≈ $10.20 |
 | **Seedance 2.5** · 480p | 480p | $0.2205/s | ≈ $3.31 |
 | **Seedance 2.5** · 720p (default) | 720p | $0.473/s | ≈ $7.10 |
-| **Topaz upscale** · `--upscale` | → 1080p | $0.12/s · one job per sub-1080p clip | ≈ $1.80 |
+| **Topaz upscale** · `--upscale` | → 1080p | $0.08/s at 9:16 · tiered by output frame · one job per sub-1080p clip | ≈ $1.20 |
 | **Voice mint** · `mint-voice` | one voice / character | ≈ $0.007 once | — |
 | **Seedance 2.0 on Segmind** · 480p (default) | 480p | $0.0703/s | ≈ $1.05 |
 | **Seedance 2.5 on Segmind** · 720p (default) | 720p | $0.2389/s | ≈ $3.58 |

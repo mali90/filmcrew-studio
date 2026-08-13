@@ -89,7 +89,7 @@ test('estimate?provider=X prices X — the pick beats the derivation, junk is a 
   const onFal = (await get(`/api/runs/${runId}/estimate?mode=upscale&provider=fal`)).json();
   const onSegmind = (await get(`/api/runs/${runId}/estimate?mode=upscale&provider=segmind`)).json();
   assert.ok(onFal.totalUsd > 0 && !onFal.unknownPrice, 'fal Topaz is priced');
-  assert.ok(onSegmind.totalUsd > onFal.totalUsd, `Segmind ($0.125/s) bills above fal ($0.12/s) — the pick must MOVE the figure (${onSegmind.totalUsd} vs ${onFal.totalUsd})`);
+  assert.ok(onSegmind.totalUsd > onFal.totalUsd, `Segmind (flat $0.125/s) bills above fal's dearest tier ($0.08/s) — the pick must MOVE the figure (${onSegmind.totalUsd} vs ${onFal.totalUsd})`);
 
   // this harness derives fal (auto → the run rendered on fal), so ?provider=segmind above already
   // out-voted the derivation; the default answer must equal fal's to prove which side moved
@@ -150,6 +150,41 @@ test('approve WITHOUT a pick keeps the derived provider — fal, where this run 
   assert.equal(segmindTopazSubmits(), before, 'no pick, no Segmind — auto stays home on fal');
   assert.ok(falTopazSubmits() > 0, 'the upscale ran on fal\'s Topaz');
   assert.equal(run.manifest.costLedger.findLast((l) => l.action === 'upscale').provider, 'fal', 'the ledger still records who billed');
+});
+
+// The quote the reviewer clicked and the row the run keeps forever have to be ONE number. They are
+// computed in different files (routes/runs.js and run-service's approve), and fal's tiers mean the
+// figure is no longer recoverable from seconds × a constant — so a drift here would leave the only
+// durable record of a paid action disagreeing with the button that authorised it.
+test('the ledger row records the SAME figure the estimate quoted', { skip: FF ? false : 'ffmpeg not installed' }, async () => {
+  const { runId } = await makeReviewedRun('the ledger equals the quote');
+
+  const quoted = (await get(`/api/runs/${runId}/estimate?mode=upscale&provider=segmind`)).json();
+  assert.ok(quoted.totalUsd > 0, 'the take is priced before anything is approved');
+
+  assert.equal((await post(`/api/runs/${runId}/approve`, { upscale: true, provider: 'segmind' })).statusCode, 202);
+  const run = await waitForStatus(runId, 'complete');
+
+  const line = run.manifest.costLedger.findLast((l) => l.action === 'upscale');
+  assert.equal(line.estUsd, quoted.totalUsd, 'the ledger carries the quoted figure, not a null placeholder');
+  assert.ok(!line.unpriced, 'a priced vendor is never flagged unpriced');
+});
+
+// fal tiers Topaz by the OUTPUT frame, so a quote is only honest if the clip dimensions reach the
+// estimator at all. This harness renders 128×128 clips into a 9:16 run, which the 4× factor cap
+// lifts to a 912-tall frame — fal's MIDDLE tier. Before the take exists there is nothing to
+// measure, and the same endpoint must round UP to the dearest tier instead of guessing cheap.
+test('the fal quote rides the tier the OUTPUT lands in — and rounds up before a take exists', async () => {
+  const runId = await makePlannedRun('tier my output');
+  const unrendered = (await get(`/api/runs/${runId}/estimate?mode=upscale&provider=fal`)).json();
+  assert.equal(unrendered.tier, 'above1080p', 'nothing measured yet — quote the tier this app\'s 9:16 default buys');
+
+  await post(`/api/runs/${runId}/render`, { mode: 'full' });
+  await waitForStatus(runId, 'review');
+  const rendered = (await get(`/api/runs/${runId}/estimate?mode=upscale&provider=fal`)).json();
+  assert.equal(rendered.tier, '1080p', '128×228 lifted 4× is 512×912 — under 1080 tall, so the middle tier');
+  assert.ok(rendered.totalUsd < unrendered.totalUsd, 'a measured take is quoted cheaper than an unmeasurable one');
+  assert.equal(rendered.targetShortSide, 1080, 'and the label the UI prints still describes fal\'s ~1080p target');
 });
 
 // U2c — the deliver card quotes the size of the file it is showing, so the DELIVERY has to carry

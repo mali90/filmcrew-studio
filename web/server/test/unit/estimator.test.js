@@ -388,8 +388,9 @@ test('readEnvVar reads a .env exactly as the render child does — dotenv itself
 });
 
 // The two are one system: a Segmind-rendered run must show SEGMIND's Topaz figure on approve, not
-// fal's. The rates are close ($0.125 vs $0.12 per input second), which is exactly why a mix-up here
-// would survive a casual glance — so this asserts the provider routing, not just "some number".
+// fal's. The two bill on different SHAPES (Segmind flat per input second, fal tiered by the output
+// frame), so a mix-up moves the figure without making either number look absurd — this asserts the
+// provider routing, not just "some number".
 test('a Segmind run prices its upscale at Segmind\'s rate, a fal run at fal\'s', () => {
   const clips = [{ jobId: 'K1', seconds: 5 }];
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-upv2-'));
@@ -397,8 +398,9 @@ test('a Segmind run prices its upscale at Segmind\'s rate, a fal run at fal\'s',
     fs.writeFileSync(path.join(dir, '.env'), 'FAL_KEY=x\nSEGMIND_API_KEY=y\n');
     const seg = estimateUpscale(clips, { provider: readUpscaleProvider(dir, 'seedance-2.5@segmind') });
     const fal = estimateUpscale(clips, { provider: readUpscaleProvider(dir, 'kling-o3@fal') });
-    assert.equal(seg.totalUsd, 0.63);   // 5s × $0.125
-    assert.equal(fal.totalUsd, 0.6);    // 5s × $0.12
+    assert.equal(seg.totalUsd, 0.63);   // 5s × $0.125, flat on the INPUT duration
+    // Dimensionless clips round UP to fal's dearest tier — see the upscale-tier tests below.
+    assert.equal(fal.totalUsd, 0.4);    // 5s × $0.08 (above-1080p)
     assert.ok(!seg.unknownPrice && !fal.unknownPrice, 'both providers publish a Topaz rate now');
     assert.notEqual(seg.totalUsd, fal.totalUsd, 'a Segmind run must never quote fal money');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }

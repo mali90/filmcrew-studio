@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { isRunId, safeChild } from '../lib/paths.js';
-import { estimateRender, estimateUpscale, jobSeconds, readProbeResolution, readRenderResolution, readUpscaleProvider, readUpscaleTargetShortSide } from '../lib/estimator.js';
+import { estimateRender, estimateUpscale, jobSeconds, readProbeResolution, readRenderResolution, readUpscaleModel, readUpscaleProvider, readUpscaleTargetShortSide, takeUpscaleClips } from '../lib/estimator.js';
 // The registry is the ONE static import this server takes from the host src/ tree. It is safe
 // precisely because it has zero imports and reads no env (test/unit/render-models.test.js pins
 // that), so it cannot drag config.js — and a developer's real .env — into web/server's static
@@ -423,27 +423,22 @@ export function registerRunRoutes(app) {
         throw Object.assign(new Error(`"${picked}" is not an upscale provider`), { statusCode: 400, hint: 'provider is fal or segmind' });
       }
       const provider = picked ?? readUpscaleProvider(app.ctx.envRoot, run.backend, app.ctx.childEnv);
-      const upscaleOpts = { provider };
       const targetShortSide = readUpscaleTargetShortSide(app.ctx.envRoot, run.backend, app.ctx.childEnv, provider);
-      // A take is upscaled clip by clip, so its price is what THAT take actually holds: priced by
-      // its own saved spec (a pre-revision take may rename jobs or change durations) and only the
-      // jobs that produced a clip — assembleRun re-reads the take's render.json and finishRender
-      // upscales exactly those paths, skipping the clipless/failed ones.
-      const clipsOfTake = (takeDir) => {
-        const readTakeJson = (name) => {
-          try { return JSON.parse(fs.readFileSync(path.join(takeDir, name), 'utf8')); } catch { return null; }
-        };
-        const takeSpec = readTakeJson('spec.json') ?? run.spec; // the spec the take was rendered from
-        return ((readTakeJson('render.json')?.jobs) ?? [])
-          .filter((j) => j.clip) // only jobs Topaz will actually process
-          .map((j) => { const jobId = j.jobId ?? j.job; return { jobId, seconds: jobSeconds(takeSpec, jobId) }; });
-      };
+      // fal tiers Topaz by the OUTPUT frame and halves the rate for Gaia 2 output, so the target and
+      // the model knob are part of the quote, not decoration around it.
+      const upscaleOpts = { provider, targetShortSide, model: readUpscaleModel(app.ctx.envRoot, app.ctx.childEnv) };
+      // A take is upscaled clip by clip, so its price is what THAT take actually holds — its own
+      // spec, its own clips, its own measured size. approve's ledger line reads the take the same
+      // way (estimator.takeUpscaleClips), so the quote and the ledger row are one number.
+      const clipsOfTake = (takeDir) => takeUpscaleClips(takeDir, { spec: run.spec, aspect: run.aspect });
       // no cut ⇒ the LATEST RENDER take — the one approve's default upscales (approve reads it the
       // same way). A probe take holds a single clip, so quoting every job in the spec named a charge
       // bigger than the bill; over-quoting a paid button is the same lie as under-quoting it. Only
       // when there is no finished take to read (nothing rendered yet, or the current one is still
       // rendering — approve answers 409 in both) does the answer fall back to the plan, where the
-      // honest reading is "what upscaling a complete render would cost".
+      // honest reading is "what upscaling a complete render would cost". Those plan rows carry no
+      // dimensions — nothing has been rendered to measure — so they price at the DEAREST tier, which
+      // is also the one this app's 9:16 default actually buys.
       if (!cut) {
         const takeDir = run.latestRender?.inProgress ? null : run.latestRender?.dir;
         const clips = takeDir

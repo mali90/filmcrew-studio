@@ -10,7 +10,7 @@ import { newManifest, writeManifest, readManifest, updateManifest } from './web-
 import { scanRun, listRuns, defaultIsAlive, finalizedFinal } from './run-scan.js';
 import { createRingLog } from './ring-log.js';
 import { watchRun } from './artifact-watch.js';
-import { estimateRender, estimateUpscale, readEnvVar, readProbeResolution, readRenderResolution, readUpscaleProvider } from './estimator.js';
+import { estimateRender, estimateUpscale, readEnvVar, readProbeResolution, readRenderResolution, readUpscaleModel, readUpscaleProvider, readUpscaleTargetShortSide, takeUpscaleClips } from './estimator.js';
 import { safeChild } from './paths.js';
 // Both config-free by construction (the runs-caps canary walks this graph): the continuity rule is a
 // pure function over a run record, and the model registry imports nothing at all.
@@ -1024,11 +1024,24 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
       // An explicit reviewer pick (validated above) beats the env derivation — it is the vendor the
       // finalize child is pinned to below, so the line records (and prices) who actually bills.
       const upscaleProvider = provider ?? readUpscaleProvider(envRoot ?? root, m.backend, childEnv);
-      let unpricedUpscale = true;
-      try { unpricedUpscale = Boolean(estimateUpscale([], { provider: upscaleProvider }).unknownPrice); } catch { /* unpriced */ }
-      m.costLedger.push(unpricedUpscale
-        ? { ts: now().toISOString(), action: 'upscale', estUsd: null, unpriced: true, provider: upscaleProvider, note: 'estimate unavailable — no published rate for this provider' }
-        : { ts: now().toISOString(), action: 'upscale', estUsd: null, provider: upscaleProvider, note: 'topaz per-clip — see estimate' });
+      // …and the line carries the FIGURE, off the very take this approve upscales, priced exactly
+      // as the estimate endpoint prices it (same helper, same target, same model knob). A ledger row
+      // that only said "see estimate" left the one durable record of a paid action with no number in
+      // it — and fal's tiers mean the number is no longer derivable from seconds alone.
+      let est = null;
+      try {
+        est = estimateUpscale(
+          takeUpscaleClips(fromDir, { spec, aspect: m.aspect ?? spec?.kling?.aspect_ratio ?? null }),
+          {
+            provider: upscaleProvider,
+            targetShortSide: readUpscaleTargetShortSide(envRoot ?? root, m.backend, childEnv, upscaleProvider),
+            model: readUpscaleModel(envRoot ?? root, childEnv),
+          },
+        );
+      } catch { /* no rate row for this provider at all — recorded as unpriced below */ }
+      m.costLedger.push(est && !est.unknownPrice
+        ? { ts: now().toISOString(), action: 'upscale', estUsd: est.totalUsd, provider: upscaleProvider, note: 'topaz per-clip, at the tier the output lands in' }
+        : { ts: now().toISOString(), action: 'upscale', estUsd: null, unpriced: true, provider: upscaleProvider, note: 'estimate unavailable — no published rate for this provider' });
       m.lastError = null;
       return m;
     });

@@ -17,6 +17,9 @@ import { capsFor, normalizeBackend } from '../../../src/lib/render-models.js';
 // …and the render child's OWN resolution rule, imported rather than re-stated: a price quoted for a
 // tier the renderer would not use is exactly the bug a mirrored copy of it caused.
 import { seedanceResolution } from '../../../src/lib/prompt-settings.js';
+// …and the upscaler's OWN sizing rule, for the same reason: fal tiers Topaz by the OUTPUT frame, so
+// the quote has to be built from the factor the upscale will really apply, not a copy of it.
+import { upscalePlan } from '../../../src/lib/upscale-plan.js';
 // …and dotenv's OWN grammar for the .env, for exactly the same reason (see readEnvVar). It is a
 // re-implementation of dotenv's line parser, NOT dotenv — nothing here ever sources a file.
 import { dotenvValues } from '../../../src/lib/env-file.js';
@@ -225,16 +228,116 @@ export function readUpscaleProvider(envRoot, backend, childEnv) {
   return 'fal';
 }
 
-/** Estimate a Topaz upscale over clip durations (one Topaz job per sub-1080p clip). Topaz runs on
- *  either provider now and the two bill differently ($0.12/s on fal, $0.125/s on Segmind, both on
- *  the INPUT duration) — so this answers per provider rather than quoting one vendor's number. */
-export function estimateUpscale(clips, { provider = 'fal' } = {}) {
+/** The Topaz MODEL the fal upscale will ask for (FAL_TOPAZ_MODEL) — a PRICE knob, because fal
+ *  charges half for Gaia 2 output. Empty means the config default ('Proteus'), which is not Gaia. */
+export function readUpscaleModel(envRoot, childEnv) {
+  return readEnvVar(envRoot, 'FAL_TOPAZ_MODEL', childEnv);
+}
+
+/** Source dimensions for a clip whose take recorded only its SHORT side: the run's aspect says which
+ *  way round they go. Anything unparseable is null — "unknown", which prices UP (see clipTier),
+ *  never down and never to zero. */
+export function clipDims(shortSide, aspect) {
+  const short = Number(shortSide);
+  if (!Number.isFinite(short) || short <= 0) return null;
+  const m = /^\s*(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)\s*$/.exec(String(aspect ?? ''));
+  if (!m) return null;
+  const [a, b] = [Number(m[1]), Number(m[2])];
+  if (!(a > 0) || !(b > 0)) return null;
+  const long = Math.round((short * Math.max(a, b)) / Math.min(a, b));
+  return a >= b ? { width: long, height: short } : { width: short, height: long };
+}
+
+/** OUTPUT frame height → the row's tier key. fal tiers Topaz by the output, and this app's 9:16
+ *  default makes that a portrait 1080×1920 frame — which fal bills as ABOVE 1080p (see the row's
+ *  _source: inferred from a real invoice, not documented). A row with no ladder is flat (Segmind),
+ *  and an output taller than every rung falls through to defaultResolution — the top tier. */
+function tierOf(rates, outputHeight) {
+  const ladder = rates.tierMaxOutputHeight;
+  if (!ladder) return undefined; // flat vendor row — rateFor ignores the tier entirely
+  return Object.entries(ladder).sort((a, b) => a[1] - b[1]).find(([, max]) => outputHeight <= max)?.[0];
+}
+
+/** What one clip rides: the tier its OUTPUT lands in, or `skipped` when the source is already at or
+ *  above the target — both engines return that input untouched (src/lib/upscale.js), so there is no
+ *  job and no bill. Unknown dimensions are NEITHER: the tier stays undefined so rateFor falls to the
+ *  row's defaultResolution, which is deliberately the dearest one. */
+function clipTier(rates, clip, targetShort) {
+  const width = Number(clip?.width) || 0;
+  const height = Number(clip?.height) || 0;
+  if (!width || !height) return { tier: undefined, skipped: false };
+  const plan = upscalePlan(width, height, { targetShort });
+  if (!plan.needsUpscale) return { tier: undefined, skipped: true };
+  return { tier: tierOf(rates, Math.round(height * plan.upscaleFactor)), skipped: false };
+}
+
+/** fal's "for Gaia 2 output costs half of the prices", applied ONLY to an unambiguous Gaia 2 pick.
+ *  Any other model — including a bare 'Gaia' — pays full: halving a rate on a guess under-quotes a
+ *  paid button, and that is the one direction this file will not err in. */
+function modelMultiplier(rates, model) {
+  const half = rates.gaia2Multiplier;
+  if (!half) return 1;
+  return /^gaia[\s._-]*2$/i.test(String(model ?? '').trim()) ? half : 1;
+}
+
+/**
+ * Estimate a Topaz upscale over a take's clips (one Topaz job per clip below the target). The two
+ * providers bill on completely different shapes and neither may be quoted with the other's number:
+ * Segmind is flat per INPUT second, while fal tiers by the OUTPUT frame — so each clip carries the
+ * dimensions its tier is chosen from, and a clip already at the target costs nothing.
+ * @param {{jobId:string, seconds:number, width?:number, height?:number}[]} clips
+ * @param {{provider?:string, targetShortSide?:number, model?:string|null}} opts
+ * @returns {{perJob:{jobId:string,seconds:number,usd:number|null}[], totalUsd:number|null, currency:'USD', label:'estimate', tier?:string, unknownPrice?:object}}
+ */
+export function estimateUpscale(clips, { provider = 'fal', targetShortSide = 1080, model = null } = {}) {
   const priceKey = provider === 'fal' ? 'topaz' : `topaz@${provider}`;
   const { key, rates } = tableFor(priceKey);
   if (!rates) throw new Error(`no price table for upscale provider "${provider}" (have: ${priceKeys().join(', ')})`);
-  return priced(rateFor(rates), (clips ?? []).map((c) => ({ jobId: c.jobId, seconds: c.seconds })), key, rates);
+  const list = clips ?? [];
+  // "Publishes no rate" is a fact about the ROW, not about any one clip — ask it once, before any
+  // per-clip arithmetic can invent a figure underneath it.
+  if (rates.perSecondUsd === null) return priced(null, list.map((c) => ({ jobId: c.jobId, seconds: c.seconds })), key, rates);
+
+  const multiplier = modelMultiplier(rates, model);
+  let dearest = null; // the tier that explains the quote — the UI labels the price with it
+  const rows = list.map((clip) => {
+    const job = { jobId: clip.jobId, seconds: clip.seconds };
+    const { tier, skipped } = clipTier(rates, clip, targetShortSide);
+    if (skipped) return { ...job, usd: 0 };
+    const perSecond = rateFor(rates, tier) * multiplier;
+    if (!dearest || perSecond > dearest.perSecond) dearest = { perSecond, tier: tier ?? rates.defaultResolution };
+    return { ...job, usd: round2(job.seconds * perSecond) };
+  });
+  return {
+    perJob: rows, totalUsd: sumUsd(rows), currency: 'USD', label: 'estimate',
+    ...(dearest?.tier ? { tier: dearest.tier } : {}),
+  };
+}
+
+/**
+ * The clips ONE take hands Topaz, read from that take's own records — the estimate endpoint and
+ * approve's ledger line share it so a quote and the ledger row it becomes cannot drift apart.
+ *   - the take's saved spec, because a pre-revision take may rename jobs or change durations;
+ *   - only the jobs that produced a clip: finishRender upscales exactly those paths;
+ *   - the master's measured short side, which with the run's aspect is the only record of the frame
+ *     fal tiers on. The stitch never upscales (assemble.js), so that short side is at most the
+ *     clips' own — which can over-quote a no-op but can never under-quote a charge.
+ * @param {string|null} takeDir
+ * @param {{spec?:object|null, aspect?:string|null}} p the run's spec (fallback) and aspect ratio
+ */
+export function takeUpscaleClips(takeDir, { spec = null, aspect = null } = {}) {
+  if (!takeDir) return [];
+  const readTakeJson = (name) => {
+    try { return JSON.parse(fs.readFileSync(path.join(takeDir, name), 'utf8')); } catch { return null; }
+  };
+  const takeSpec = readTakeJson('spec.json') ?? spec; // the spec the take was rendered from
+  const render = readTakeJson('render.json');
+  const dims = clipDims(render?.masterShortSide, aspect) ?? {};
+  return ((render?.jobs) ?? [])
+    .filter((j) => j.clip) // only jobs Topaz will actually process
+    .map((j) => { const jobId = j.jobId ?? j.job; return { jobId, seconds: jobSeconds(takeSpec, jobId), ...dims }; });
 }
 
 export const VOICE_MINT_USD = PRICES.voiceMintUsd;
 
-export default { estimateRender, estimateUpscale, jobSeconds, readRenderResolution, readSeedanceResolution, readUpscaleProvider, VOICE_MINT_USD };
+export default { estimateRender, estimateUpscale, takeUpscaleClips, jobSeconds, readRenderResolution, readSeedanceResolution, readUpscaleProvider, readUpscaleModel, VOICE_MINT_USD };

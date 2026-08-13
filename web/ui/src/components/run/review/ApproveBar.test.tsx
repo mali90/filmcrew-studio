@@ -90,6 +90,35 @@ describe('ApproveBar', () => {
     expect(screen.getByText(/One Topaz job per clip — skip it if the render is already 1080p\./)).toBeInTheDocument();
   });
 
+  // fal prices Topaz by the OUTPUT frame, so a cut lifted to a ~1080p SHORT side can still bill at
+  // the above-1080p tier when the frame is portrait (1080×1920). The label promises the target and
+  // the figure comes from the tier — without a word between them they read as two different answers.
+  it('explains the tier when the price is not the one the ~1080p label implies', async () => {
+    server.use(http.get('/api/runs/:id/estimate', () => HttpResponse.json({
+      perJob: [{ jobId: 'K1', seconds: 15, usd: 1.2 }],
+      totalUsd: 1.2, currency: 'USD', label: 'estimate', targetShortSide: 1080, tier: 'above1080p',
+    })));
+    const run = makeRun('review');
+    run.manifest!.cuts = [{ id: 'c1', take: 't1', master: '/abs/out/x.mp4', shortSide: 480, createdAt: 'now' }];
+    renderReview(<ApproveBar run={run} />);
+
+    expect(await screen.findByText(/lifts it toward ~1080p\. fal\.ai bills the taller frame at its above-1080p rate\./)).toBeInTheDocument();
+    await screen.findByText('≈ $1.20');
+  });
+
+  it('says nothing extra when the tier is the one the label implies', async () => {
+    server.use(http.get('/api/runs/:id/estimate', () => HttpResponse.json({
+      perJob: [{ jobId: 'K1', seconds: 15, usd: 0.3 }],
+      totalUsd: 0.3, currency: 'USD', label: 'estimate', targetShortSide: 1080, tier: '1080p',
+    })));
+    const run = makeRun('review');
+    run.manifest!.cuts = [{ id: 'c1', take: 't1', master: '/abs/out/x.mp4', shortSide: 480, createdAt: 'now' }];
+    renderReview(<ApproveBar run={run} />);
+
+    await screen.findByText('≈ $0.30');
+    expect(screen.queryByText(/above-1080p rate/)).not.toBeInTheDocument();
+  });
+
   it('approves without upscale — free, no cost tag on the button', async () => {
     const captured = captureApprove();
     renderReview(<ApproveBar run={makeRun('review')} />);

@@ -281,6 +281,11 @@ export interface Estimate {
    *  ~1080 for fal's factor plan) — the review UI's "already HD" gate judges against this. Follows
    *  the `provider` query param when one is given, so the gate tracks the PICKED vendor. */
   targetShortSide?: number;
+  /** mode=upscale only, and only for a vendor that tiers its rate: the price tier the quote rides,
+   *  keyed as prices.json keys it ('720p' | '1080p' | 'above1080p'). fal charges by the OUTPUT
+   *  frame, so a cut lifted to a ~1080p SHORT side can still bill above-1080p when the frame is
+   *  portrait — the review UI says so beside the figure rather than leaving it unexplained. */
+  tier?: string;
 }
 // ── Prompt preview (WS2-P3) ──
 // What the render will be sent, composed by the SAME pure builder the renderer uses

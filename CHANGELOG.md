@@ -247,6 +247,25 @@
   install commands.
 
 ### Fixed
+- **The fal.ai Topaz upscale quote now matches what fal actually bills.** It was a single flat
+  ballpark rate for every upscale, so a 15-second clip was quoted **$1.80** — while the real charge
+  for a 15-second 480p vertical clip came to **≈ $1.28**. fal does not bill Topaz flat: it charges
+  per second **by the resolution of the frame it hands back** ($0.01/s up to 720p, $0.02/s for
+  720p–1080p, $0.08/s above 1080p). That is now what the estimate does — it works out the frame the
+  upscale will really deliver, from the take's own measured size and the run's aspect, and prices
+  the tier that frame lands in. The vertical default is the expensive case and always was: lifting
+  a 480p 9:16 clip to a 1080 short side delivers a **1080×1920** frame, which fal bills above 1080p
+  — the same clip in landscape comes back 1920×1080 and costs a quarter as much. Clips already at
+  the target are quoted at nothing, because the upscaler skips them. Where the size cannot be known
+  — nothing rendered yet, or no dimensions on record — the quote deliberately takes the **dearest**
+  tier rather than the cheapest: an estimate that reads a little high costs far less than a bill
+  that arrives high. The figure beside the toggle, the one on the paid button and the row written
+  into the run's cost ledger are now one number, computed one way, and the approve card says which
+  tier a price came from when it is not the one the "~1080p" label implies. The exact tier
+  boundary for vertical output is **inferred from that real invoice** rather than documented by
+  fal; `web/server/lib/prices.json` records the reasoning, the observed charge and the deliberate
+  round-up so a future invoice can correct it without re-deriving any of it. Segmind's Topaz is
+  genuinely flat ($0.125 per input second) and is unchanged.
 - **Prices, tiers and continuity promises now read your `.env` the way the render actually does.**
   The server had its own reader for the settings file, and it disagreed with the renderer's on
   three perfectly ordinary ways of writing one: it took the *first* assignment of a key where the
