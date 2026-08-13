@@ -452,6 +452,16 @@
   fal; `web/server/lib/prices.json` records the reasoning, the observed charge and the deliberate
   round-up so a future invoice can correct it without re-deriving any of it. Segmind's Topaz is
   genuinely flat ($0.125 per input second) and is unchanged.
+- **…and it counts the seconds in the clips, not in the plan.** Both vendors bill Topaz by the
+  length of the video they are handed, and the quote took that length from the plan — which a cut
+  can outlive. Compose a cut, revise the plan so a shot is shorter, and the clips you kept are still
+  the long ones: a reused 10-second clip was quoted, and written into the run's cost ledger, as the
+  5 seconds the new plan asks for, while the upscale processed and billed all 10. Each clip's own
+  duration is now measured when the take is assembled — off the very file the upscale is handed,
+  before it is lifted — and that is what the figure beside the toggle, the paid button and the
+  ledger row all count, whichever take the cut borrowed the clip from. Part seconds round up (a
+  vendor bills a whole one), and a clip too old to carry a measurement still falls back to the plan
+  rather than to nothing, so no route through a take can quote a real charge as free.
 - **Prices, tiers and continuity promises now read your `.env` the way the render actually does.**
   The server had its own reader for the settings file, and it disagreed with the renderer's on
   three perfectly ordinary ways of writing one: it took the *first* assignment of a key where the

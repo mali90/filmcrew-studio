@@ -282,7 +282,9 @@ function takeWith(jobs, extra = {}) {
   fs.writeFileSync(path.join(dir, 'render.json'), JSON.stringify({ master: '/out/v.mp4', jobs, ...extra }));
   return dir;
 }
-const clipRec = (jobId, dims) => ({ jobId, job: jobId, clip: `/r/t1/${jobId}/clip.mp4`, error: null, ...dims });
+// `measured` is what finishRender probed off the clip FILE before any upscale — width/height and
+// duration, each absent when it could not be read.
+const clipRec = (jobId, measured) => ({ jobId, job: jobId, clip: `/r/t1/${jobId}/clip.mp4`, error: null, ...measured });
 
 test('a re-upscale is quoted from the CLIPS, never from the HD master an earlier upscale left behind', () => {
   const dir = takeWith(
@@ -318,6 +320,47 @@ test('a take whose clips were never measured rounds UP — including when its ma
     const e = estimateUpscale(takeUpscaleClips(dir), { provider: 'fal' });
     assert.equal(e.totalUsd, billed(0.08, [5, 4]));
     assert.equal(e.tier, 'above1080p');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// The DURATION half of the same object. A composed cut keeps clips rendered from OLDER plans, so
+// the take's spec is not evidence about them: a revision that re-times a shot leaves the current
+// plan calling a 10-second file 5 seconds, while Topaz processes — and bills — all 10. Segmind's
+// flat per-INPUT-second row makes the seconds readable straight off the total.
+test('a clip kept from before a duration-changing revision is priced by its FILE, not by the plan that moved on', () => {
+  // K1's shot now reads 5s in this take's spec; the clip the cut still holds is the 10-second one it
+  // was rendered as. K2 was re-rendered under the new plan, and measures what the plan says.
+  const dir = takeWith([
+    clipRec('K1', { width: 480, height: 854, duration: 10 }),
+    clipRec('K2', { width: 480, height: 854, duration: 4 }),
+  ], { composed: true });
+  try {
+    assert.deepEqual(takeUpscaleClips(dir), [
+      { jobId: 'K1', seconds: 10, width: 480, height: 854 },
+      { jobId: 'K2', seconds: 4, width: 480, height: 854 },
+    ], 'each clip carries its OWN recorded duration — the spec answers for neither');
+
+    const e = estimateUpscale(takeUpscaleClips(dir), { provider: 'segmind' });
+    assert.equal(e.totalUsd, billed(0.125, [10, 4]), 'Topaz is handed 14 seconds of video and bills for 14');
+    assert.ok(e.totalUsd > billed(0.125, [5, 4]), 'the plan-derived figure is the under-quote this record exists to end');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a measured duration rounds UP to the whole second, and an unmeasured clip falls back to the plan', () => {
+  // Part second, whole charge: fal's own invoices carry at least a second of billing granularity on
+  // top of the input length, so the ceiling is the floor of what gets billed. And a clip with no
+  // recorded duration — every take rendered before the record existed — reads as "not measured",
+  // never as a free zero.
+  const dir = takeWith([clipRec('K1', { duration: 6.2 }), clipRec('K2', { duration: 0 }), clipRec('K3')]);
+  try {
+    assert.deepEqual(takeUpscaleClips(dir), [
+      { jobId: 'K1', seconds: 7 }, // 6.2s of video is 7 seconds of bill, never 6 — and never the plan's 5
+      { jobId: 'K2', seconds: 4 }, // 0 is not a measurement — K2's shot is 4s in the plan
+      { jobId: 'K3', seconds: 4 },
+    ]);
+    const e = estimateUpscale(takeUpscaleClips(dir), { provider: 'segmind' });
+    assert.equal(e.totalUsd, billed(0.125, [7, 4, 4]));
+    assert.ok(e.perJob.every((j) => j.seconds >= 1 && j.usd > 0), 'no route through this take quotes a clip as free');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 

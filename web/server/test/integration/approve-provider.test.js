@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 const HOST_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
 const { startFalServer } = await import(path.join(HOST_ROOT, 'test/helpers/fal-server.js'));
 const { startSegmindServer } = await import(path.join(HOST_ROOT, 'test/helpers/segmind-server.js'));
-const { hasFfmpeg, tinyMp4Bytes } = await import(path.join(HOST_ROOT, 'test/helpers/ffmpeg-clips.js'));
+const { hasFfmpeg, tinyMp4Bytes, makeClip } = await import(path.join(HOST_ROOT, 'test/helpers/ffmpeg-clips.js'));
 const { buildApp } = await import('../../app.js');
 
 const FF = await hasFfmpeg();
@@ -412,4 +412,96 @@ test('a dotenv-quoted target is priced, pinned and consumed as ONE value', { ski
   assert.equal(lastSegmindTopazArgs().target_resolution, '720p', 'Segmind was asked for exactly the string approve priced — padding included is a 400 from the vendor at best');
   assert.equal(done.manifest.costLedger.findLast((l) => l.action === 'upscale').estUsd, quoted.totalUsd);
   assert.ok(fs.existsSync(done.manifest.approved.final), 'and the master that row was written for exists');
+});
+
+// ── …and the SECONDS in that figure come from the clips, not from the plan ──────────────────────
+// The duration half of "a cut whose master was already upscaled is still quoted for its own SD
+// clips" above. A composition KEEPS clips rendered from older plans, and a revision that re-times a
+// shot rewrites the plan underneath them — so the take's spec describes files it no longer matches,
+// while Topaz is handed those files and bills every second of them.
+//
+// This app renders THREE-second clips (the shared mock's are 1s, and a plan can never ask for less
+// than 1s per shot, so nothing shorter could tell a stale plan from a measured file). Segmind is the
+// vendor throughout: its flat per-INPUT-second row makes the seconds readable straight off the
+// figure, with no tier in the way.
+const longRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-approve-longclip-'));
+const longClipBytes = await (async () => {
+  if (!FF) return clipBytes;
+  const src = path.join(longRoot, 'three-seconds.mp4');
+  await makeClip({ out: src, seconds: 3, withAudio: true });
+  return fs.readFileSync(src);
+})();
+const longFal = await startFalServer({ videoBytes: longClipBytes });
+const longApp = await buildApp({
+  root: HOST_ROOT,
+  runsDir: path.join(longRoot, 'runs'),
+  outDir: path.join(longRoot, 'out'),
+  childEnv: {
+    ...childEnv,
+    FAL_BASE_URL: longFal.baseUrl,
+    FAL_STORAGE_INITIATE_URL: `${longFal.baseUrl}/storage/upload/initiate`,
+  },
+  envRoot,
+});
+test.after(async () => { await longApp.close(); await longFal.close(); fs.rmSync(longRoot, { recursive: true, force: true }); });
+
+async function waitForCuts(runId, n, { on = longApp, timeoutMs = 90000 } = {}) {
+  const t0 = Date.now();
+  for (;;) {
+    const run = (await get(`/api/runs/${runId}`, on)).json().run;
+    if ((run.manifest?.cuts ?? []).length >= n) return run;
+    if (Date.now() - t0 > timeoutMs) throw new Error(`timeout waiting for ${n} cut(s) (status: ${run.status} err=${JSON.stringify(run.error)})`);
+    await sleep(150);
+  }
+}
+
+test('a composed cut is priced by the clips it KEPT, not by the plan a revision moved on', { skip: FF ? false : 'ffmpeg not installed' }, async () => {
+  // TWO-JOB so the cut is a composition of more than one clip: K1 = S1+S2 (9s planned), K2 = S3 (4s).
+  const { runId } = await makeReviewedRun('TWO-JOB a cut keeps its clips', longApp);
+  const specPath = path.join(longRoot, 'runs', runId, 'spec.json');
+
+  // The revision: the same clips, a plan that now asks for one second a shot. Written straight to
+  // spec.json because what makes this case is the plan MOVING under finished clips — which agent
+  // moved it changes nothing about what Topaz is then handed.
+  const revised = JSON.parse(fs.readFileSync(specPath, 'utf8'));
+  revised.project.duration_target_s = 3;
+  for (const s of revised.shots) s.duration_s = 1;
+  fs.writeFileSync(specPath, JSON.stringify(revised, null, 2));
+  const planSeconds = Object.fromEntries(revised.kling.jobs.map((j) => [j.job_id, j.shots.length])); // one second a shot, now
+  assert.deepEqual(planSeconds, { K1: 2, K2: 1 }, 'the revision really did re-time the plan under finished clips');
+
+  // …and the reviewer composes a cut out of the take that predates it.
+  assert.equal((await post(`/api/runs/${runId}/assemble`, { composition: { K1: 't1', K2: 't1' } }, longApp)).statusCode, 202);
+  const composed = await waitForCuts(runId, 2);
+  const cut = composed.manifest.cuts.at(-1);
+
+  const record = JSON.parse(fs.readFileSync(path.join(longRoot, 'runs', runId, 'renders', cut.take, 'render.json'), 'utf8'));
+  // The composition is a NEW take holding the OLD take's clip files — the paths are what says so
+  // (finishRender rewrites this record when the cut is assembled, and keeps the clips, not the flag).
+  assert.notEqual(cut.take, 't1', 'the cut is a new take');
+  assert.ok(record.jobs.every((j) => j.clip?.includes(`${path.sep}t1${path.sep}`)), 'composed out of clips rendered before the revision');
+  const measured = Object.fromEntries(record.jobs.map((j) => [j.jobId, Math.ceil(Number(j.duration))]));
+  assert.ok(Object.values(measured).every((s) => s >= 3), `each kept clip really is ~3s of video (${JSON.stringify(measured)})`);
+
+  const quoted = (await get(`/api/runs/${runId}/estimate?mode=upscale&cut=${cut.id}&provider=segmind`, longApp)).json();
+  assert.deepEqual(
+    Object.fromEntries(quoted.perJob.map((j) => [j.jobId, j.seconds])), measured,
+    'the quote counts the seconds in the FILES Topaz is handed',
+  );
+  assert.ok(quoted.perJob.every((j) => j.seconds > planSeconds[j.jobId]),
+    `every kept clip outlasts the plan that now describes it — pricing the plan would under-bill this button (${JSON.stringify(quoted.perJob)})`);
+  assert.ok(quoted.totalUsd > 0, 'and Segmind bills every one of those seconds');
+  // approve's own default (no cut) upscales the LATEST take — which is this composition — so it has
+  // to read the clips the same way, or the button and the row it writes describe different work.
+  const latest = (await get(`/api/runs/${runId}/estimate?mode=upscale&provider=segmind`, longApp)).json();
+  assert.equal(latest.totalUsd, quoted.totalUsd, 'the no-cut branch of the same endpoint reads the same clips');
+
+  // and the one durable record of the spend carries that same figure, off the same reading
+  const before = segmindTopazSubmits();
+  assert.equal((await post(`/api/runs/${runId}/approve`, { upscale: true, cut: cut.id, provider: 'segmind' }, longApp)).statusCode, 202);
+  const done = await waitForStatus(runId, ['complete', 'attention'], { on: longApp });
+  assert.equal(done.status, 'complete', `the finalize child ran (err=${JSON.stringify(done.error)})`);
+  assert.ok(segmindTopazSubmits() > before, 'Segmind really was handed those clips');
+  assert.equal(done.manifest.costLedger.findLast((l) => l.action === 'upscale').estUsd, quoted.totalUsd,
+    'the ledger row is the quote — both read the clips, neither reads the plan');
 });

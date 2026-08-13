@@ -418,11 +418,12 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
     const spec = readJson(path.join(dir, 'spec.json'));
     const m = readManifest(dir);
     if (!spec || !m?.jobClips) return;
-    // Each clip carries its OWN seams — and its own measured frame — into the composition, read from
-    // the take it was rendered in (cached per take dir — a composition of N jobs usually spans one
-    // or two takes). Dropping the seams here is what made every mixed cut indistinguishable from an
-    // intact chain; dropping the frame would leave this cut's upscale quote unmeasurable until the
-    // assemble child re-probes and rewrites the record.
+    // Each clip carries its OWN seams — and its own measured frame and duration — into the
+    // composition, read from the take it was rendered in (cached per take dir — a composition of N
+    // jobs usually spans one or two takes). Dropping the seams here is what made every mixed cut
+    // indistinguishable from an intact chain; dropping the measurements would leave this cut's
+    // upscale quote reading the CURRENT plan for clips rendered from older ones, which is precisely
+    // what a composition mixes, until the assemble child re-probes and rewrites the record.
     const takeJobs = new Map();
     const carriedFor = (jobId, clip) => {
       const takeId = takeOfClip(clip);
@@ -435,14 +436,18 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
       // The manifest's own record is the fallback for a take whose render.json is gone or predates
       // the composition (the CLI writes it before the web layer ever sees the take).
       const fb = m.clipLineage?.[jobId];
-      // The frame is a fact about the clip FILE, so it travels with the clip whatever take it came
-      // from; nothing derives it, and an unmeasured clip stays unmeasured (which prices UP).
+      // The frame and the duration are facts about the clip FILE, so they travel with the clip
+      // whatever take it came from — the composed take's spec is the CURRENT plan, and a revision
+      // that re-timed a shot makes it a liar about every clip the cut kept. Nothing derives either,
+      // and an unmeasured clip stays unmeasured (which prices UP: dearest tier, plan seconds).
       const [width, height] = [Number(rec?.width) || 0, Number(rec?.height) || 0];
+      const duration = Number(rec?.duration) || 0;
       return {
         take: takeId ?? fb?.take ?? null,
         seamIn: rec?.seamIn ?? (fb?.take === takeId ? fb?.seamIn : null) ?? null,
         seamOut: rec?.seamOut ?? (fb?.take === takeId ? fb?.seamOut : null) ?? null,
         ...(width && height ? { width, height } : {}),
+        ...(duration > 0 ? { duration } : {}),
       };
     };
     const jobs = (spec.kling?.jobs ?? []).map((j) => {

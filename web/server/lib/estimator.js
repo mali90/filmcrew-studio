@@ -363,16 +363,37 @@ export function estimateUpscale(clips, { provider = 'fal', targetShortSide = 108
 }
 
 /**
+ * The seconds Topaz is billed for ONE clip. Both vendors bill the INPUT video's duration, so the
+ * honest number is the one MEASURED off that file at assembly time (finishRender) — never the plan,
+ * which a composed cut outlives: a cut may keep a clip rendered before a revision shortened its
+ * shot, and the take's current spec then calls a 10-second file 5 seconds while Topaz processes,
+ * and charges for, all 10.
+ *
+ * Rounded UP to the whole second: fal's own invoices carry at least a second of billing granularity
+ * on top of the input length (see prices.json's topaz row), so the ceiling is the FLOOR of what gets
+ * billed — and any positive duration ceils to at least 1, so a measured clip can never quote free.
+ * Nothing measurable is recorded as 0, so an absent duration means "not measured", never "empty": it
+ * falls back to the plan the take saved beside itself, which is the reading every take used before
+ * this record existed.
+ */
+function clipSeconds(rec, takeSpec, jobId) {
+  const measured = Number(rec?.duration) || 0;
+  return measured > 0 ? Math.ceil(measured) : jobSeconds(takeSpec, jobId);
+}
+
+/**
  * The clips ONE take hands Topaz, read from that take's own records — the estimate endpoint and
  * approve's ledger line share it so a quote and the ledger row it becomes cannot drift apart.
  *   - the take's saved spec, because a pre-revision take may rename jobs or change durations;
  *   - only the jobs that produced a clip: finishRender upscales exactly those paths;
- *   - each clip's OWN frame, measured off that file at assembly time (finishRender). The MASTER's
- *     size may not stand in for it: an approve-time upscale lifts the clips into new files and
- *     rewrites this render.json with the HD master it delivered, leaving `jobs[].clip` pointing at
- *     the originals — so a master-derived quote calls a real second charge a free no-op. A take
- *     rendered before that record existed carries no dimensions at all, and prices UP for it
- *     (clipTier), which over-quotes a no-op but can never under-quote a charge.
+ *   - each clip's OWN frame and OWN duration, measured off that file at assembly time
+ *     (finishRender). Neither the master nor the spec may stand in for them: an approve-time upscale
+ *     lifts the clips into new files and rewrites this render.json with the HD master it delivered,
+ *     leaving `jobs[].clip` pointing at the originals — so a master-derived quote calls a real
+ *     second charge a free no-op — and a composed cut mixes in clips from takes the current spec has
+ *     since re-timed, so a plan-derived quote bills a 10-second file as 5. A take rendered before
+ *     those records existed carries neither, and prices UP for it: the dearest tier (clipTier) and
+ *     the plan's seconds, which over-quote a no-op but can never under-quote a charge.
  * @param {string|null} takeDir
  * @param {{spec?:object|null}} p the run's spec, for a take that saved none of its own
  */
@@ -388,7 +409,7 @@ export function takeUpscaleClips(takeDir, { spec = null } = {}) {
     .map((j) => {
       const jobId = j.jobId ?? j.job;
       const [width, height] = [Number(j.width) || 0, Number(j.height) || 0];
-      return { jobId, seconds: jobSeconds(takeSpec, jobId), ...(width && height ? { width, height } : {}) };
+      return { jobId, seconds: clipSeconds(j, takeSpec, jobId), ...(width && height ? { width, height } : {}) };
     });
 }
 
