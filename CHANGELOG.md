@@ -247,6 +247,15 @@
   install commands.
 
 ### Fixed
+- **A quoted, padded `true` in your `.env` now means the same thing to the preview as it does to
+  the render.** `dotenv` keeps the padding inside a quoted value, so `KLING_CHAIN_FRAMES=" true "`
+  reaches the render child as `" true "` — and `config.js` trims it before testing, which turns the
+  option **on**. The web server's mirrors of those knobs tested the raw value instead, read it as
+  **off**, and quietly described a different render than the one you would pay for: an unchained
+  opening pin in the prompt sheet's seam line, and — through `SEEDANCE_GENERATE_AUDIO` — a prompt
+  preview and voice-reference budget with the speech rule and every dialogue clause missing. The
+  coercion now has exactly one implementation (`src/lib/env-file.js`), which `config.js` itself
+  calls, so a mirrored flag cannot be trimmed on one side of the promise and not the other.
 - **A character whose name starts with another character's name no longer borrows their reference
   images — including into a paid render.** References are linked to a character by filename
   (`elements/references/<slug>-01.png`), and ownership used to be decided one name at a time: does

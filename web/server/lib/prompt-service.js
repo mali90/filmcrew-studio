@@ -24,6 +24,11 @@ import { writeFileAtomic } from './atomic-file.js';
 // registry and the two voice knobs are read the same way here and by the seam budget in
 // run-service.js — a second reader is how a preview and a paid render start disagreeing.
 import { voiceClipLookup, voiceKnobs } from './voice-refs.js';
+// config.js's own boolean coercion, imported as a PURE RULE (the same standing this file's siblings
+// give prompt-settings.js's audioFlag): rules come from the tree, DATA and paths still come from the
+// run's `root` below. A trimmed copy here is how a preview and a paid render start disagreeing about
+// a flag — the one thing this module exists to prevent.
+import { envBool } from '../../../src/lib/env-file.js';
 
 /**
  * The prompt-relevant knobs, mirrored from config.js (the `kling`, `seedance` and `seedance25`
@@ -37,7 +42,11 @@ function promptDefaults(get) {
   // preview as the same unreadable value it reaches the render as, and be refused by the same rule
   // (promptCapOf) — a fallback to the default here would preview a cap the render never applies.
   const num = (key, dflt) => { const v = get(key); return v === '' ? dflt : Number(v); };
-  const bool = (key, dflt) => { const v = get(key); return v === '' ? dflt : /^(1|true|yes|on)$/i.test(v); };
+  // Mirrors config.js's boolEnv by CALLING it — the same function, not a second regex. The trim it
+  // applies is load-bearing: dotenv keeps padding inside a quoted value, so `KLING_CHAIN_FRAMES=
+  // " true "` is ON in the render child, and a raw test here would preview an unchained plan for a
+  // render that chains.
+  const bool = (key, dflt) => envBool(get(key), dflt);
   const kling = {
     model: get('KLING_MODEL') || 'kling-v3-omni',
     aspectRatio: get('KLING_ASPECT') || '9:16',

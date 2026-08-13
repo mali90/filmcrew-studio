@@ -8,6 +8,7 @@ import 'dotenv/config';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { modelDefault } from './src/lib/models.js';
+import { envBool } from './src/lib/env-file.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 /** Repository root (this file lives at the root). */
@@ -34,11 +35,11 @@ export function buildConfig(env = process.env) {
     const v = env[key];
     return v === undefined || v === '' ? dflt : Number(v);
   };
-  const boolEnv = (key, dflt) => {
-    const v = env[key];
-    if (v === undefined || v === '') return dflt;
-    return /^(1|true|yes|on)$/i.test(v.trim());
-  };
+  // The coercion itself lives in src/lib/env-file.js, next to the dotenv grammar: the web server
+  // mirrors these knobs for its previews and budgets and may not import this file, so the rule they
+  // must agree on (the TRIM included — dotenv keeps padding inside a quoted value) has exactly one
+  // implementation rather than a trimmed copy per reader.
+  const boolEnv = (key, dflt) => envBool(env[key], dflt);
 
   const config = {
     root: ROOT,

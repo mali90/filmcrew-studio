@@ -18,6 +18,9 @@ import { voiceRefDemand } from '../../../src/lib/seedance-args.js';
 // The one audio-flag rule (pure, config-free — every default reaches it as an argument), so the
 // budget below resolves `generate_audio` exactly as the render child will.
 import { audioFlag } from '../../../src/lib/prompt-settings.js';
+// …and the one boolean-coercion rule, for the same reason: config.js TRIMS a mirrored flag before
+// testing it, and a copy that forgets to reads a padded knob the opposite way the child will.
+import { envBool } from '../../../src/lib/env-file.js';
 
 const CLIP_EXT = /\.(mp3|wav|mp4|mov)$/i;
 
@@ -62,7 +65,9 @@ export function voiceClipLookup(voicesDir, root, slug) {
  * @param {(key:string)=>string} get  a reader over the run's environment (as data)
  */
 export const voiceKnobs = (get) => ({
-  audioOn: get('SEEDANCE_GENERATE_AUDIO') === '' ? true : /^(1|true|yes|on)$/i.test(get('SEEDANCE_GENERATE_AUDIO')),
+  // config.js's coercion, called rather than copied — the trim decides whether a dotenv-valid
+  // `SEEDANCE_GENERATE_AUDIO=" true "` budgets the clips the render is actually going to send.
+  audioOn: envBool(get('SEEDANCE_GENERATE_AUDIO'), true),
   voiceMode: get('SEEDANCE_VOICE_MODE') || 'reference',
 });
 

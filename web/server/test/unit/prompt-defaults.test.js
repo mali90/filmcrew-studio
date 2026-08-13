@@ -185,6 +185,46 @@ test('a dotenv-valid .env previews exactly what the render child will read from 
   assert.ok(!got.prompt.includes('# the look'), 'a trailing comment is not part of the value');
 });
 
+// Same rule, one layer down: reading the .env the same WAY is not enough if the two sides then
+// COERCE the value differently. dotenv keeps the padding INSIDE a quoted value, and config.js trims
+// a boolean before testing it — so `" true "` is the flag ON in the render child. A mirror that
+// tests the raw value reads it OFF, and the preview then describes a render nobody is going to pay
+// for: no chained opening pin, no speech rule, no dialogue. The coercion is therefore ONE shared
+// rule (src/lib/env-file.js `envBool`), pinned here from the outside, through the preview.
+test('a dotenv-valid PADDED boolean previews the flag the render child will really apply', async () => {
+  const { parse } = await import('dotenv');
+  const paddedRoot = path.join(tmpRoot, 'padded');
+  const bareBoolRoot = path.join(tmpRoot, 'plain-bool');
+  for (const d of [paddedRoot, bareBoolRoot]) fs.mkdirSync(d, { recursive: true });
+
+  // Both knobs default to TRUE, so a padded `" true "` is the case that separates the two readings:
+  // trimmed it is the default the child renders with, untrimmed it silently flips the preview off.
+  const padded = 'KLING_CHAIN_FRAMES=" true "\nSEEDANCE_GENERATE_AUDIO=" true "\n';
+  fs.writeFileSync(path.join(paddedRoot, '.env'), padded);
+  assert.deepEqual(parse(padded), { KLING_CHAIN_FRAMES: ' true ', SEEDANCE_GENERATE_AUDIO: ' true ' },
+    'dotenv keeps the padding inside a quoted value — this is what the child gets');
+  const child = buildConfig(parse(padded));
+  assert.equal(child.kling.chainFrames, true, 'and config.js trims it: the child DOES chain frames');
+  assert.equal(child.seedance.generateAudio, true, 'and the child DOES render native audio');
+
+  fs.writeFileSync(path.join(bareBoolRoot, '.env'), 'KLING_CHAIN_FRAMES=true\nSEEDANCE_GENERATE_AUDIO=true\n');
+
+  // Kling: chaining is what hands job 2 its opening frame, so the seam the sheet PROMISES moves.
+  const gotKling = await view(paddedRoot, 'kling');
+  const wantKling = await view(bareBoolRoot, 'kling');
+  assert.equal(gotKling.prompts[1].seam.in, wantKling.prompts[1].seam.in,
+    'the opening pin the preview promises must be the one the render will apply');
+  assert.equal(wantKling.prompts[1].seam.in, 'native',
+    '…which for a chained Kling job is a real anchor, not a guess');
+
+  // Seedance: the audio flag rides through voice-refs.js (the ONE mirror run-service budgets from),
+  // and it moves prompt BYTES — the speech rule, every dialogue clause and the speaker list.
+  const got = (await view(paddedRoot, 'seedance-2.0@fal')).prompts[0];
+  const want = (await view(bareBoolRoot, 'seedance-2.0@fal')).prompts[0];
+  assertBytesEqual(got.prompt, want.prompt, 'the preview of a padded SEEDANCE_GENERATE_AUDIO');
+  assert.ok(want.prompt.includes('Speech rule'), 'audio ON is what the child renders, so the speech rule rides');
+});
+
 // A knob that is NOT env-tunable cannot drift by .env, only by edit — so it is asserted directly.
 test('the hard model caps prompt-service mirrors are still config.js\'s hard caps', () => {
   assert.equal(cfg.kling.maxStoryboards, 6, 'prompt-service.js hardcodes maxStoryboards: 6');

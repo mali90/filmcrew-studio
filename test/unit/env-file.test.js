@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { parseEnv, upsertEnv, serializeEnv, getEnvValue, dotenvValues, readEnvFileOrExample, writeEnv } from '../../src/lib/env-file.js';
+import { parseEnv, upsertEnv, serializeEnv, getEnvValue, dotenvValues, envBool, readEnvFileOrExample, writeEnv } from '../../src/lib/env-file.js';
 import { mkTmp } from '../helpers/tmp.js';
 
 test('parse/serialize round-trip preserves comments, blanks, and commented keys', () => {
@@ -45,6 +45,25 @@ test('upsert replaces in place, appends new, tracks changed, blanks, and rejects
   // identical re-upsert is a no-op
   assert.equal(upsertEnv(next, { A: '2' }).changed.length, 0);
   assert.throws(() => upsertEnv(entries, { A: 'line1\nline2' }), /newline/);
+});
+
+// The coercion half of the same promise: reading a value dotenv's way is worth nothing if the two
+// sides then turn it into a flag differently. config.js is the oracle here — buildConfig is what the
+// render child actually applies — and every mirror calls THIS function rather than re-testing the
+// raw value, which is what a quoted, padded knob exposes.
+test('envBool is config.js\'s boolean rule — a padded dotenv value included', async () => {
+  const { buildConfig } = await import('../../config.js');
+  assert.equal(envBool(undefined, true), true, 'unset means the caller\'s default');
+  assert.equal(envBool('', false), false, 'so does empty — a blank knob is not a "false"');
+  for (const on of ['1', 'true', 'TRUE', 'yes', 'On']) assert.equal(envBool(on, false), true, on);
+  for (const off of ['0', 'false', 'no', 'off', 'maybe']) assert.equal(envBool(off, true), false, off);
+
+  // dotenv keeps padding INSIDE quotes, so this is the exact string the child's process.env holds.
+  assert.equal(dotenvValues('KLING_CHAIN_FRAMES=" true "\n').KLING_CHAIN_FRAMES, ' true ');
+  assert.equal(envBool(' true ', false), true, 'a padded value is trimmed before it is tested');
+  assert.equal(buildConfig({ KLING_CHAIN_FRAMES: ' true ' }).kling.chainFrames, true,
+    'which is exactly what the render child does with it');
+  assert.equal(buildConfig({ KLING_CHAIN_FRAMES: ' false ' }).kling.chainFrames, false);
 });
 
 test('readEnvFileOrExample prefers .env, falls back to .env.example, always targets <root>/.env', () => {

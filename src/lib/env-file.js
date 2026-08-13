@@ -58,6 +58,24 @@ export function dotenvValues(text) {
 }
 
 /**
+ * How a boolean knob is read out of an environment — config.js's `boolEnv` rule, in the ONE place
+ * every mirror of it shares (config.js itself, and the web server's preview/budget mirrors, which
+ * may not import config.js).
+ *
+ * The trim is the whole point, and it belongs next to dotenvValues: reading the .env the same WAY
+ * is not enough if the two sides then COERCE the value differently. dotenv keeps padding INSIDE a
+ * quoted value, so a dotenv-valid `KLING_CHAIN_FRAMES=" true "` reaches the render child as
+ * ` true ` and config.js trims it to ON — while an untrimmed regex reads it OFF, and the preview
+ * describes a render nobody is going to pay for. Unset (`undefined`) and empty both mean "not set"
+ * and take the caller's default; a string knob is NOT trimmed anywhere, because there the padding
+ * is part of the value the child was handed.
+ * @param {string|undefined} value  the raw value, as dotenv would have loaded it
+ * @param {boolean} dflt            what an unset knob means
+ */
+export const envBool = (value, dflt) =>
+  (value === undefined || value === '' ? dflt : /^(1|true|yes|on)$/i.test(String(value).trim()));
+
+/**
  * Upsert `updates` (a {KEY: value} map) into `entries`: replace an existing active KEY= in place,
  * else append a new `KEY=value` line at the end. Values are written raw (no quotes, no spaces around
  * `=`); a newline in a value is rejected. Returns {entries, changed[]} (changed = keys whose value
@@ -103,4 +121,4 @@ export function readEnvFileOrExample(root) {
   return { path: envPath, text: '', source: 'none' };
 }
 
-export default { parseEnv, getEnvValue, dotenvValues, upsertEnv, serializeEnv, writeEnv, readEnvFileOrExample };
+export default { parseEnv, getEnvValue, dotenvValues, envBool, upsertEnv, serializeEnv, writeEnv, readEnvFileOrExample };
