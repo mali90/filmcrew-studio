@@ -302,6 +302,42 @@ test('defaults: resolution rides the target model\'s own knob; reads report the 
   } finally { fs.writeFileSync(envFile, original); }
 });
 
+// The effective defaults are not decoration: the create page hydrates from them and posts them back
+// as an explicit per-run pin, so a value read the wrong WAY changes the output and the bill. These
+// four lines are all ordinary dotenv — and all four are where the wizard's line editor (first match,
+// comment kept inside the value, `export` unrecognised, quotes kept) disagrees with the render child.
+test('defaults are read with the CHILD\'s dotenv semantics, not the wizard\'s line editor', async () => {
+  const envFile = path.join(envRoot, '.env');
+  const original = fs.readFileSync(envFile, 'utf8');
+  try {
+    fs.writeFileSync(envFile, [
+      'export RENDER_BACKEND=seedance-2.5@fal',      // dotenv accepts the shell prefix; the editor sees no assignment at all
+      'SEEDANCE25_RESOLUTION=720p',                  // …and dotenv keeps the LAST assignment, the editor the first
+      'SEEDANCE25_RESOLUTION="480p"',                // …and strips the quotes the editor would hand back
+      'SEEDANCE_RESOLUTION="1080p"',
+      'KLING_ASPECT=16:9   # the aspect, with a trailing comment dotenv cuts',
+      '',
+    ].join('\n'));
+
+    const d = (await get('/api/settings/defaults')).json();
+    assert.equal(d.backend, 'seedance-2.5@fal', 'an export-prefixed backend is the backend the child renders on');
+    assert.equal(d.resolutions['seedance-2.5'], '480p', 'the LAST assignment wins, without its quotes — 720p is the line dotenv discarded');
+    assert.equal(d.resolution, '480p', 'and the default backend\'s tier is that same value');
+    assert.equal(d.resolutions['seedance-2.0'], '1080p', 'a quoted tier is 1080p, not "1080p" — the quotes are dotenv\'s, not the value\'s');
+    assert.equal(d.seedanceResolution, '1080p', 'the legacy field reads the same way');
+    assert.equal(d.aspect, '16:9', 'the trailing comment is not part of the ratio the child renders');
+
+    // the wizard's own status card answers from the same reading — it seeds the same create page
+    const s = (await get('/api/setup/status')).json();
+    assert.deepEqual(s.defaults, { backend: 'seedance-2.5@fal', aspect: '16:9', resolution: '480p' });
+
+    // …while the settings editor still reports the file BYTE FOR BYTE: it exists to rewrite lines,
+    // and a value it "cleaned up" on the way out would be written back cleaned up.
+    const rows = (await get('/api/settings/env')).json().rows;
+    assert.equal(rows.find((r) => r.key === 'KLING_ASPECT').value, '16:9   # the aspect, with a trailing comment dotenv cuts');
+  } finally { fs.writeFileSync(envFile, original); }
+});
+
 test('doctor runs as a fresh child and reports machine-readable checks', async () => {
   const res = await post('/api/doctor', {});
   assert.equal(res.statusCode, 200, res.body);

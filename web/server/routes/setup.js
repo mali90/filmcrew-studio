@@ -5,6 +5,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { createEnvSettings } from '../lib/env-settings.js';
+// The render child's OWN env reader — dotenv's grammar over <envRoot>/.env, childEnv first. The one
+// implementation the server has (see estimator.js's readEnvVar); a second one here would be a second
+// set of rules for the same file. It is config-free, and already in this graph via run-service.
+import { readEnvVar } from '../lib/estimator.js';
 
 const dirStats = (dir) => {
   let bytes = 0; let count = 0;
@@ -24,6 +28,22 @@ const dirStats = (dir) => {
 export function registerSetupRoutes(app) {
   const { root, runsDir, outDir, envRoot, childEnv } = app.ctx;
   const envSettings = createEnvSettings({ root, envRoot });
+  // TWO readers, because these routes answer two different questions about one file.
+  //
+  //   envSettings.read().get — the wizard's LINE EDITOR: what does the settings file SAY, so the
+  //     cards can show it and a write can leave every other byte alone. It also falls back to
+  //     .env.example to seed a fresh install (the `envSource` field says so on the way out).
+  //
+  //   envGet — what will the next RENDER actually do: dotenv's grammar over the real <envRoot>/.env,
+  //     with childEnv ahead of it exactly as a spawned child sees it.
+  //
+  // Every effective DEFAULT below reads through envGet, because those values do not just decorate a
+  // card — the create page hydrates from them and posts them back as an explicit per-run pin. Read
+  // through the editor, a perfectly valid `SEEDANCE25_RESOLUTION="480p"` came back WITH its quotes,
+  // failed the ladder check in the browser, and pinned the run to 720p: a different output and a
+  // different bill from the one configured. Same for an `export ` prefix or a repeated assignment,
+  // where the editor and dotenv disagree about which line wins.
+  const envGet = (key) => readEnvVar(envRoot ?? root, key, childEnv);
   const installing = new Set();          // providers with an install in flight (one at a time → 409)
   const modelsCache = new Map();         // provider → { at, live } — short TTL so dropdown flicks don't spam the provider
   const MODELS_TTL_MS = 5 * 60 * 1000;
@@ -40,19 +60,19 @@ export function registerSetupRoutes(app) {
     // (no fal account anywhere) is a valid, documented setup — requiring FAL_KEY here would trap it
     // in /setup forever while the wizard happily offers Segmind cards. The registry is config-free,
     // so importing it is the allowed pattern.
-    const backend = get('RENDER_BACKEND') || 'kling';
+    const backend = envGet('RENDER_BACKEND') || 'kling';
     let renderProvider = 'fal';
     // The reported resolution follows the same rule: the knob the default backend's MODEL actually
     // reads — a Seedance default with only KLING_RESOLUTION in .env must not display a value the
     // render will never use.
-    let resolution = get('KLING_RESOLUTION') || '1080p';
+    let resolution = envGet('KLING_RESOLUTION') || '1080p';
     try {
       const { defaultResolutionFor, normalizeBackend, resolutionEnvFor } = await import(path.join(root, 'src/lib/render-models.js'));
       const { model, provider: rp } = normalizeBackend(backend);
       renderProvider = rp;
       // A ladder-less model (Kling) has no knob and no tier — null, not another model's env read.
       const resEnv = resolutionEnvFor(model);
-      resolution = resEnv ? (get(resEnv) || defaultResolutionFor(model)) : null;
+      resolution = resEnv ? (envGet(resEnv) || defaultResolutionFor(model)) : null;
     } catch { /* unknown backend — doctor's own check names it; the fal gate stays as the fallback */ }
     const renderKeySet = renderProvider === 'segmind' ? segmindKeySet : falKeySet;
     return {
@@ -61,7 +81,7 @@ export function registerSetupRoutes(app) {
       fal: { hasKey: falKeySet },
       segmind: { hasKey: segmindKeySet },
       renderProvider,
-      defaults: { backend, aspect: get('KLING_ASPECT') || '9:16', resolution },
+      defaults: { backend, aspect: envGet('KLING_ASPECT') || '9:16', resolution },
       complete: llmKeySet && renderKeySet,
     };
   });
@@ -163,7 +183,6 @@ export function registerSetupRoutes(app) {
   });
 
   app.get('/api/settings/defaults', async () => {
-    const { get } = await envSettings.read();
     const { RENDER_MODELS, defaultResolutionFor, normalizeBackend, resolutionEnvFor } = await import(path.join(root, 'src/lib/render-models.js'));
     // The saved tier of the knob EACH MODEL actually reads (or the model's own default) — never a
     // blanket KLING_RESOLUTION read: with a Seedance default backend that knob is not what the
@@ -171,17 +190,17 @@ export function registerSetupRoutes(app) {
     const effectiveFor = (model) => {
       const resEnv = resolutionEnvFor(model);
       // Ladder-less model (Kling): no knob exists — null, never a sibling's env read.
-      return resEnv ? (get(resEnv) || defaultResolutionFor(model)) : null;
+      return resEnv ? (envGet(resEnv) || defaultResolutionFor(model)) : null;
     };
-    const backend = get('RENDER_BACKEND') || 'kling';
+    const backend = envGet('RENDER_BACKEND') || 'kling';
     let resolution;
     try { resolution = effectiveFor(normalizeBackend(backend).model); } catch { resolution = null; }
     return {
       backend,
-      aspect: get('KLING_ASPECT') || '9:16',
+      aspect: envGet('KLING_ASPECT') || '9:16',
       resolution, // the DEFAULT backend's effective tier — what its next render will actually use
       resolutions: Object.fromEntries(Object.keys(RENDER_MODELS).map((m) => [m, effectiveFor(m)])),
-      seedanceResolution: get('SEEDANCE_RESOLUTION') || '480p', // legacy field — old readers keep working
+      seedanceResolution: envGet('SEEDANCE_RESOLUTION') || '480p', // legacy field — old readers keep working
     };
   });
 
@@ -195,7 +214,10 @@ export function registerSetupRoutes(app) {
       // it, or the saved default backend when only the tier changed. Writing KLING_RESOLUTION
       // unconditionally here is what let a Seedance default ignore the wizard's pick.
       const { capsFor, normalizeBackend } = await import(path.join(root, 'src/lib/render-models.js'));
-      const target = backend !== undefined ? String(backend) : ((await envSettings.read()).get('RENDER_BACKEND') || 'kling');
+      // …and the saved backend that stands in for an absent one is read the child's way too: it
+      // decides WHICH model's knob this save writes, so a quoted or repeated RENDER_BACKEND must
+      // resolve here to the same model the render will run.
+      const target = backend !== undefined ? String(backend) : (envGet('RENDER_BACKEND') || 'kling');
       let caps;
       try { caps = capsFor(normalizeBackend(target).id); } catch (e) {
         throw Object.assign(new Error(e.message), { statusCode: 400, hint: 'save a valid backend with (or before) its resolution' });

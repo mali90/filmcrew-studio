@@ -247,6 +247,19 @@
   install commands.
 
 ### Fixed
+- **A `.env` written in ordinary dotenv style now decides the defaults the create page starts
+  from — quotes, `export`, trailing comments and repeated keys included.** The endpoints that report
+  your effective defaults read the file through the *settings editor*, which exists to rewrite one
+  line without touching another byte and so answers a different question: it keeps a trailing
+  `# comment` inside the value, does not recognise an `export ` prefix, hands the quotes back, and
+  reports the FIRST assignment where dotenv keeps the last. A perfectly valid
+  `SEEDANCE25_RESOLUTION="480p"` therefore came back as `"480p"`, failed the ladder check in the
+  browser, and the create page fell back to 720p — and then posted 720p as an explicit per-run pin,
+  moving both the output and the bill away from the 480p you had configured. Those defaults are now
+  read exactly as the render child reads them: dotenv's own grammar over your `.env`, with an
+  already-set environment variable ahead of the file, the same rule the estimate and the prompt
+  preview already use. What the page offers is what the render does. The Settings env editor still
+  reads and writes your file verbatim — that *is* its job.
 - **An approve-time upscale now runs on the vendor the server actually validated, priced and
   recorded.** Approving *with* a provider pick already pinned that vendor into the finalize child.
   Approving without one did not. The server still resolved a vendor before it touched anything —
