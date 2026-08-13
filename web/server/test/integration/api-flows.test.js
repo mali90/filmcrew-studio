@@ -474,6 +474,28 @@ test('approve with upscale: Topaz child runs, final recorded, run completes', { 
   assert.ok(fs.existsSync(run.manifest.approved.final), 'the upscaled final exists on disk');
 });
 
+// A vendor with no key on file cannot run at all: the finalize child throws in falHeaders() /
+// segmindHeaders() before a single Topaz submission. Accepting the approve anyway returned 202 AND
+// wrote a priced cost-ledger row — the one durable record of what this run cost, made to show a
+// charge that never happened. This harness pins SEGMIND_API_KEY='' in childEnv (see above), which
+// is exactly the keyless install the reviewer's stale/loading setup-status query can still name.
+test('approve refuses a keyless upscale provider — 400 before any ledger row or child', { skip: FF ? false : 'ffmpeg not installed' }, async () => {
+  const { runId } = await makeReviewedRun('a charge that never happened');
+  const ledgerBefore = (await get(`/api/runs/${runId}`)).json().run.manifest.costLedger.length;
+
+  const res = await post(`/api/runs/${runId}/approve`, { upscale: true, provider: 'segmind' });
+  assert.equal(res.statusCode, 400, res.body);
+  assert.match(res.json().error, /SEGMIND_API_KEY/, 'the message names the variable that is missing');
+
+  const run = (await get(`/api/runs/${runId}`)).json().run;
+  assert.equal(run.manifest.costLedger.length, ledgerBefore, 'no upscale line was recorded for work that cannot run');
+  assert.equal(run.manifest.approved ?? null, null, 'and nothing was delivered');
+  assert.equal(run.status, 'review', 'the run is untouched — still reviewable, still approvable for free');
+
+  // …and the free finalize of the same cut still works, which is what the message offers
+  assert.equal((await post(`/api/runs/${runId}/approve`, { upscale: false })).statusCode, 200);
+});
+
 // Regression: approving must finalize the CUT the reviewer previewed, not whichever take rendered
 // last. A run with two cuts (full → c1, K1 re-render → c2) must honor `cut:'c1'`.
 async function makeTwoCutRun(idea) {

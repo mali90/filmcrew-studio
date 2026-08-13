@@ -1010,6 +1010,30 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
     // never used to build a path (that comes from chosen.take) — so there is no traversal risk.
     const m0 = readManifest(dir);
     const cuts = m0?.cuts ?? [];
+    // The vendor that will REALLY bill, decided once here: an explicit reviewer pick (validated
+    // above) beats the env derivation, because it is the one the finalize child is pinned to below.
+    // The ledger line and the estimate beside it read this same value, so the guard, the money row
+    // and the child can never name three different vendors.
+    const upscaleProvider = upscale ? provider ?? readUpscaleProvider(envRoot ?? root, m0?.backend, childEnv) : null;
+    // …and a vendor with no key cannot run at all: the child throws in falHeaders()/segmindHeaders()
+    // before a single Topaz submission. Accepting that would return 202 and write a PRICED cost
+    // ledger row for a charge that never happened — the run's money history is the one record that
+    // has to stay true. Refused HERE, before the manifest is touched, alongside the other pre-spend
+    // guards. The keys are read exactly as the estimator reads them (dotenv semantics, childEnv
+    // first) because that is the environment the finalize child gets, and the message names the
+    // variable that is missing. The approve bar already disables a keyless provider; this is the
+    // backstop for a stale or still-loading setup-status query.
+    if (upscaleProvider) {
+      // BOTH fal spellings — config.js accepts either, so demanding FAL_KEY alone would refuse an
+      // install the child would have billed happily.
+      const keys = upscaleProvider === 'segmind' ? ['SEGMIND_API_KEY'] : ['FAL_KEY', 'FAL_API_KEY'];
+      if (!keys.some((k) => envGet(k))) {
+        throw Object.assign(new Error(`the ${upscaleProvider} upscale needs an API key — ${keys.join(' or ')} is not set`), {
+          statusCode: 400,
+          hint: `add ${keys[0]} in Setup, or approve without the upscale — the cut is already assembled and delivering it costs nothing`,
+        });
+      }
+    }
     if (cut != null && !/^c\d{1,4}$/.test(String(cut))) {
       throw Object.assign(new Error(`"${cut}" is not a cut id`), { statusCode: 400, hint: 'cut ids look like c1, c2, …' });
     }
@@ -1056,9 +1080,8 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
       // time a rate lands in prices.json.
       // A provider with no row AT ALL throws in there; that is still "no rate we can quote", and an
       // approve already past its checks must not die over a ledger note.
-      // An explicit reviewer pick (validated above) beats the env derivation — it is the vendor the
-      // finalize child is pinned to below, so the line records (and prices) who actually bills.
-      const upscaleProvider = provider ?? readUpscaleProvider(envRoot ?? root, m.backend, childEnv);
+      // `upscaleProvider` is the vendor decided (and key-checked) above — the one the finalize child
+      // is pinned to below, so the line records and prices whoever actually bills.
       // …and the line carries the FIGURE, off the very take this approve upscales, priced exactly
       // as the estimate endpoint prices it (same helper, same target, same model knob). A ledger row
       // that only said "see estimate" left the one durable record of a paid action with no number in

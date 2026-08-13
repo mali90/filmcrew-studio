@@ -247,6 +247,16 @@
   install commands.
 
 ### Fixed
+- **An upscale on a vendor with no API key is now refused outright, instead of being billed to a
+  history it never happened in.** The approve bar already disables a provider it has no key for,
+  but that is presentation: a stale tab, or a click that lands while the setup check is still
+  loading, could still name it. The server accepted that approval — it recorded a *priced* line in
+  the run's cost ledger and returned "queued", and only then did the child fail on the missing key
+  before a single frame was ever sent for upscaling. So the one durable record of what a run cost
+  showed a charge that never occurred. The key is now checked before anything is written: a
+  provider with no `FAL_KEY`/`FAL_API_KEY` (or `SEGMIND_API_KEY`) is a 400 that names the missing
+  variable and points at the free finalize, the ledger is untouched, and the run stays exactly as
+  reviewable as it was.
 - **The prompt preview measures a voice clip with the render's own `ffprobe`, not the server's.**
   Seedance 2.5 on Segmind states a two-second floor for a reference audio clip, so the renderer
   drops a shorter one rather than pay for a rejected submit — which makes a clip's *duration* a
