@@ -145,6 +145,25 @@ export function estimateRender(spec, { backend, mode = 'full', jobId, cascade = 
  *  (a registered-but-unpriced backend is a known state, so it belongs in the "have:" list). */
 const priceKeys = () => Object.keys(PRICES).filter((k) => PRICES[k] && typeof PRICES[k] === 'object' && ('perSecondUsd' in PRICES[k] || PRICES[k].$alias));
 
+/**
+ * The bytes a knob carries once this server PINS it into a child's environment — and, because a pin
+ * lands in exactly that env, the reading readEnvVar gives it back below.
+ *
+ * A pin is the one case where this server AUTHORS a knob instead of mirroring one, so it is the one
+ * case where a value may be normalized at all. It has to be: dotenv keeps padding INSIDE a quoted
+ * value, so a dotenv-valid `UPSCALE_TARGET_RESOLUTION=" 720p "` was priced here as `720p` (this
+ * trim, on the way back out of the pinned env) and handed to the child as ` 720p `, which
+ * shortSideForTarget refuses by name — a PRICED ledger row, no upscale, and a run in attention.
+ * Normalizing at the pin instead makes the value quoted, the value pinned and the value the child
+ * consumes one string.
+ *
+ * Trim only — never a default, never a case fold. '' stays '', because pinning an EMPTY knob is how
+ * approve says "this was unset when we quoted you" (see readUpscaleKnobs), and both sides read ''
+ * back as the same default. And nothing normalizes a knob this server merely MIRRORS: an unpinned
+ * value is returned exactly as dotenv would load it, because that is what the child will be handed.
+ */
+const pinnedEnvValue = (value) => String(value ?? '').trim();
+
 /** One value out of <envRoot>/.env, read as DATA (never sourced) — the settings page writes that
  *  file and the render child reads it, so it is what the estimate has to price. Exported because
  *  the same reader answers the non-price knobs a run's boundary budget depends on (run-service's
@@ -154,8 +173,9 @@ export function readEnvVar(envRoot, key, fallbackEnv) {
   // The CHILD's precedence, mirrored exactly: a variable already present in the spawned process's
   // env (childEnv — even an explicit empty string) wins, because dotenv never overwrites an
   // existing variable. Reading .env first here would quote one provider while the render child
-  // actually bills another.
-  if (fallbackEnv && Object.hasOwn(fallbackEnv, key)) return String(fallbackEnv[key] ?? '').trim();
+  // actually bills another. Read through pinnedEnvValue, the same rule that WROTE any value this
+  // server pinned there, so a pinned knob reads back as the exact string the child will consume.
+  if (fallbackEnv && Object.hasOwn(fallbackEnv, key)) return pinnedEnvValue(fallbackEnv[key]);
   try {
     // dotenv's grammar, through the ONE implementation of it this repo has (src/lib/env-file.js,
     // where it is pinned against dotenv's own parser). A regex of our own answered three of its
@@ -242,6 +262,35 @@ export function readUpscaleModel(envRoot, childEnv) {
 export function readUpscaleMaxFactor(envRoot, childEnv) {
   const raw = readEnvVar(envRoot, 'FAL_TOPAZ_MAX_FACTOR', childEnv);
   return raw === '' ? undefined : Number(raw);
+}
+
+/**
+ * The .env knobs the finalize child must NOT re-derive: approve PRICES the ledger row from these
+ * exact values, so the child has to SPEND on them. Per vendor, because the two Topaz APIs read
+ * different knobs — fal takes a factor plan (FAL_TOPAZ_MAX_FACTOR, which decides how far a small
+ * clip is lifted and so which OUTPUT tier fal bills) plus a model (FAL_TOPAZ_MODEL, also a price
+ * knob: fal halves the rate for Gaia 2 output), while Segmind's Topaz takes a target resolution
+ * (UPSCALE_TARGET_RESOLUTION) and has no factor and no model at all. Each vendor is pinned only
+ * what it actually consumes; a knob it never reads cannot move its bill. Segmind's other input,
+ * `target_fps`, is PROBED off the source clip rather than configured — there is no knob to pin, and
+ * it moves no price (Segmind bills flat per INPUT second).
+ *
+ * An EMPTY value is pinned too, and deliberately: dotenv leaves an already-present variable alone
+ * whatever it holds, so '' is exactly "this knob was unset when we quoted you" — and every reader on
+ * both sides (config.js's numEnv and `||` defaults, the readers above) turns '' back into the same
+ * default. Pinning nothing instead would leave a knob ADDED to .env in the gap free to move the
+ * charge away from the recorded estUsd.
+ *
+ * It lives HERE, beside the readers, because the same map is what every quote of that job is priced
+ * THROUGH (approve's ledger row and the estimate endpoint both overlay it on childEnv before
+ * reading): one function decides the bytes, so the price and the spend cannot be told apart.
+ * @param {'fal'|'segmind'} provider  the vendor approve resolved — never a raw request field
+ */
+export function readUpscaleKnobs(envRoot, provider, childEnv) {
+  const pin = (key) => pinnedEnvValue(readEnvVar(envRoot, key, childEnv));
+  return provider === 'segmind'
+    ? { UPSCALE_TARGET_RESOLUTION: pin('UPSCALE_TARGET_RESOLUTION') }
+    : { FAL_TOPAZ_MODEL: pin('FAL_TOPAZ_MODEL'), FAL_TOPAZ_MAX_FACTOR: pin('FAL_TOPAZ_MAX_FACTOR') };
 }
 
 /** OUTPUT frame height → the row's tier key. fal tiers Topaz by the output, and this app's 9:16
@@ -345,4 +394,4 @@ export function takeUpscaleClips(takeDir, { spec = null } = {}) {
 
 export const VOICE_MINT_USD = PRICES.voiceMintUsd;
 
-export default { estimateRender, estimateUpscale, takeUpscaleClips, jobSeconds, readRenderResolution, readSeedanceResolution, readUpscaleProvider, readUpscaleModel, readUpscaleMaxFactor, VOICE_MINT_USD };
+export default { estimateRender, estimateUpscale, takeUpscaleClips, jobSeconds, readRenderResolution, readSeedanceResolution, readUpscaleProvider, readUpscaleModel, readUpscaleMaxFactor, readUpscaleKnobs, VOICE_MINT_USD };

@@ -384,3 +384,32 @@ test('Segmind is asked for the target approve PRICED, not the one .env holds at 
   assert.equal(lastSegmindTopazArgs().target_resolution, '720p', 'at the target the estimate quoted — a 4k lift is 4× the bill nobody approved');
   assert.equal(done.manifest.costLedger.findLast((l) => l.action === 'upscale').provider, 'segmind');
 });
+
+// ── …and the value pinned is the value priced, byte for byte ────────────────────────────────────
+// Pinning the knobs made the quote and the bill one decision — but only if the two sides read the
+// pin the same way. dotenv keeps padding INSIDE a quoted value, so `UPSCALE_TARGET_RESOLUTION=
+// " 720p "` is a legal .env that priced as `720p` (the reader trims a value already present in the
+// child's env) and pinned as ` 720p ` — which the child refuses by name in shortSideForTarget. The
+// user was left with a PRICED ledger row, no upscale and a run in attention.
+//
+// Nothing is edited in the gap here: the padding alone is the whole test, and the run has to come
+// out the far end DELIVERED. The estimate is asserted too, because a quote that reads the file one
+// way while approve pins it another is the same divergence a step earlier.
+test('a dotenv-quoted target is priced, pinned and consumed as ONE value', { skip: FF ? false : 'ffmpeg not installed' }, async () => {
+  fs.writeFileSync(gapEnvFile, 'UPSCALE_TARGET_RESOLUTION=" 720p "\n');
+  const { runId, run } = await makeReviewedRun('pad the target you quoted', gapApp);
+  const cut = run.manifest.cuts.at(-1);
+  const before = segmindTopazSubmits();
+
+  const quoted = (await get(`/api/runs/${runId}/estimate?mode=upscale&cut=${cut.id}&provider=segmind`, gapApp)).json();
+  assert.equal(quoted.targetShortSide, 720, 'the button quotes the target the child will really be handed');
+
+  assert.equal((await post(`/api/runs/${runId}/approve`, { upscale: true, cut: cut.id, provider: 'segmind' }, gapApp)).statusCode, 202);
+  const done = await waitForStatus(runId, ['complete', 'attention'], { on: gapApp });
+  assert.equal(done.status, 'complete', `the finalize child ran on the padded target (err=${JSON.stringify(done.error)})`);
+
+  assert.ok(segmindTopazSubmits() > before, 'the upscale the ledger row was written for actually ran');
+  assert.equal(lastSegmindTopazArgs().target_resolution, '720p', 'Segmind was asked for exactly the string approve priced — padding included is a 400 from the vendor at best');
+  assert.equal(done.manifest.costLedger.findLast((l) => l.action === 'upscale').estUsd, quoted.totalUsd);
+  assert.ok(fs.existsSync(done.manifest.approved.final), 'and the master that row was written for exists');
+});

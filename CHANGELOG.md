@@ -258,6 +258,15 @@
   vendor is now pinned exactly what it consumes, resolved once, at the same moment its vendor is:
   what approve priced is what the child spends. Editing `.env` after that changes the *next* upscale,
   as it always should have.
+- **…and a quoted setting no longer strands it.** `.env` lets a value be quoted, and everything
+  inside the quotes belongs to the value — so `UPSCALE_TARGET_RESOLUTION=" 720p "` is a perfectly
+  legal line whose spaces travel with it. Approve priced that as `720p` and handed the child the
+  padded text, which the upscaler refuses by name: the run stopped, needing attention, with a priced
+  upscale row in its money history and no upscaled film to show for it. The value approve prices is
+  now the exact value the child is given — the target, the Topaz model and the factor cap alike —
+  and the estimate on the button reads it the same way, so the target you are quoted is the one that
+  runs. A setting left unset is still recorded as unset, so adding one while the job waits its turn
+  still cannot move the charge.
 - **A render renders the plan you were quoted for.** The estimate on the button, the take's recorded
   cost, the cost-ledger row and the prompt overrides that ride along are all computed from the plan
   as it stands when you click — while the render child re-read the run's `spec.json` when it started.

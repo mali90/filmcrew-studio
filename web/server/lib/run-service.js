@@ -10,7 +10,7 @@ import { newManifest, writeManifest, readManifest, updateManifest } from './web-
 import { scanRun, listRuns, defaultIsAlive, finalizedFinal } from './run-scan.js';
 import { createRingLog } from './ring-log.js';
 import { watchRun } from './artifact-watch.js';
-import { estimateRender, estimateUpscale, readEnvVar, readProbeResolution, readRenderResolution, readUpscaleMaxFactor, readUpscaleModel, readUpscaleProvider, readUpscaleTargetShortSide, takeUpscaleClips } from './estimator.js';
+import { estimateRender, estimateUpscale, readEnvVar, readProbeResolution, readRenderResolution, readUpscaleKnobs, readUpscaleMaxFactor, readUpscaleModel, readUpscaleProvider, readUpscaleTargetShortSide, takeUpscaleClips } from './estimator.js';
 import { safeChild } from './paths.js';
 // Both config-free by construction (the runs-caps canary walks this graph): the continuity rule is a
 // pure function over a run record, and the model registry imports nothing at all.
@@ -493,26 +493,11 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
     return `${slugify(spec?.project?.title)}-${short}${suffix ? `-${suffix}` : ''}`;
   }
 
-  /**
-   * The .env knobs the finalize child must NOT re-derive: approve PRICES the ledger row from these
-   * exact values, so the child has to SPEND on them. Per vendor, because the two Topaz APIs read
-   * different knobs — fal takes a factor plan (FAL_TOPAZ_MAX_FACTOR, which decides how far a small
-   * clip is lifted and so which OUTPUT tier fal bills) plus a model (FAL_TOPAZ_MODEL, also a price
-   * knob: fal halves the rate for Gaia 2 output), while Segmind's Topaz takes a target resolution
-   * (UPSCALE_TARGET_RESOLUTION) and has no factor and no model at all. Each vendor is pinned only
-   * what it actually consumes; a knob it never reads cannot move its bill. Segmind's other input,
-   * `target_fps`, is PROBED off the source clip rather than configured — there is no knob to pin,
-   * and it moves no price (Segmind bills flat per INPUT second).
-   *
-   * An EMPTY value is pinned too, and deliberately: dotenv leaves an already-present variable alone
-   * whatever it holds, so '' is exactly "this knob was unset when we quoted you" — and every reader
-   * on both sides (config.js's numEnv and `||` defaults, the estimator's own) turns '' back into the
-   * same default. Pinning nothing instead would leave a knob ADDED to .env in the gap free to move
-   * the charge away from the recorded estUsd.
-   */
-  const upscaleKnobsFor = (provider) => (provider === 'segmind'
-    ? { UPSCALE_TARGET_RESOLUTION: envGet('UPSCALE_TARGET_RESOLUTION') }
-    : { FAL_TOPAZ_MODEL: envGet('FAL_TOPAZ_MODEL'), FAL_TOPAZ_MAX_FACTOR: envGet('FAL_TOPAZ_MAX_FACTOR') });
+  /** The .env knobs the finalize child must NOT re-derive — approve PRICES the ledger row from
+   *  these exact values, so the child has to SPEND on them. Which knobs, why an unset one is pinned
+   *  as '' and why the pin normalizes the value it carries all live with the reader that builds the
+   *  map (estimator.readUpscaleKnobs), because the estimate endpoint prices through the same one. */
+  const upscaleKnobsFor = (provider) => readUpscaleKnobs(envRoot ?? root, provider, childEnv);
 
   function enqueueAssemble(runId, fromDir, { upscale = false, suffix, upscaleProvider = null, upscaleKnobs = null } = {}) {
     const dir = dirFor(runId);

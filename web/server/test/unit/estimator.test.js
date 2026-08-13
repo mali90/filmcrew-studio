@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { estimateRender, estimateUpscale, jobSeconds, readEnvVar, readProbeResolution, readRenderResolution, readSeedanceResolution, readUpscaleMaxFactor, readUpscaleProvider, readUpscaleTargetShortSide } from '../../lib/estimator.js';
+import { estimateRender, estimateUpscale, jobSeconds, readEnvVar, readProbeResolution, readRenderResolution, readSeedanceResolution, readUpscaleKnobs, readUpscaleMaxFactor, readUpscaleModel, readUpscaleProvider, readUpscaleTargetShortSide } from '../../lib/estimator.js';
 import { voiceKnobs } from '../../lib/voice-refs.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
@@ -413,6 +413,39 @@ test('readEnvVar reads a .env exactly as the render child does — dotenv itself
   } finally {
     for (const d of [quirkyDir, plainDir]) fs.rmSync(d, { recursive: true, force: true });
   }
+});
+
+// ── …and ONE normalization for a knob that is both PRICED and PINNED ─────────
+// A knob approve pins is the one value this server AUTHORS rather than mirrors, and pricing it is
+// the same act as spending it — so the pin, the quote and the child's own reading have to be one
+// string. Where they were two, a dotenv-legal `" 720p "` priced as `720p` (a value already in the
+// child's env is read trimmed) and reached the child as ` 720p `, which upscale.js refuses by name:
+// a PRICED ledger row, no upscale, a run in attention. Padding on every knob a vendor consumes, and
+// the child's own reader (buildConfig) as the oracle for what it binds.
+test('a pinned knob carries the exact value the quote priced — and the one the child binds', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-pinned-'));
+  try {
+    fs.writeFileSync(path.join(dir, '.env'), 'UPSCALE_TARGET_RESOLUTION=" 720p "\nFAL_TOPAZ_MODEL=" Gaia 2 "\nFAL_TOPAZ_MAX_FACTOR=" 2 "\n');
+
+    const segmind = readUpscaleKnobs(dir, 'segmind');
+    assert.deepEqual(segmind, { UPSCALE_TARGET_RESOLUTION: '720p' }, 'the pin carries the value, not dotenv\'s padding around it');
+    assert.equal(buildConfig(segmind).upscale.targetResolution, '720p', 'which is a target Segmind\'s Topaz accepts — the padded one throws before a frame is uploaded');
+    assert.equal(readUpscaleTargetShortSide(dir, 'kling-o3@fal', segmind, 'segmind'), 720, 'and the quote reads the pin back UNCHANGED — priced and pinned are one value');
+
+    const fal = readUpscaleKnobs(dir, 'fal');
+    assert.deepEqual(fal, { FAL_TOPAZ_MODEL: 'Gaia 2', FAL_TOPAZ_MAX_FACTOR: '2' });
+    assert.equal(readUpscaleModel(dir, fal), buildConfig(fal).fal.topazModel, 'fal is asked for the model whose rate the row was priced at (Gaia 2 bills at half)');
+    assert.equal(readUpscaleMaxFactor(dir, fal), buildConfig(fal).fal.topazMaxFactor, 'and the cap that decided which OUTPUT tier that figure came from');
+
+    // The deliberate EMPTY pin survives normalization: '' is "this knob was unset when we quoted
+    // you", which is what stops a knob ADDED to .env in the gap from moving the charge. Trimming
+    // must not turn it into an absent variable — dotenv would then let the new line win.
+    fs.writeFileSync(path.join(dir, '.env'), '# nothing configured\n');
+    assert.deepEqual(readUpscaleKnobs(dir, 'segmind'), { UPSCALE_TARGET_RESOLUTION: '' }, 'unset still RIDES, as an empty string');
+    assert.deepEqual(readUpscaleKnobs(dir, 'fal'), { FAL_TOPAZ_MODEL: '', FAL_TOPAZ_MAX_FACTOR: '' });
+    assert.equal(buildConfig(readUpscaleKnobs(dir, 'fal')).fal.topazMaxFactor, 4, 'and both sides read \'\' back as the same default');
+    assert.equal(readUpscaleMaxFactor(dir, readUpscaleKnobs(dir, 'fal')), undefined, 'the estimate\'s own reading of \'\' — the planner\'s default, never a second copy of 4');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 // The two are one system: a Segmind-rendered run must show SEGMIND's Topaz figure on approve, not
