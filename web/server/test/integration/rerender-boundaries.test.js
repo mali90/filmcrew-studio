@@ -110,7 +110,9 @@ const mixed = [{ job: 'K1', take: 't2', from: null }, ...JOBS.slice(1).map((job,
   job, take: 't1', from: { take: 't1', job: JOBS[i] },
 }))];
 
-function fakeService(runId, layout, over = {}) {
+/** `wiring` overrides what the service is BUILT with (env root, served voices file, child env) —
+ *  the knobs a real deployment varies, kept apart from `over`, which shapes the run on disk. */
+function fakeService(runId, layout, over = {}, wiring = {}) {
   const dir = seedRun(runId, layout, over);
   const enqueued = [];
   const live = [];
@@ -127,6 +129,7 @@ function fakeService(runId, layout, over = {}) {
     root: HOST_ROOT, runsDir, outDir, envRoot, voicesFile, childEnv: { PATH: process.env.PATH }, mgr,
     bus: { emit() {}, subscribe: () => () => {} },
     isAlive: () => false,
+    ...wiring,
   });
   return { dir, svc, enqueued, drain: () => { live.length = 0; } };
 }
@@ -405,6 +408,61 @@ test('a spec that disables audio spends no voice slot — the pin it leaves free
 
   assert.equal(r.boundaries.startMode, 'soft', 'audio off ⇒ no voice reference ⇒ the 50th slot is the opening pin\'s');
   assert.deepEqual(svc.detail(runId).voiceRefs, { K1: 0, K2: 0, K3: 0, K4: 0 }, 'and the dialog is told the same');
+});
+
+// …and the same is true of WHERE those clips live. config.js resolves the voices dir straight off
+// the environment (`voices.dir = env.VOICES_DIR || './voices'`), so a project that sets VOICES_DIR
+// in its .env has the render child — and the prompt preview beside it — reading a folder that is
+// NOT <root>/voices. Budgeting against the default there books a slot no clip will spend, or frees
+// one a clip will: at the 50-reference cap that is a soft seam sold on a PAID take that drops it,
+// or a seam refused that the take would have kept. The dir is resolved the child's way instead.
+const altVoices = path.join(tmpRoot, 'voices-alt');
+const emptyVoices = path.join(tmpRoot, 'voices-empty');
+for (const d of [altVoices, emptyVoices]) fs.mkdirSync(d, { recursive: true });
+// A name <root>/voices cannot hold, so a run wired this way is only ever voiced by the override.
+fs.writeFileSync(path.join(altVoices, 'lampwright.mp3'), 'ID3');
+/** An env root whose .env is exactly one VOICES_DIR assignment. */
+const envRootWith = (name, value) => {
+  const dir = path.join(tmpRoot, name);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, '.env'), `VOICES_DIR=${value}\n`);
+  return dir;
+};
+
+test("the run's .env picks the voices dir, exactly as it does for the render child", () => {
+  const runId = 'web-19990101000017-envvoices';
+  const { svc } = fakeService(runId, intact, { ...on25, voiceLines: lineFor('lampwright') },
+    { envRoot: envRootWith('envroot-alt', altVoices), voicesFile: undefined });
+
+  const r = svc.rerenderJob(runId, { jobId: 'K2', boundaries: 'both' });
+
+  assert.equal(r.boundaries.startMode, 'none', 'the override holds the clip ⇒ 49 + 1 fills the cap');
+  assert.deepEqual(svc.detail(runId).voiceRefs, { K1: 0, K2: 1, K3: 0, K4: 0 }, 'and the dialog agrees');
+});
+
+// A relative VOICES_DIR is anchored at the PROJECT ROOT (config.js's resolvePath), not at the
+// server's cwd: `VOICES_DIR=./voices-alt` has to name one folder on both ends of the spawn.
+test('a relative VOICES_DIR resolves against the project root, like config.js', () => {
+  const runId = 'web-19990101000018-relvoices';
+  const relative = path.relative(HOST_ROOT, altVoices);
+  const { svc } = fakeService(runId, intact, { ...on25, voiceLines: lineFor('lampwright') },
+    { envRoot: envRootWith('envroot-rel', relative), voicesFile: undefined });
+
+  assert.equal(svc.rerenderJob(runId, { jobId: 'K2', boundaries: 'both' }).boundaries.startMode, 'none');
+});
+
+// …and childEnv outranks that .env, because dotenv never overwrites a variable the spawned child
+// already has. Reading the file first would budget against a dir the renderer will not open.
+test('an explicit childEnv VOICES_DIR beats the .env, the way it does in the child', () => {
+  const runId = 'web-19990101000019-childenvvoices';
+  const { svc } = fakeService(runId, intact, { ...on25, voiceLines: lineFor('lampwright') }, {
+    envRoot: envRootWith('envroot-empty', emptyVoices),
+    voicesFile: undefined,
+    childEnv: { PATH: process.env.PATH, VOICES_DIR: altVoices },
+  });
+
+  assert.equal(svc.rerenderJob(runId, { jobId: 'K2', boundaries: 'both' }).boundaries.startMode, 'none',
+    'childEnv named the dir holding the clip; the .env named an empty one');
 });
 
 test('the run payload carries the same count, because the browser cannot read the voices dir', () => {

@@ -247,6 +247,17 @@
   install commands.
 
 ### Fixed
+- **A custom `VOICES_DIR` now counts in the seam budget it actually affects.** `VOICES_DIR` is the
+  documented way to keep character voice clips somewhere other than `<project>/voices`, and the
+  render child honors it — but the server's continuity budget scanned the default folder anyway. On
+  fal's Seedance 2.5, where images, audio and video all draw on one 50-reference cap, that made the
+  re-render dialog wrong in *both* directions right at the cap: a project that had moved its voices
+  was promised a soft seam the paid take then dropped as over-cap, and one whose override folder
+  holds no clip for a speaker was refused a seam that take would have kept. The folder is now
+  resolved exactly as the renderer resolves it — an explicit value in the child's environment
+  first, then the run's `.env`, a relative path anchored at the project root — through the one
+  lookup the prompt preview already used, so the preview, the budget and the render cannot name
+  three different folders.
 - **The boundary you choose for a segment re-render is now the boundary that renders.** The
   re-render dialog names each end before you pay — "the join from K1 becomes a scene cut", "K1 opens
   the cut, so nothing pins its start" — but where the plan authored a `first_frame`/`last_frame` for

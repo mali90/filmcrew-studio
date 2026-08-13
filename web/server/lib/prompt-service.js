@@ -23,7 +23,7 @@ import { writeFileAtomic } from './atomic-file.js';
 // Config-free siblings (no host import, so the lazy-import idiom above still holds): the voices
 // registry and the two voice knobs are read the same way here and by the seam budget in
 // run-service.js — a second reader is how a preview and a paid render start disagreeing.
-import { voiceClipLookup, voiceKnobs } from './voice-refs.js';
+import { voiceClipLookup, voiceKnobs, voicesDirFor } from './voice-refs.js';
 // config.js's own boolean coercion, imported as a PURE RULE (the same standing this file's siblings
 // give prompt-settings.js's audioFlag): rules come from the tree, DATA and paths still come from the
 // run's `root` below. A trimmed copy here is how a preview and a paid render start disagreeing about
@@ -194,9 +194,9 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
   }
   const get = await envLookup({ root, envRoot, childEnv });
   const defaults = promptDefaults(get);
-  // Wherever the render CHILD will look for voices: its own VOICES_DIR (childEnv when the caller
-  // isolated the cast roots, else the .env), falling back to the dir this server serves.
-  const voiceClipFor = voiceClipLookup(get('VOICES_DIR') || voicesDir || path.join(root, 'voices'), root, slug);
+  // Wherever the render CHILD will look for voices — through the one resolution the seam budget
+  // uses too, so a preview and the money question it feeds can never name different dirs.
+  const voiceClipFor = voiceClipLookup(voicesDirFor({ get, root, voicesDir }), root, slug);
   // Renderer parity needs each clip's DURATION: fitAudioRef drops a clip under the model's
   // per-clip minimum before the paid submit, and a preview counting a doomed @AudioN would differ
   // from the wire prompt (the exactness this whole module exists for). Probed once here — the view

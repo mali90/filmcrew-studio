@@ -55,6 +55,31 @@ export function voiceClipLookup(voicesDir, root, slug) {
 }
 
 /**
+ * The voices directory the render CHILD will really read — the ONE resolution both server surfaces
+ * use, so a prompt preview, a seam budget and the spawned renderer can never disagree about which
+ * clips exist.
+ *
+ * The order is the CHILD's, not the caller's. `VOICES_DIR` out of the run's environment wins,
+ * because that is the whole of config.js's rule (`voices.dir = env.VOICES_DIR || './voices'`), and
+ * inside `get` an explicitly passed childEnv value already beats the .env file — dotenv never
+ * overwrites an existing variable. The dir the API SERVES is therefore the fallback, not the
+ * winner, and still decides in practice: app.js mirrors an isolated `voicesFile` into
+ * `childEnv.VOICES_DIR`, so it comes back through this same reader, while a service wired without
+ * that mirroring keeps reading the dir it serves. Ranking the served dir first would re-break the
+ * documented override: app.js ALWAYS hands down a resolved `voicesFile`, so "explicit first" would
+ * let the default `<root>/voices` outrank a `.env` the child obeys.
+ *
+ * A relative value is anchored at the project root, exactly like config.js's `resolvePath` — the
+ * child's cwd is the host repo, and `VOICES_DIR=./voices-alt` has to mean the same dir on both ends.
+ *
+ * @param {{get:(key:string)=>string, root:string, voicesDir?:string|null}} p
+ */
+export function voicesDirFor({ get, root, voicesDir }) {
+  const dir = get('VOICES_DIR') || voicesDir || path.join(root, 'voices');
+  return path.isAbsolute(dir) ? dir : path.resolve(root, dir);
+}
+
+/**
  * The two voice knobs, mirrored from config.seedance for a server that may not import config.js.
  * The ONE mirror: prompt-service's promptDefaults reads them through here too, so the preview and
  * the seam budget can never disagree about whether a clip rides.
@@ -84,8 +109,9 @@ export const voiceKnobs = (get) => ({
  * caps costs nothing at all: this runs on every run-detail read, and most runs have no such budget.
  *
  * @param {object} spec  the render spec
- * @param {{caps?:object, speakersOf:(job:object)=>string[], voicesDir:string, root:string,
- *          slug:(s:string)=>string, get:(key:string)=>string}} p
+ * @param {{caps?:object, speakersOf:(job:object)=>string[], voicesDir?:string|null, root:string,
+ *          slug:(s:string)=>string, get:(key:string)=>string}} p  `voicesDir` is the dir the API
+ *          serves — the FALLBACK, ranked behind the environment's `VOICES_DIR` (see voicesDirFor).
  * @returns {Record<string, number>|null}
  */
 export function voiceRefCountsFor(spec, { caps, speakersOf, voicesDir, root, slug, get }) {
@@ -96,11 +122,11 @@ export function voiceRefCountsFor(spec, { caps, speakersOf, voicesDir, root, slu
   // @Audio reference however the environment is set. Counting one anyway reserved a slot nobody
   // spends and gave up a boundary pin the PAID re-render would have kept.
   const audioOn = audioFlag(spec, envAudio);
-  const hasClip = voiceClipLookup(voicesDir, root, slug);
+  const hasClip = voiceClipLookup(voicesDirFor({ get, root, voicesDir }), root, slug);
   const jobs = spec?.kling?.jobs ?? [];
   return Object.fromEntries(jobs.map((job) => [job?.job_id, voiceRefDemand({
     caps, speakers: speakersOf(job), hasClip, castRefCount: 1, audioOn, voiceMode,
   })]));
 }
 
-export default { voiceClipLookup, voiceKnobs, voiceRefCountsFor };
+export default { voiceClipLookup, voiceKnobs, voiceRefCountsFor, voicesDirFor };

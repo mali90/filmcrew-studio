@@ -66,8 +66,15 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
     resolution: readRenderResolution(envRoot ?? root, backend, childEnv),
     probeResolution: readProbeResolution(envRoot ?? root, backend, childEnv),
   });
-  // Same default as app.js, so a service built without one still reads the voices the child reads.
-  const voicesDir = path.dirname(voicesFile ?? path.join(root, 'voices', 'voices.json'));
+  // The voices dir this server SERVES (same default as app.js). It is only the FALLBACK for the
+  // budget below: what the render child really reads is VOICES_DIR out of the run's environment, so
+  // voice-refs.js ranks the two in the child's order (childEnv, then the .env, then this). An
+  // isolated voicesFile still wins — app.js mirrors it into childEnv.VOICES_DIR, so it arrives
+  // through the reader the child itself obeys.
+  const servedVoicesDir = path.dirname(voicesFile ?? path.join(root, 'voices', 'voices.json'));
+  // One reader over the run's environment, as DATA (never sourced) — childEnv beats <envRoot>/.env,
+  // exactly as dotenv leaves an already-set variable alone in the spawned child.
+  const envGet = (key) => readEnvVar(envRoot ?? root, key, childEnv);
   const ringLogs = new Map();   // runId → ring log
   const watchers = new Map();   // runId → watcher
   const announced = new Map();  // runId → Set<artifact rel> already sent to clients — persists across watcher restarts so a spec block is never lost to a startup race nor re-announced
@@ -392,10 +399,10 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
   const voiceRefsFor = (spec, backend) => voiceRefCountsFor(spec, {
     caps: capsOf(backend),
     speakersOf: (job) => (Array.isArray(job?.shots) ? jobSpeakers(job, spec) : []),
-    voicesDir,
+    voicesDir: servedVoicesDir,
     root,
     slug,
-    get: (key) => readEnvVar(envRoot ?? root, key, childEnv),
+    get: envGet,
   });
 
   /** Write a full-composition render.json into takeDir: every spec job's newest clip, in order. */
