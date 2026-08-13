@@ -15,7 +15,8 @@ import { validateSpec } from './spec-schema.js';
 import { RENDER_MODELS, capsFor, castLimitFor, normalizeBackend, demotesOpeningFrame } from './render-models.js';
 import { knobsFor, seedanceResolution, seedancePromptSettings } from './prompt-settings.js';
 import { voiceRefDemand } from './seedance-args.js';
-import { buildInventory, inventoryText, characterRefs, refBelongsTo } from './elements.js';
+import { buildInventory, inventoryText, characterRefs, knownCastSlugs } from './elements.js';
+import { refBelongsTo } from './cast-refs.js';
 import { getVoiceRefClip, voicesInventoryText } from './voices.js';
 import { jobSpeakers } from './cast-groups.js';
 import { SEEDANCE_TTV_GUIDANCE } from './seedance.js';
@@ -337,6 +338,10 @@ export async function buildCtx({ brief, backend, aspectRatio, durationTargetS, c
   // text-to-video decision — enriching a t2v prompt must never flip the render mode. `environment`
   // is deliberately NOT a param of isTextToVideoPlan below.
   const environmentText = await loadEnvironment(environment);
+  // Every character on disk, scanned ONCE: who owns which reference image is decided against the
+  // whole roster (cast-refs.js), and the listing the Casting agent reads, the post-plan top-up and
+  // the cast page all have to decide it the same way.
+  const rosterSlugs = knownCastSlugs();
   return {
     brief,
     backend: be, // the CANONICAL `<model>@<provider>` id — what gets stamped onto the spec
@@ -346,8 +351,9 @@ export async function buildCtx({ brief, backend, aspectRatio, durationTargetS, c
     durationTargetS: durationTargetS ?? config.kling.defaultShotSeconds * 3,
     // Guaranteed text-to-video? (no cast AND no reference image to attach — see isTextToVideoPlan)
     textToVideo: isTextToVideoPlan({ backend: be, cast, refCount: inv.filter((e) => e.type === 'reference').length }),
-    inventoryText: inventoryText(inv, { castNames: cast?.length ? [...cast] : [] }),
+    inventoryText: inventoryText(inv, { castNames: cast?.length ? [...cast] : [], knownSlugs: rosterSlugs }),
     inventory: inv, // the scanned entries themselves — topUpStarredElements re-reads them post-plan
+    knownCastSlugs: rosterSlugs, // the roster reference ownership is resolved against (cast-refs.js)
     voicesText: voicesInventoryText(),
     profilesText: await loadProfiles(cast),
     castNames: cast?.length ? [...cast] : null,
@@ -456,9 +462,19 @@ export function topUpStarredElements(spec, ctx) {
     : jobs.length ? Math.max(...jobs.map(budgetFor))
     : Math.max(0, Math.min(imageCap, combinedCap));
   const perElementCap = caps.maxRefsPerElement != null ? 1 + caps.maxRefsPerElement : Infinity;
+  // Who this install knows about, so a filename is read against the WHOLE roster rather than one
+  // name at a time: slugs prefix one another (ann / ann-marie) and only the longest match owns the
+  // file (cast-refs.js). The plan's own `character` spellings join the profiles on disk — an element
+  // may name a character no profile does. Injectable for the same reason `ctx.inventory` is: this
+  // deterministic layer is unit-tested over synthetic casts.
+  const roster = new Set([
+    ...(ctx.knownCastSlugs ?? knownCastSlugs()),
+    ...cast.map((name) => slug(name)),
+    ...els.map((e) => e?.character).filter(Boolean).map((c) => slug(c)),
+  ]);
   // An element belongs to a character by its `character` field when set, else by the same filename
-  // convention the cast routes link with (id === slug, or "<slug>-…").
-  const ownedBy = (e, cslug) => (e?.character ? slug(e.character) === cslug : refBelongsTo(String(e?.id ?? ''), cslug));
+  // convention the cast routes link with (id === slug, or "<slug>-…", resolved against the roster).
+  const ownedBy = (e, cslug) => (e?.character ? slug(e.character) === cslug : refBelongsTo(String(e?.id ?? ''), cslug, roster));
   const castSlugs = cast.map((name) => slug(name));
   // Split what the cast has LEFT, not the whole budget: un-starred props already sit in the roster
   // and are never touched, so counting their slots into the split hands the first character seats
@@ -547,7 +563,12 @@ export function topUpStarredElements(spec, ctx) {
   for (const name of cast) {
     const cslug = slug(name);
     const owns = (e) => ownedBy(e, cslug);
-    const avail = characterRefs(inv, name);
+    // Only the images the ROSTER awards to THIS character: a file a longer slug owns (keeper-jr-01
+    // while Keeper is the one starred) stays out, even though its name starts with this one's. Where
+    // the convention leaves ownership unclear the top-up errs toward attaching NOTHING — a character
+    // short of references renders less pinned, but a stranger's face is a PAID render of the wrong
+    // person, cited in the prompt under this character's name, with nothing on screen to say so.
+    const avail = characterRefs(inv, name, roster);
     const mine = els.filter(owns);
     const target = Math.min(avail.length, share);
     if (mine.length >= target) continue;

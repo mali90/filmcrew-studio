@@ -16,7 +16,8 @@ import { neutralizeDotenv } from '../helpers/env.js';
 
 neutralizeDotenv();
 const { topUpStarredElements, contextBlock } = await import('../../src/lib/engine.js');
-const { inventoryText, characterRefs, refBelongsTo } = await import('../../src/lib/elements.js');
+const { inventoryText, characterRefs } = await import('../../src/lib/elements.js');
+const { refBelongsTo } = await import('../../src/lib/cast-refs.js');
 const { capsFor } = await import('../../src/lib/render-models.js');
 const { nameOf } = await import('../../src/lib/seedance-args.js');
 
@@ -29,7 +30,9 @@ const ctxFor = (backend, castNames, inventory, voiceClipFor = () => null) =>
 /** One VO line, the shape jobSpeakers reads — a speaker only costs an @AudioN ref if it has a clip. */
 const line = (shotId, speaker) => ({ shot_id: shotId, speaker, text: 'a line of dialogue' });
 const voiced = (...names) => (sp) => (names.includes(sp) ? `/synthetic/${sp}.mp3` : null);
-const countFor = (spec, cslug) => spec.kling.elements.filter((e) => (e.character ? e.character.toLowerCase().replace(/\s+/g, '-') === cslug : refBelongsTo(e.id, cslug))).length;
+// `roster` is every character slug in play — ownership of a bare filename is resolved against all of
+// them at once, longest match wins (cast-refs.js). These fixtures use one non-prefixing name each.
+const countFor = (spec, cslug, roster = [cslug]) => spec.kling.elements.filter((e) => (e.character ? e.character.toLowerCase().replace(/\s+/g, '-') === cslug : refBelongsTo(e.id, cslug, roster))).length;
 
 // ── the symptom: starred char with 7 refs but ONE element → topped to budget ─
 test('a starred character with 7 refs but 1 element entry is topped up to its full set', () => {
@@ -539,8 +542,37 @@ test('top-up is idempotent and leaves an already-full plan byte-identical', () =
 // ── the context the Casting agent reasons from ──────────────────────────────
 test('characterRefs / refBelongsTo follow the cast routes\' filename convention', () => {
   const inv = [...refsFor('keeper', 2), ref('keeper'), ref('keeperton-01'), ref('prop-cheese')];
-  assert.deepEqual(characterRefs(inv, 'Keeper').map((r) => r.id), ['keeper-01', 'keeper-02', 'keeper']);
-  assert.equal(refBelongsTo('keeperton-01', 'keeper'), false, 'prefix match is dash-bounded');
+  assert.deepEqual(characterRefs(inv, 'Keeper', ['keeper']).map((r) => r.id), ['keeper-01', 'keeper-02', 'keeper']);
+  assert.equal(refBelongsTo('keeperton-01', 'keeper', ['keeper']), false, 'prefix match is dash-bounded');
+});
+
+// ── ownership when one character's slug PREFIXES another's ──────────────────
+// Two real profiles (keeper / keeper-jr, i.e. ann / ann-marie) both match "keeper-jr-01" by the
+// filename rule. Resolved one name at a time it belongs to BOTH, and the top-up attaches the junior's
+// face to the senior — stamped `character: 'Keeper'`, uploaded, cited in the prompt, paid for.
+test('a longer cast slug owns its own references — the shorter one never borrows them', () => {
+  const roster = ['keeper', 'keeper-jr'];
+  const inv = [...refsFor('keeper', 2), ...refsFor('keeper-jr', 3)];
+  assert.deepEqual(characterRefs(inv, 'Keeper', roster).map((r) => r.id), ['keeper-01', 'keeper-02']);
+  assert.deepEqual(characterRefs(inv, 'Keeper Jr', roster).map((r) => r.id), ['keeper-jr-01', 'keeper-jr-02', 'keeper-jr-03']);
+  assert.equal(refBelongsTo('keeper-jr-01', 'keeper', roster), false, 'the longest matching slug wins');
+  assert.equal(refBelongsTo('keeper-jr-01', 'keeper-jr', roster), true);
+  // …and the grouped listing the Casting agent reads says the same thing.
+  const grouped = inventoryText(inv, { castNames: ['Keeper'], knownSlugs: roster });
+  assert.match(grouped, /Keeper — STARRED cast, 2 reference images:/);
+  assert.ok(!/Keeper — STARRED cast[\s\S]*keeper-jr/.test(grouped.split('Other references')[0]),
+    'the junior\'s images are not offered under the senior\'s name');
+});
+
+test('the top-up never attaches a reference a longer-slugged character owns', () => {
+  const inv = [...refsFor('keeper', 2), ...refsFor('keeper-jr', 3)];
+  const spec = { spec_version: '1.0', kling: { elements: [el('keeper-01', 'Keeper')], jobs: [{ job_id: 'J1', shots: ['S1'] }] } };
+  // Only the senior is starred; the junior has a profile on disk (the roster), so their files are
+  // theirs. Budget 9 would happily carry all five — the point is WHOSE face rides, not how many.
+  topUpStarredElements(spec, { ...ctxFor('seedance-2.0@fal', ['Keeper'], inv), knownCastSlugs: ['keeper', 'keeper-jr'] });
+  assert.deepEqual(spec.kling.elements.map((e) => e.id), ['keeper-01', 'keeper-02']);
+  assert.ok(!spec.kling.elements.some((e) => e.id.startsWith('keeper-jr')),
+    'a paid render must never be conditioned on the other character\'s face');
 });
 
 test('inventoryText groups a starred cast\'s references with a count; flat listing unchanged without a cast', () => {

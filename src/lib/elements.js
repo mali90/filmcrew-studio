@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import config, { ROOT, resolvePath } from '../../config.js';
 import { slug } from './util.js';
+import { refBelongsTo } from './cast-refs.js';
 
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp']);
 
@@ -46,16 +47,27 @@ export function buildInventory() {
   return out;
 }
 
-/** The filename convention that links a reference to a character — the id IS the character slug,
- *  or is prefixed "<slug>-". The same rule the web cast routes apply (refLinked), kept here so the
- *  engine and the UI can never disagree about who owns an image. */
-export const refBelongsTo = (refId, castSlug) => refId === castSlug || refId.startsWith(`${castSlug}-`);
+/** Every character slug this install knows about (profiles/<slug>.md, the same files the cast page
+ *  lists). It is the ROSTER reference ownership is resolved against: slugs prefix one another, and
+ *  only the longest match owns a file (cast-refs.js). No readable profiles dir = no roster, which is
+ *  the pre-profiles reading — each name owns its own prefix and nothing else claims it. */
+export function knownCastSlugs() {
+  try {
+    return fs.readdirSync(resolvePath(config.engine.profilesDir))
+      .filter((f) => f.endsWith('.md'))
+      .map((f) => slug(path.basename(f, '.md')))
+      .filter(Boolean);
+  } catch { return []; }
+}
 
-/** Every reference-type inventory entry linked to `name` (inventory order = sorted filenames). */
-export function characterRefs(inv, name) {
+/** Every reference-type inventory entry linked to `name` (inventory order = sorted filenames).
+ *  `knownSlugs` is the roster ownership is resolved against — the profiles on disk by default, and
+ *  the caller's own where it knows more (the engine adds the starred cast and the plan's own
+ *  characters). Never one name at a time: that is what let "ann-marie-01" answer for "ann". */
+export function characterRefs(inv, name, knownSlugs = knownCastSlugs()) {
   const c = slug(String(name ?? ''));
   if (!c) return [];
-  return inv.filter((e) => e.type === 'reference' && refBelongsTo(e.id, c));
+  return inv.filter((e) => e.type === 'reference' && refBelongsTo(e.id, c, knownSlugs));
 }
 
 /**
@@ -63,8 +75,11 @@ export function characterRefs(inv, name) {
  * cast) groups the reference section per character, with a count — the Casting agent's STARRED-cast
  * rule needs to SEE the full set to attach the full set (a flat list undersells a character whose
  * seven views sit between other files).
+ *
+ * `knownSlugs` is the roster that decides who owns which file (see characterRefs) — the grouping the
+ * agent reads has to name the same owner the top-up and the renderer will.
  */
-export function inventoryText(inv = buildInventory(), { castNames = [] } = {}) {
+export function inventoryText(inv = buildInventory(), { castNames = [], knownSlugs = knownCastSlugs() } = {}) {
   if (!inv.length) return '(no element images found — add files under elements/references, elements/first-frame, elements/last-frame)';
   const byType = { reference: [], first_frame: [], last_frame: [] };
   for (const e of inv) byType[e.type]?.push(e);
@@ -76,7 +91,7 @@ export function inventoryText(inv = buildInventory(), { castNames = [] } = {}) {
     const claimed = new Set();
     const parts = [];
     for (const name of castNames) {
-      const refs = characterRefs(inv, name);
+      const refs = characterRefs(inv, name, knownSlugs);
       for (const r of refs) claimed.add(r.id);
       parts.push(`  ${name} — STARRED cast, ${refs.length} reference image${refs.length === 1 ? '' : 's'}:` +
         (refs.length ? `\n${refs.map(line).join('\n')}` : ' (none on disk)'));
@@ -100,4 +115,4 @@ export function resolveImage(image) {
   return abs;
 }
 
-export default { buildInventory, inventoryText, resolveImage, refBelongsTo, characterRefs };
+export default { buildInventory, inventoryText, resolveImage, knownCastSlugs, characterRefs };

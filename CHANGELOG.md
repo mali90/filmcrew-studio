@@ -247,6 +247,21 @@
   install commands.
 
 ### Fixed
+- **A character whose name starts with another character's name no longer borrows their reference
+  images — including into a paid render.** References are linked to a character by filename
+  (`elements/references/<slug>-01.png`), and ownership used to be decided one name at a time: does
+  this file start with *this* character's slug? With two real characters whose slugs prefix one
+  another — Ann and Ann Marie, Jack and Jack Jr — `ann-marie-01.png` answered yes for **Ann** too.
+  On the Cast page the junior's photos showed on both cards; worse, the engine shares that rule, so
+  starring Ann could attach Ann Marie's face to the plan, label it *Ann*, upload it and render it —
+  money spent on a video conditioned on the wrong person, with nothing on screen to say so.
+  Ownership is now resolved against the whole cast at once and the **longest** matching name wins,
+  so `ann-marie-01.png` is Ann Marie's everywhere it is read: the Cast page's grouping and
+  Unassigned pool, linking and unlinking (which strips the right name off the file), deleting a
+  character with its references, the inventory the planning agents read, and the reference top-up a
+  starred cast gets before rendering. Where the naming genuinely leaves a character nothing of their
+  own, the top-up attaches **nothing** for them rather than someone else: a less-pinned render is a
+  disappointment, a stranger's face is a paid mistake.
 - **First-run setup now offers every aspect ratio the backend you just picked can render.** The
   backend card says Seedance 2.5 — and Seedance 2.0 on Segmind — renders six ratios, and the very
   next step then showed the same three tiles it always had, so 4:3, 3:4 and 21:9 could not be saved
