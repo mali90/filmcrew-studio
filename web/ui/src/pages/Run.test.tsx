@@ -1,11 +1,12 @@
 // The Run page morphs with run.status — one test per phase asserts the right sections mount.
 import { act, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import type { ProductionSpec } from '../../../shared/api-types';
 import { http, HttpResponse, server } from '../test/msw';
 import { ESTIMATE, makeRun } from '../test/fixtures';
 import { MockEventSource } from '../test/mock-event-source';
-import { renderRunPage, markPaidConfirmed } from '../components/run/test-harness';
+import { renderRunPage, renderRunPages, markPaidConfirmed } from '../components/run/test-harness';
 
 describe('Run page — phase morphing', () => {
   it('planning: agent rail is the hero and the spec inspector rides the rail', async () => {
@@ -209,6 +210,31 @@ describe('Run page — phase morphing', () => {
     // EventSource retries by itself; a reopened stream clears the notice
     act(() => { es.onopen?.(); });
     expect(screen.queryByText(/Live updates dropped/)).not.toBeInTheDocument();
+  });
+
+  // ── Run-scoped page state must not cross a /runs/A → /runs/B navigation ────────────────────────
+  it('the prompt sheet left open on one run does not open the next run with it (Router reuse)', async () => {
+    const a = makeRun('review');
+    const b = makeRun('review', { id: 'web-20260704110000-cd34', idea: 'a second run' });
+    // Open B first, so returning to it later reads its detail straight from the React Query cache —
+    // the ordinary case of a reviewer moving between two runs. With that cache warm the page never
+    // goes through a null render on the way in, so nothing accidentally unmounts what A left behind.
+    renderRunPages([b, a]);
+    expect(await screen.findByText('a second run')).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId(`goto-${a.id}`));
+    await screen.findByRole('region', { name: 'Review stage' });
+    await userEvent.click(await screen.findByRole('button', { name: 'Play from K2' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Prompt for K2' }));
+    expect(await screen.findByTestId('prompt-sheet')).toBeInTheDocument();
+
+    // an ordinary re-render of the SAME run must leave the sheet (and any edit in it) alone
+    act(() => { MockEventSource.emit(a.id, { type: 'log', cursor: 1, line: 'stitching…' }); });
+    expect(screen.getByTestId('prompt-sheet')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId(`goto-${b.id}`));
+    expect(await screen.findByText('a second run')).toBeInTheDocument();
+    // B's K2 is not A's K2: an inherited target would query B's prompt API with A's selection
+    expect(screen.queryByTestId('prompt-sheet')).not.toBeInTheDocument();
   });
 
   // ── U9: revising from review must say the takes are safe ──────────────────────────────────────

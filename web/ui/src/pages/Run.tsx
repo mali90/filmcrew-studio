@@ -248,7 +248,13 @@ export default function RunPage() {
   return (
     // The prompt sheet's open target is held above `main`: the controls that open it live in the
     // plan card, the job cards and the clip strip, while the one panel lives under the stage band.
-    <PromptSheetProvider>
+    //
+    // Keyed by run, because React Router reuses this component across /runs/A → /runs/B: an open
+    // target is a job id of the run it was opened on, and carried into another run it would query
+    // that run's prompt API with a foreign job (and a foreign take, since the panel keys on the
+    // target alone) — a 404 or "sent nothing" where B's plan belongs. `id` only changes when the
+    // URL does, so a same-run re-render still keeps the sheet, and any edit open inside it.
+    <PromptSheetProvider key={id}>
       <div>
         <PhaseStrip run={run} agents={live.agents} activeKind={live.activeKind} />
         {/* Silence during paid work is the most expensive kind of silence (U8): EventSource retries

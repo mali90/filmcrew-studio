@@ -247,6 +247,13 @@
   install commands.
 
 ### Fixed
+- **Opening a second run no longer opens it with the first run's prompt sheet.** Moving from one
+  run to another keeps the same page in place (only the address changes), and the sheet's open
+  target — a job id — went along for the ride. The new run would then read its prompt API with the
+  previous run's job, and its selected take, answering with a 404 or "take t2 sent nothing for this
+  segment" where that run's own plan belongs. The sheet is now scoped to the run it was opened on:
+  a new run starts with it closed, while anything you have open on the run you are *on* — including
+  an edit in progress — survives the page's ordinary redraws exactly as before.
 - **The upscale you approve is billed at the settings it was quoted at.** Approve reads the Topaz
   target resolution, the model and the factor cap to price the cost-ledger row it writes — and then
   the finalize child read `UPSCALE_TARGET_RESOLUTION`, `FAL_TOPAZ_MODEL` and `FAL_TOPAZ_MAX_FACTOR`
