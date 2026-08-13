@@ -13,6 +13,12 @@
 //                       a CLIP has its LAST frame grabbed ("start where that clip ended").
 //   --last-frame-from <path>   pin this job's CLOSING frame. A still as it is; a CLIP has its
 //                       FIRST frame grabbed ("end where that clip begins").
+//   --no-first-frame / --no-last-frame  decide that end the OTHER way: the spec's authored
+//                       first_frame/last_frame is dropped for this take, so the opening falls
+//                       through to --seam-from (or to nothing) and the ending is a plain cut. This
+//                       is how a caller that chose the boundaries itself — the web re-render dialog
+//                       — says an excluded end really is free, instead of leaving it to whatever
+//                       the spec happened to author.
 //   --prompt-overrides <file>  a prompt-overrides.json sidecar — parsed and validated before any
 //                       submit, then snapshotted into the take dir
 //
@@ -44,6 +50,11 @@ async function main() {
 
   // Boundary and override flags are checked BEFORE anything is queued, and before a run dir is even
   // created: a typo must cost nothing, not a render and not a stray directory.
+  // Pinning an end and freeing it are two different answers to the same question — say which,
+  // rather than letting one silently outrank the other.
+  for (const [end, from] of [['first', 'first-frame-from'], ['last', 'last-frame-from']]) {
+    if (args[`no-${end}-frame`] && str(from)) throw new Error(`--no-${end}-frame contradicts --${from} — pass one.`);
+  }
   for (const flag of ['first-frame-from', 'last-frame-from', 'prompt-overrides']) {
     const v = str(flag);
     if (v && !fs.existsSync(resolvePath(v))) throw new Error(`--${flag}: no such file — ${v}`);
@@ -60,6 +71,8 @@ async function main() {
     seamFrom: str('seam-from'),
     firstFrameFrom: str('first-frame-from'),
     lastFrameFrom: str('last-frame-from'),
+    clearFirstFrame: !!args['no-first-frame'],
+    clearLastFrame: !!args['no-last-frame'],
     promptOverrides: overrides,
     lowRes: !!args.probe,
   });

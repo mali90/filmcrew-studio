@@ -136,6 +136,8 @@ const flag = (job, name) => {
   const i = job.args.indexOf(name);
   return i === -1 ? undefined : job.args[i + 1];
 };
+/** Whether a valueless flag was passed — the boundary CLEARS carry no value. */
+const has = (job, name) => job.args.includes(name);
 const jobsOf = (enqueued, jobId) => enqueued.filter((j) => flag(j, '--job') === jobId);
 
 // ── the five plans ──────────────────────────────────────────────────────────────────────────────
@@ -248,6 +250,37 @@ test('start and end each pin one side only; none renders standalone', () => {
   assert.equal(r.boundaries.endMode, 'none');
 });
 
+// …and an end left out is CLEARED, not merely left unmentioned. Inside the renderers an omitted
+// --first-frame-from/--last-frame-from reads as "keep whatever the spec authored" (job.first_frame /
+// job.last_frame outrank the chain, and seeding a job that way is what a FULL render is for), so a
+// plan chosen to break a join used to render conditioned on that very frame — after the dialog had
+// called the join a scene cut and after the money moved. Every end of a paid re-render therefore
+// leaves here decided: a named frame, or an explicit clear.
+test('an end the plan leaves out is CLEARED on the wire, never left to the spec', () => {
+  const runId = 'web-19990101000018-clear';
+  const { svc, enqueued, drain } = fakeService(runId, intact);
+
+  svc.rerenderJob(runId, { jobId: 'K2', boundaries: 'none' });
+  let child = enqueued.at(-1);
+  assert.ok(has(child, '--no-first-frame'), 'standalone: an authored opening frame is dropped for this take');
+  assert.ok(has(child, '--no-last-frame'), 'and the authored closing one with it');
+
+  drain();
+  svc.rerenderJob(runId, { jobId: 'K2', boundaries: 'start' });
+  child = enqueued.at(-1);
+  assert.ok(flag(child, '--first-frame-from'), 'the chosen end is pinned to a named frame…');
+  assert.ok(!has(child, '--no-first-frame'), '…and is not cleared as well — one answer per end');
+  assert.ok(has(child, '--no-last-frame'), 'the end left out is the cleared one');
+
+  drain();
+  // The edge of the cut is the same promise made differently: "K1 opens the cut, so nothing pins its
+  // start" is a sentence the render has to keep, whatever the plan authored for that job.
+  svc.rerenderJob(runId, { jobId: 'K1', boundaries: 'both' });
+  child = enqueued.at(-1);
+  assert.ok(has(child, '--no-first-frame'), 'nothing precedes K1, so its opening is free — said out loud');
+  assert.ok(flag(child, '--last-frame-from'), 'while the end it really has stays pinned');
+});
+
 test('the ends of the cut are never pinned outward', () => {
   const runId = 'web-19990101000005-edges';
   const { svc, enqueued, drain } = fakeService(runId, intact);
@@ -298,12 +331,18 @@ test('a cascade end-conditions ONLY its last job — the earlier ones are define
   for (const jobId of ['K3', 'K4']) {
     const child = jobsOf(enqueued, jobId).at(-1);
     assert.equal(flag(child, '--seam-from'), takeDir, `${jobId} chains from the take being rendered`);
+    // …and opens on THAT chain and nothing else: an authored first_frame outranks a chained seam
+    // frame in both renderers, so leaving one in place would break the very chain this cascade is
+    // being paid to rebuild.
+    assert.ok(has(child, '--no-first-frame'), `${jobId}'s authored opening frame is cleared for the chain`);
   }
   // K4 ends the plan, so even the LAST job of the cascade has nothing to close on: the rule allows
   // exactly one closing pin per take, and here there is no segment left to pin to. (A cascade always
   // runs to the end of the plan, so this is the only shape it can take.)
   assert.equal(enqueued.filter((j) => flag(j, '--last-frame-from') !== undefined).length, 0,
     'no job of the cascade carries a closing pin');
+  assert.equal(enqueued.filter((j) => j.kind === 'render-job' && !has(j, '--no-last-frame')).length, 0,
+    'and none of them keeps an authored one instead');
   assert.equal(readManifest(dir).lastError, null, 'the cascade ran clean');
   assert.ok(enqueued.some((j) => j.kind === 'assemble'), 'and the new cut is still auto-assembled');
 });

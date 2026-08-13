@@ -146,9 +146,14 @@ would eventually point at a different image in a future take.
 Where the frames themselves come from:
 
 - inside a full render, each job is chained to the previous clip's closing still;
-- on a re-render, from whichever neighbours you chose (`boundaries: auto | both | start | end | none`);
+- on a re-render, from whichever neighbours you chose (`boundaries: auto | both | start | end | none`).
+  The boundary you choose is the boundary that renders: an end you leave out is rendered free, even
+  where the plan authored a `first_frame`/`last_frame` for that job — otherwise a join the dialog
+  called a scene cut would be conditioned on a frame anyway. (A **full** render still honours an
+  authored frame; seeding a job with one is what it is for.)
 - by hand, with `--first-frame-from` / `--last-frame-from` on `npm run render` and `npm run render-job`
   — point either at a PNG to use it as-is, or at a **clip** to have the right end grabbed for you.
+  `npm run render-job` also takes `--no-first-frame` / `--no-last-frame` to free that end instead.
 
 ---
 

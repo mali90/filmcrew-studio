@@ -247,6 +247,18 @@
   install commands.
 
 ### Fixed
+- **The boundary you choose for a segment re-render is now the boundary that renders.** The
+  re-render dialog names each end before you pay — "the join from K1 becomes a scene cut", "K1 opens
+  the cut, so nothing pins its start" — but where the plan authored a `first_frame`/`last_frame` for
+  that job, the end you left out still rendered conditioned on that frame: the renderers treat an
+  authored frame as a pin, and only a *replacement* pin displaced it. So a plan bought to break a
+  join could quietly keep it, and a cascade rebuilding the chain across such a job broke it instead
+  (an authored opening frame outranks the chained seam frame). Every end of a paid re-render now
+  leaves the server decided out loud — pinned to a named frame, or cleared — so the sentence you
+  agreed to and the take you get describe the same joins, and the reply's "no pin" is the whole
+  truth about that end. A **full** render is unchanged: seeding a job with an authored frame is what
+  it is for, and `npm run render` still honors it. `npm run render-job` gains `--no-first-frame` /
+  `--no-last-frame` to say the same thing by hand.
 - **The price beside the create controls now follows the resolution you picked.** The per-run
   Resolution control pins the render to the tier on screen, but the hint next to it still quoted
   the model's *default* tier — so picking 4k on fal's Seedance 2.0 read "roughly $0.14 per second"

@@ -504,8 +504,15 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
         // readable afterwards); --first-frame-from names the frame itself, so the boundary the user
         // chose is honoured however the chaining default is configured.
         ...(seamFrom ? ['--seam-from', seamFrom] : []),
-        ...(firstFrameFrom ? ['--first-frame-from', firstFrameFrom] : []),
-        ...(lastFrameFrom ? ['--last-frame-from', lastFrameFrom] : []),
+        // EVERY end of a paid re-render is decided here, out loud: pinned to a named frame, or
+        // CLEARED. An omitted --first-frame-from/--last-frame-from reads as "preserve" in the
+        // renderers, which is right for a FULL render (an authored job.first_frame/last_frame is the
+        // documented way to seed a job) and wrong here — the user was shown, per boundary and before
+        // paying, what each end would do, and a spec-authored frame would silently condition a join
+        // the dialog just called a scene cut. This is also what lets a cascade rebuild its chain
+        // across a job the spec seeded: the cleared opening falls through to --seam-from.
+        ...(firstFrameFrom ? ['--first-frame-from', firstFrameFrom] : ['--no-first-frame']),
+        ...(lastFrameFrom ? ['--last-frame-from', lastFrameFrom] : ['--no-last-frame']),
         ...(feedback ? ['--feedback', feedback] : []),
         ...(take ? ['--take', String(take)] : []),
         ...(promptOverrides ? ['--prompt-overrides', promptOverrides] : []),
@@ -923,6 +930,8 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
     // is exactly the case that used to be reported as a pin nobody would get. With neither that
     // still nor the neighbour's clip on disk there is nothing to read a frame out of, and the reply
     // says so rather than selling a join this take cannot have.
+    // "No pin" is now the whole truth about that end: an end reported here as null was CLEARED on
+    // the way out (enqueueRenderJob), so no authored frame can pin it behind the reply's back.
     const applied = {
       mode,
       start: firstFrameFrom ? opening.start : null,

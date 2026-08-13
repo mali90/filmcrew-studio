@@ -149,16 +149,24 @@ const isClosingFrame = (input) => !IS_STILL.test(input) || path.basename(input) 
  *   2. the spec's authored `job.first_frame` / `job.last_frame`
  *   3. the chained seam frame (the previous clip's closing still)
  *
- * The renderers only know rules 2–3 (`job.first_frame || startFrame`), so an explicit pin has to
- * reach them as the seam frame with the authored field REMOVED — otherwise a spec that authors an
- * opening frame would quietly ignore the flag and render (and bill for) a boundary nobody asked for.
- * The job is returned untouched when no pin is in play, so an ordinary render is unchanged.
+ * The renderers only know rules 2–3 (`job.first_frame || startFrame`), so an authored field has to
+ * be REMOVED from the job they are handed whenever the operator decided that end themselves:
+ *
+ *   `clearStart`/`clearEnd`  a replacement pin (rule 1) — otherwise a spec that authors an opening
+ *                            frame would quietly ignore the flag and render (and bill for) a
+ *                            boundary nobody asked for — or an explicit "this end is FREE"
+ *                            (`--no-first-frame`/`--no-last-frame`), which is how the paid per-job
+ *                            re-render says the join the user excluded really is a scene cut.
+ *
+ * An omitted decision means PRESERVE: a full render honours the authored frame, because seeding a
+ * job with one is the documented way to author it. The job is returned untouched when neither end
+ * was decided, so an ordinary render is unchanged.
  */
-function jobWithPins(job, { startPin = false, endPin = false } = {}) {
-  if (!startPin && !endPin) return job;
+function jobWithPins(job, { clearStart = false, clearEnd = false } = {}) {
+  if (!clearStart && !clearEnd) return job;
   const eff = { ...job };
-  if (startPin) delete eff.first_frame;
-  if (endPin) delete eff.last_frame;
+  if (clearStart) delete eff.first_frame;
+  if (clearEnd) delete eff.last_frame;
   return eff;
 }
 
@@ -269,7 +277,7 @@ export async function renderSpec(spec, { runDir, probe = false, upscale = false,
     // joint the pin paid for reads as a scene cut and the stitcher hard-cuts it. Any other still is
     // hand-picked and points nowhere. Scoped to the job the pin brackets — startPin is the first one.
     if (startPin) seamInFrom = isClosingFrame(firstFrameFrom) ? await seamPointerFor(firstFrameFrom) : null;
-    const r = await RENDERERS[be].render({ job: jobWithPins(job, { startPin: !!startPin, endPin: !!endPin }), spec, runDir, seed, lowRes: probe, startFrame: openFrame, endFrame: endPin, feedsNext, seamInFrom, nonce: take ?? 0 })
+    const r = await RENDERERS[be].render({ job: jobWithPins(job, { clearStart: !!startPin, clearEnd: !!endPin }), spec, runDir, seed, lowRes: probe, startFrame: openFrame, endFrame: endPin, feedsNext, seamInFrom, nonce: take ?? 0 })
       .catch((e) => { log.error(`[${job.job_id}] failed: ${e.message}`); return { jobId: job.job_id, error: e.message }; });
     results.push(r);
     // The previous job's sidecar was written before THIS clip existed: stamp where its closing frame
@@ -326,13 +334,16 @@ export async function renderSpec(spec, { runDir, probe = false, upscale = false,
  * @param {object} spec
  * @param {string} jobId
  * @param {{runDir:string, backend?:string, take?:number, feedback?:string, seamFrom?:string,
- *          lowRes?:boolean, firstFrameFrom?:string, lastFrameFrom?:string, promptOverrides?:string}} opts
+ *          lowRes?:boolean, firstFrameFrom?:string, lastFrameFrom?:string, clearFirstFrame?:boolean,
+ *          clearLastFrame?:boolean, promptOverrides?:string}} opts
  *   `firstFrameFrom`/`lastFrameFrom` pin this job's own boundaries and outrank both the authored
- *   `job.first_frame`/`job.last_frame` and the `seamFrom` chain (jobWithPins); `promptOverrides` is
- *   a sidecar file snapshotted into the take dir.
+ *   `job.first_frame`/`job.last_frame` and the `seamFrom` chain (jobWithPins);
+ *   `clearFirstFrame`/`clearLastFrame` decide that end the other way — the authored frame is
+ *   dropped, so the end is free (opening) or a plain cut (closing); `promptOverrides` is a sidecar
+ *   file snapshotted into the take dir.
  * @returns {Promise<{jobId:string, clip:string, totalDuration:number, segments:number, backend:string, staleDownstream:string[]}>}
  */
-export async function renderJob(spec, jobId, { runDir, backend, take = 0, feedback, seamFrom, lowRes = false, firstFrameFrom, lastFrameFrom, promptOverrides } = {}) {
+export async function renderJob(spec, jobId, { runDir, backend, take = 0, feedback, seamFrom, lowRes = false, firstFrameFrom, lastFrameFrom, clearFirstFrame = false, clearLastFrame = false, promptOverrides } = {}) {
   const be = resolveBackend(spec, backend);
   // Structural pass first, so an invalid spec fails with the full validation report rather than a
   // job-lookup error.
@@ -384,12 +395,18 @@ export async function renderJob(spec, jobId, { runDir, backend, take = 0, feedba
       seamInFrom = isClosingFrame(firstFrameFrom) ? await seamPointerFor(firstFrameFrom) : null;
     }
     startFrame = pinned;
-  } else if (job.first_frame) {
+  } else if (job.first_frame && !clearFirstFrame) {
     seamInFrom = null; // the authored frame is what the renderer will use — naming the chain's
                        // source here would claim a continuation this clip does not have
   }
   const endFrame = lastFrameFrom ? await resolveBoundaryFrame(lastFrameFrom, { end: 'out', destDir: jobDir }) : null;
-  const effJob = jobWithPins(job, { startPin: !!firstFrameFrom, endPin: !!lastFrameFrom });
+  // Each end is cleared by a replacement pin OR by an explicit "leave it free" — with the authored
+  // frame gone, an opening falls through to the --seam-from chain (that is what lets a cascade
+  // rebuild a chain across a job the spec seeded) or to nothing at all, and a closing to nothing.
+  const effJob = jobWithPins(job, {
+    clearStart: !!firstFrameFrom || clearFirstFrame,
+    clearEnd: !!lastFrameFrom || clearLastFrame,
+  });
 
   const staleDownstream = downstreamJobs(spec, jobId);
 

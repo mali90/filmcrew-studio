@@ -18,12 +18,15 @@ const FAL_ENV = {
   FAL_KLING_ENDPOINT: 'submit',
 };
 
-/** A 2-job spec file in `dir`; `firstFrame` authors K2's opening frame in the SPEC. */
-function twoJobSpec(dir, { firstFrame, name = 'spec.json' } = {}) {
+/** A 2-job spec file in `dir`; `firstFrame`/`lastFrame` author K2's boundary frames in the SPEC. */
+function twoJobSpec(dir, { firstFrame, lastFrame, name = 'spec.json' } = {}) {
   const spec = loadGoldenSpec();
   spec.kling.jobs = [
     { job_id: 'K1', shots: ['S1'], elements: ['subject'] },
-    { job_id: 'K2', shots: ['S2', 'S3'], elements: ['subject'], ...(firstFrame ? { first_frame: firstFrame } : {}) },
+    {
+      job_id: 'K2', shots: ['S2', 'S3'], elements: ['subject'],
+      ...(firstFrame ? { first_frame: firstFrame } : {}), ...(lastFrame ? { last_frame: lastFrame } : {}),
+    },
   ];
   const p = path.join(dir, name);
   fs.writeFileSync(p, JSON.stringify(spec));
@@ -75,6 +78,11 @@ test('render-job CLI: bad --take and missing --job are usage errors', async () =
     const badTake = await runCli('src/cli/render-job.js', ['--spec', specPath, '--job', 'K1', '--take', 'two'], { env: FAL_ENV });
     assert.equal(badTake.code, 1);
     assert.match(badTake.stderr, /--take/);
+    // Pinning an end and freeing it are two answers to one question — neither may silently win.
+    const bothWays = await runCli('src/cli/render-job.js',
+      ['--spec', specPath, '--job', 'K1', '--first-frame-from', path.join(dir, 'pin.png'), '--no-first-frame'], { env: FAL_ENV });
+    assert.equal(bothWays.code, 1);
+    assert.match(bothWays.stderr, /--no-first-frame contradicts --first-frame-from/);
   } finally { cleanup(); }
 });
 
@@ -149,6 +157,58 @@ test('render-job CLI: opening-frame precedence — flag > authored first_frame >
     const sFlag = sidecarOf(path.join(dir, 'flag'), 'K2');
     assert.equal(sFlag.seam_in.frame, pin);
     assert.equal(sFlag.seam_in.from, null);
+  } finally { cleanup(); }
+});
+
+// The other answer a caller can give about an end: FREE. A per-job re-render is chosen boundary by
+// boundary and priced before it runs — the web dialog says in plain words what each end will do — so
+// an omitted pin must not quietly mean "whatever the spec authored", or a join just described as a
+// scene cut renders conditioned on a frame anyway. These two flags are how that choice arrives.
+// A FULL render is deliberately the other way round: an authored frame is the documented way to seed
+// a job, and renderSpec never sends them.
+test('render-job CLI: --no-first-frame/--no-last-frame render that end free', async () => {
+  const { dir, cleanup } = mkTmp('renderjob-cli-clear');
+  try {
+    const authored = path.join(dir, 'authored.png');
+    fs.writeFileSync(authored, ONE_PX_PNG);
+    const specPath = twoJobSpec(dir, { firstFrame: authored, lastFrame: authored });
+    const runFor = (out, extra) => runCli('src/cli/render-job.js',
+      ['--spec', specPath, '--job', 'K2', '--out', path.join(dir, out), ...extra], { env: FAL_ENV });
+
+    // The control: both authored frames are what this job renders on when nobody decided otherwise.
+    const kept = await runFor('kept', []);
+    assert.equal(kept.code, 0, kept.stderr);
+    const sKept = sidecarOf(path.join(dir, 'kept'), 'K2');
+    assert.equal(sKept.seam_in.frame, authored, 'the spec seeds the opening…');
+    assert.equal(sKept.seam_out.mode, 'native', '…and the close');
+
+    const freed = await runFor('freed', ['--no-first-frame', '--no-last-frame']);
+    assert.equal(freed.code, 0, freed.stderr);
+    const sFreed = sidecarOf(path.join(dir, 'freed'), 'K2');
+    assert.equal(sFreed.seam_in.mode, 'none', 'nothing conditions the opening — the join really is a cut');
+    assert.equal(sFreed.seam_in.frame, null, 'and the record says so, so no joint is claimed');
+    assert.equal(sFreed.seam_out.mode, 'none', 'same at the close');
+  } finally { cleanup(); }
+});
+
+// The cascade shape, at the CLI: a follow-up job opens on the chain the cascade take is rebuilding
+// (--seam-from), which an authored first_frame outranks. Cleared, the chain comes through — with the
+// lineage that keeps the joint readable afterwards.
+test('render-job CLI: a cleared opening falls through to the --seam-from chain', async () => {
+  const { dir, cleanup } = mkTmp('renderjob-cli-clear-chain');
+  try {
+    const authored = path.join(dir, 'authored.png');
+    fs.writeFileSync(authored, ONE_PX_PNG);
+    const prior = priorTake(dir);
+    const out = path.join(dir, 't2');
+    const { code, stderr } = await runCli('src/cli/render-job.js', [
+      '--spec', twoJobSpec(dir, { firstFrame: authored }), '--job', 'K2', '--out', out,
+      '--seam-from', prior.dir, '--no-first-frame',
+    ], { env: FAL_ENV });
+    assert.equal(code, 0, stderr);
+    const s = sidecarOf(out, 'K2');
+    assert.equal(s.seam_in.frame, prior.frame, "the chained still, not the spec's authored frame");
+    assert.equal(s.seam_in.from?.job, 'K1', 'and the joint still names the clip it came off');
   } finally { cleanup(); }
 });
 
