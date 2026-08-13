@@ -217,12 +217,15 @@ const klingBodyBudget = ({ leadPrefix, head, say, tail }, cap) =>
  * per-segment byte cap. Shared by the plan path and `applyOverride`, so a hand-edited body is
  * wrapped by exactly the rules the agents' body is wrapped by — there is no second composer.
  *
- * `trim` is the ONE thing the two callers do not share: the agents' body is re-cut to fit (nobody
- * promised them otherwise), a user's is not — see applyOverride.
+ * `trim` is the ONE thing the two callers do not share: the agents' body is normalized and re-cut to
+ * fit (nobody promised them otherwise), a user's is neither — see applyOverride. That includes the
+ * edges: an edit saved with a blank line or padding around it is stored and metered with those
+ * bytes, so quietly dropping them here would send something other than what the editor showed.
  */
 function klingSegmentPrompt(parts, sceneBody, cap, { trim = true } = {}) {
   const { leadPrefix, head, say, tail, who, lineText, hit } = parts;
-  let body = String(sceneBody ?? '').trim();
+  let body = String(sceneBody ?? '');
+  if (trim) body = body.trim();
   // fal enforces the 512 cap in UTF-8 BYTES, not JS characters. The SPOKEN clause is protected:
   // reserve its full length (+ lead/framing/camera) and trim only the SCENE body to fit — the words
   // are never cut here (the old blanket end-trim lopped the dialogue off the end → mid-word gibberish).
@@ -436,7 +439,11 @@ export function composeSeedanceJobPrompt(job, spec, settings, opts = {}) {
  * the identity or lip-sync clauses, so words that fitted at save time need not fit at submit time.
  * Clamping them here would delete the tail of a PAID prompt where nobody could see it went, against
  * an editor that promises an edit is sent word for word. So the overrun is measured into
- * `overflowBytes` and `assertOverrideFits` refuses on the render path instead.
+ * `overflowBytes` and `assertOverrideFits` refuses on the render path instead. Not one byte of them
+ * is touched on the way out for the same reason — including the edges: an override is trimmed only
+ * to ASK whether it is blank (a blank one is no edit at all and leaves that shot on the plan), never
+ * to normalize what a non-blank one sends, because the sidecar stores and the editor meters exactly
+ * the bytes the user typed.
  *
  * @param {object} composed  a `composeKlingStoryboard` or `composeSeedanceJobPrompt` result
  * @param {{prompt?:string, segments?:string[]}|null} override  the sidecar entry for this job
@@ -460,9 +467,11 @@ export function applyOverride(composed, override, settings) {
     let overflowBytes = 0;
     const segments = composed.segments.map((s, i) => {
       const body = bodies[i];
+      // Trimming is only ever the QUESTION ("did they leave this shot blank?"), never something done
+      // to the words: what is measured below and composed on the next line is the body as saved.
       if (typeof body !== 'string' || !body.trim()) return s;
       touched = true;
-      overflowBytes += Math.max(0, utf8Bytes(body.trim()) - klingBodyBudget(composed.parts[i], cap));
+      overflowBytes += Math.max(0, utf8Bytes(body) - klingBodyBudget(composed.parts[i], cap));
       return { ...s, prompt: klingSegmentPrompt(composed.parts[i], body, cap, { trim: false }) };
     });
     return touched ? { ...composed, segments, promptSource: 'override', overflowBytes } : composed;
@@ -470,8 +479,11 @@ export function applyOverride(composed, override, settings) {
 
   // Seedance: ONE document per job. `segments` is accepted (a per-shot editor may hand them over)
   // and joined plainly — the connector words belong to the agents' blocks, not to a user's prose.
-  const body = (typeof override.prompt === 'string' ? override.prompt : override.segments.join('\n')).trim();
-  if (!body) return composed;
+  // Trimmed ONLY to ask whether the override is all blank — what ships is the body as saved. The
+  // sidecar stores it byte for byte and the editor's meter prices it byte for byte, so an edit that
+  // deliberately opens or closes on a blank line has to arrive carrying those bytes.
+  const body = typeof override.prompt === 'string' ? override.prompt : override.segments.join('\n');
+  if (!body.trim()) return composed;
   const cap = promptCapOf(settings);
   const prompt = `${composed.front}\n\n${body}`;
   return {
@@ -479,7 +491,7 @@ export function applyOverride(composed, override, settings) {
     prompt,
     // `shotPrompts` is the record of the authored bodies that were SENT. With an override there is
     // one body (or the user's own per-shot split), and claiming the plan's blocks would be a lie.
-    shotPrompts: Array.isArray(override.segments) ? override.segments.map((s) => String(s).trim()) : [body],
+    shotPrompts: Array.isArray(override.segments) ? override.segments.map((s) => String(s)) : [body],
     promptSource: 'override',
     // No cap ⇒ nothing to overflow, and assertOverrideFits therefore never fires.
     overflowBytes: cap ? Math.max(0, utf8Bytes(prompt) - cap) : 0,

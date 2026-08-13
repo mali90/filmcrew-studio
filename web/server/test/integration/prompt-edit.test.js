@@ -102,6 +102,24 @@ test('PUT stores the words verbatim; GET /prompt serves them as an override, and
   assert.ok(view.pinBytes > 0);
 });
 
+// "Verbatim" has to include the edges. The sidecar stores the body byte for byte and the editor's
+// meter prices it byte for byte, so an edit deliberately opening (or closing) on a blank line must
+// reach the provider carrying those bytes — a trim on the way out sends something the editor never
+// showed, and bills for it.
+test('an edit saved with blank lines around it keeps them all the way to the wire', async () => {
+  const runId = await plannedRun();
+  const jobId = await firstJob(runId);
+  const mine = '\n\nHold on the dark for a long beat.\n\nThen the lamp.  \n';
+
+  assert.equal((await put(`/api/runs/${runId}/prompt`, { job: jobId, prompt: mine })).statusCode, 200);
+  assert.equal(readJson(sidecarOf(runId)).jobs[jobId].prompt, mine, 'stored byte for byte');
+
+  const view = (await get(`/api/runs/${runId}/prompt?job=${jobId}`)).json();
+  assert.ok(view.prompt.endsWith(mine), 'composed with those bytes, not with a trimmed copy of them');
+  assert.deepEqual(view.shotPrompts, [mine], 'and the record of the authored body says the same');
+  assert.equal(view.bytes, Buffer.byteLength(view.prompt, 'utf8'), 'the meter counts what would go');
+});
+
 test('DELETE discards the edit and restores the agents\' text byte for byte', async () => {
   const runId = await plannedRun();
   const jobId = await firstJob(runId);

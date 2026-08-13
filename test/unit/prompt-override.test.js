@@ -220,6 +220,62 @@ test('a single-shot Kling job accepts a whole-job override', PENDING, () => {
   assert.ok(got.segments[0].prompt.includes('a single held frame of the lamp'));
 });
 
+// ── Verbatim means verbatim, whitespace included ────────────────────────────────────────────────
+// The sidecar stores the body byte for byte and the editor meters it byte for byte, so an edit that
+// deliberately opens on a blank line (or closes on one) has to reach the provider carrying those
+// bytes. Trimming is only ever a QUESTION — "is this override blank?" — never something done to the
+// words on their way out; the same reason this path refuses an over-cap edit instead of truncating.
+
+test('a Seedance override keeps the blank lines and padding the user saved', PENDING, () => {
+  const s = spec();
+  const settings = seedanceSettings(s);
+  const planned = compose.composeSeedanceJobPrompt(jobOf(s, 'K1'), s, settings, SEEDANCE_OPTS);
+  const mine = '\n\n  A long beat before anything moves.\n\nThen the lamp.  \n';
+
+  const got = compose.applyOverride(planned, { prompt: mine }, settings);
+  assert.equal(got.prompt, `${planned.front}\n\n${mine}`, 'the body travels exactly as saved');
+  assert.deepEqual(got.shotPrompts, [mine], 'and the record of what was sent says the same');
+
+  // The same, arriving as per-shot segments (a per-shot editor may hand them over).
+  const parts = ['  first, held.\n', '\nsecond.  '];
+  const split = compose.applyOverride(planned, { segments: parts }, settings);
+  assert.equal(split.prompt, `${planned.front}\n\n${parts.join('\n')}`);
+  assert.deepEqual(split.shotPrompts, parts);
+
+  // …and an all-blank override is still no override at all.
+  assert.equal(compose.applyOverride(planned, { prompt: ' \n\t\n ' }, settings).prompt, planned.prompt);
+  assert.equal(compose.applyOverride(planned, { segments: ['', '  \n'] }, settings).prompt, planned.prompt);
+});
+
+test('a Kling override keeps its padding, and the meter prices the bytes that go', PENDING, () => {
+  const s = spec();
+  const settings = klingSettings(s);
+  const opts = { lowercaseSpeech: true, leadRef: '@Element1', voiceTokenFor: () => '@Element1' };
+  const planned = compose.composeKlingStoryboard(jobOf(s, 'K1'), s, settings, opts);
+  const mine = '  the lamp house, seen from the stairwell,\n\nnothing moving  ';
+
+  const got = compose.applyOverride(planned, { segments: [mine, '', ''] }, settings);
+  assert.ok(got.segments[0].prompt.includes(mine), 'the bytes the editor metered are the bytes on the wire');
+  assert.equal(got.segments[1].prompt, planned.segments[1].prompt, 'a whitespace-only entry is still no edit');
+
+  // Overflow is measured on what is SENT: padding that pushes an edit over the cap has to be
+  // refused (assertOverrideFits), not silently swallowed by a trim on the way out.
+  const pad = ' '.repeat(600);
+  const over = compose.applyOverride(planned, { segments: [`${'y'.repeat(200)}${pad}`] }, settings);
+  assert.equal(over.overflowBytes, utf8(over.segments[0].prompt) - 500);
+  assert.throws(() => compose.assertOverrideFits(over, 'K1'), /K1: the saved prompt edit no longer fits/);
+});
+
+test('the PLAN\'s own body is still normalized — only a user\'s words are untouchable', PENDING, () => {
+  const s = spec();
+  s.shots[0].kling.content_prompt = '   the lamp house, padded by an agent   ';
+  const settings = klingSettings(s);
+  const opts = { lowercaseSpeech: true, leadRef: '@Element1', voiceTokenFor: () => '@Element1' };
+  const planned = compose.composeKlingStoryboard(jobOf(s, 'K1'), s, settings, opts);
+  assert.ok(planned.segments[0].prompt.includes('the lamp house, padded by an agent'));
+  assert.ok(!/ {2}/.test(planned.segments[0].prompt), 'nobody promised the agents their padding');
+});
+
 // ── The sidecar itself ──────────────────────────────────────────────────────────────────────────
 
 test('the stored sidecar carries the WORDS ONLY — no pin sentence, no front matter', PENDING_SIDECAR, async () => {

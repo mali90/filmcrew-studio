@@ -262,6 +262,15 @@
   starred cast gets before rendering. Where the naming genuinely leaves a character nothing of their
   own, the top-up attaches **nothing** for them rather than someone else: a less-pinned render is a
   disappointment, a stranger's face is a paid mistake.
+- **A prompt edit that opens or closes on a blank line now sends those blank lines too.** The editor
+  promises your words go out exactly as written, and the file behind it stores them exactly as
+  written — but the composer still ran a tidy-up over the body on its way to the provider, so
+  deliberate spacing (a beat before the first line, a trailing pause, indentation) was quietly
+  dropped from what was actually sent and billed. Only the plan's own text is normalized now; a
+  saved edit is used byte for byte, and its byte meter counts the bytes that will really go — so an
+  edit whose padding pushes it over the model's limit is refused with numbers, as an over-long edit
+  always was, rather than silently shaved to fit. An edit that is *nothing but* whitespace still
+  counts as no edit at all, and leaves that shot on the agents' text.
 - **A crash while saving a prompt edit can no longer wipe the edits you had already saved.** All of
   a run's prompt edits live in one small file, and saving rewrote it in place — so a process killed
   (or a disk filled) partway through left bytes that no longer parse. The preview reads an
