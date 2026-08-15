@@ -1,10 +1,15 @@
 // About — the quiet footer card: version, where the code lives, what leaves the machine.
+// The version is read from the ROOT package.json at build time — `npm version` during a release is
+// then its only writer, so this card cannot drift from the shipped version again (as prose it sat
+// at v1.1.0 through three releases). AboutCard.test.tsx pins the linkage.
+import { version } from '../../../../../package.json';
+
 export function AboutCard() {
   return (
     <section aria-labelledby="about-heading" className="rounded-r3 border border-line bg-surface-1 p-5">
       <h2 id="about-heading" className="text-heading text-ink">About</h2>
       <p className="mt-2 text-dense text-ink-secondary">
-        Filmcrew Studio <span className="tnum font-mono">v1.1.0</span>
+        Filmcrew Studio <span className="tnum font-mono">v{version}</span>
       </p>
       <p className="mt-1.5 text-dense text-ink-secondary">
         <a
