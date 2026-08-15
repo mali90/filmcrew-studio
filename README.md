@@ -22,7 +22,7 @@ Type a single idea — *"a lighthouse keeper's last night before automation"* �
 
 ## Get started
 
-**Node.js is the only thing you install yourself — the app handles the rest in your browser.** No fal key, no ffmpeg, no config files to wrangle up front: the first-run wizard collects, validates, and saves all of that for you.
+**Node.js is the only thing you install yourself — the app handles the rest in your browser.** No provider keys, no ffmpeg, no config files to wrangle up front: the first-run wizard collects, validates, and saves all of that for you.
 
 **1. Get Node.js** *(already have it? skip this)*
 
@@ -61,7 +61,7 @@ npm --prefix web/ui run build
 npm run web
 ```
 
-Your browser opens to **http://127.0.0.1:5177**, where a first-run wizard takes over. It walks you through your **AI planner** — Claude, OpenAI, Gemini, or Copilot, via an API key or a logged-in CLI (it can even one-click install the planner's CLI for you; you still log in yourself) — and your **fal.ai key**, **live-validating** each, sets your defaults, and **writes `.env` for you**. It closes on a health check: if **ffmpeg** is missing, it shows you the **exact one-line command** to install it for your OS (you run that command — the app never modifies your system). **Every failed check carries its own fix**, so nothing ends in an error you have to google.
+Your browser opens to **http://127.0.0.1:5177**, where a first-run wizard takes over. It walks you through your **AI planner** — Claude, OpenAI, Gemini, or Copilot, via an API key or a logged-in CLI (it can even one-click install the planner's CLI for you; you still log in yourself) — then the key for the render provider you pick, **fal.ai or Segmind**, **live-validating** each, sets your defaults, and **writes `.env` for you**. It closes on a health check: if **ffmpeg** is missing, it shows you the **exact one-line command** to install it for your OS (you run that command — the app never modifies your system). **Every failed check carries its own fix**, so nothing ends in an error you have to google.
 
 From there: type an idea → the agents plan it (uses your LLM, no render spend) → you see the **price on every render button** before anything spends → review the cut clip by clip → request changes (they go back through the agents) → approve, with an optional Topaz upscale to 1080p. Your finished `.mp4` lands in **`out/`**.
 
@@ -90,12 +90,12 @@ npm run engine -- --brief "your idea here" --render --probe   # long multi-job v
 | `npm run doctor` | Health check (keys, ffmpeg, and everything a render needs). |
 | `npm run engine -- --brief "..." --render` | Plan a one-line idea and render it. Add `--probe` (multi-job plans: first job only), `--upscale`, `--backend seedance`, `--cast <names>`, `--environment <name>`; drop `--render` for the plan only. |
 | `npm run revise -- --from runs/<id> --feedback "..."` | Send director feedback back through the owning agents. |
-| `npm run render-job -- --from runs/<id> --job K2` | Re-render one job as a new take (seam-chained). Pin either end to a neighbour with `--first-frame-from` / `--last-frame-from`, and send edited words with `--prompt-overrides`. |
+| `npm run render-job -- --spec runs/<id>/spec.json --job K2 --out runs/<id>/renders/t3` | Re-render one job as a new take (seam-chained). Pin either end to a neighbour with `--first-frame-from` / `--last-frame-from`, send edited words with `--prompt-overrides`, and keep or change the starting point with `--seed` (Segmind Seedance). |
 | `npm run render -- --spec <spec.json>` | Render an existing plan. |
 | `npm run assemble -- --from runs/<id>/renders/<take>` | Finish or re-stitch a prior render — free, no API calls (unless you pass `--upscale`, or have `UPSCALE_ENABLED=true` in your `.env`: either one adds a paid Topaz pass over every sub-1080p clip in it). |
 | `npm run mint-voice -- <name> <clip.mp3>` | Give a character a persistent voice (once per character). |
 
-Three video models across two providers: **Kling 3.0** (default, fal-only), **Seedance 2.0** and **Seedance 2.5** — the two Seedance models render on **fal.ai or Segmind**, your choice. Pick per run with `--backend`, or set the default in Settings. Backends are named `<model>@<provider>` (`kling-o3@fal`, `seedance-2.0@fal`, `seedance-2.5@fal`, `seedance-2.0@segmind`, `seedance-2.5@segmind`); the old one-word `kling`/`seedance` names still work everywhere, including in specs already on disk. You only need a key for the provider you render on — a **Segmind-only install needs no fal account at all**. How they differ, and what a Segmind-only setup can and can't do: [docs/PROVIDERS.md](docs/PROVIDERS.md). Slow, hand-held setup (including editing `.env` yourself): [docs/SETUP.md](docs/SETUP.md).
+Three video models across two providers: **Kling 3.0** (default, fal-only), **Seedance 2.0** and **Seedance 2.5** — the two Seedance models render on **fal.ai or Segmind**, your choice. Pick per run with `--backend`, or set the default in Settings. Backends are named `<model>@<provider>` (`kling-o3@fal`, `seedance-2.0@fal`, `seedance-2.5@fal`, `seedance-2.0@segmind`, `seedance-2.5@segmind`); the old one-word `kling`/`seedance` names still work everywhere, including in specs already on disk. Only the Segmind pair lets a re-render reuse the clip's own seed to **fix this take** instead of rolling a new one — the fal backends offer no such choice. You only need a key for the provider you render on — a **Segmind-only install needs no fal account at all**. How they differ, and what a Segmind-only setup can and can't do: [docs/PROVIDERS.md](docs/PROVIDERS.md). Slow, hand-held setup (including editing `.env` yourself): [docs/SETUP.md](docs/SETUP.md).
 
 ## What you get
 
@@ -106,6 +106,7 @@ Three video models across two providers: **Kling 3.0** (default, fal-only), **Se
 - **Seam-invisible stitching**: a video over the model's window renders as several chained jobs, and the local stitch colour-matches each chained joint, drops the frame the two clips share and crossfades — so a long cut reads as one take instead of popping at every seam. Pure local ffmpeg, no API and no spend; optional (`pip3 install numpy pillow`), and without it the plain hard-cut stitch still runs. [docs/STITCHING.md](docs/STITCHING.md)
 - **Honest money UX**: a price on every render button, first-job probes on multi-job plans, free re-assembly, upscale only when you choose it.
 - **Review like an editor**: per-clip strip with take history and a chip on every join saying whether the two clips actually run together, scoped re-renders that can be pinned to the clip on either side, change requests that re-run the engine. **See the exact prompt each clip is sent, and edit it** — metered in the bytes the model counts, with the system's share re-composed at render time so your words go out verbatim ([docs/PROMPTS.md](docs/PROMPTS.md)); saving an edit is a local file write and spends nothing.
+- **Fix a take instead of rolling a new one (Segmind only)**: on `seedance-2.0@segmind` and `seedance-2.5@segmind` a segment re-render asks what should change — **Fix this take** re-sends the seed that clip really rendered from, so an edited prompt lands as a change to *that* footage, or **Fresh take** draws a new one. A fix costs exactly what a fresh take costs. No fal backend offers it: fal's Seedance 2.5 takes a seed but is deliberately given no control, fal's Seedance 2.0 rejects one outright, and Kling takes none. [docs/PROVIDERS.md](docs/PROVIDERS.md#fix-this-take-vs-a-fresh-take-segmind-seed-control)
 - **Approved is not the end**: a delivered run can be reopened for changes, and until it is, the server itself refuses to spend on it. Your delivered file stays on disk — a later approval writes a new one beside it and keeps the history.
 - **A fully mocked test suite** — every test runs without keys, network, or spend.
 
@@ -126,7 +127,7 @@ New films go up regularly — subscribe on [YouTube](https://www.youtube.com/@Jo
           │  8 small AI "agents" plan the movie (story, shots, camera, cast, sound, QC)
           ▼
    ENGINE ──▶ RENDER ──▶ STITCH ──▶  out/your-video.mp4  🎬
-              (fal.ai)   (ffmpeg — clips over 15s are chained, then seam-matched automatically)
+              (fal.ai or Segmind)   (ffmpeg — clips over 15s are chained, then seam-matched automatically)
 ```
 
 | # | Agent | What it decides |
@@ -151,19 +152,21 @@ Rendering is **paid, pay-as-you-go** at your render provider — every render sp
 | **Kling o3 — Standard** · default | ~720p | $0.112/s | ≈ $1.68 |
 | **Kling o3 — Pro** · `FAL_KLING_ENDPOINT` | 1080p | $0.14/s | ≈ $2.10 |
 | **Seedance 2.0** · 480p (default) | 480p | $0.14/s | ≈ $2.00 |
+| **Seedance 2.0 on Segmind** · 480p (default) | 480p | $0.0703/s | ≈ $1.05 |
 | **Seedance 2.0** · 720p | 720p | $0.30/s | ≈ $4.50 |
 | **Seedance 2.0** · 1080p | 1080p | $0.68/s | ≈ $10.20 |
 | **Seedance 2.5** · 480p | 480p | $0.2205/s | ≈ $3.31 |
 | **Seedance 2.5** · 720p (default) | 720p | $0.473/s | ≈ $7.10 |
-| **Topaz upscale** · `--upscale` | → 1080p | $0.08/s at 9:16 · tiered by output frame · one job per sub-1080p clip | ≈ $1.20 |
-| **Voice mint** · `mint-voice` | one voice / character | ≈ $0.007 once | — |
-| **Seedance 2.0 on Segmind** · 480p (default) | 480p | $0.0703/s | ≈ $1.05 |
 | **Seedance 2.5 on Segmind** · 720p (default) | 720p | $0.2389/s | ≈ $3.58 |
+| **Topaz upscale** · `--upscale` | → 1080p | $0.08/s at 9:16 · tiered by output frame · one job per sub-1080p clip | ≈ $1.20 |
 | **Topaz upscale on Segmind** · `--upscale` | → target | $0.125/s flat · on the input duration | ≈ $1.88 |
+| **Voice mint** · `mint-voice` | one voice / character | ≈ $0.007 once | — |
 
 > **Snapshot — see [docs/COST.md](docs/COST.md) for current detail.** The default for the fal backends is *render small + Topaz upscale on approve*, so the finished master is 1080p while you pay the economical tier's per-second rate. Rows without a provider are fal's.
 
 > **Segmind runs the same Seedance models at about half fal's rate** (2.0 also does 720p at $0.1512/s, 1080p at $0.34/s, 4k at $1.3721/s; 2.5 does 480p at $0.1065/s and publishes no 1080p or 4k tier). **These renders still cost real money** — Segmind bills in credits, and the balance it reports after each job is what actually left your account. Details in [docs/PROVIDERS.md](docs/PROVIDERS.md).
+
+> **Cheapest working setup** — planning bills your LLM usage, so plan on a CLI your existing plan already covers (or on a vendor's own free tier for it — Google publishes one for the Gemini CLI); render **Seedance on Segmind** (about half fal's rate for the same model); and take the approve-time Topaz upscale on **fal.ai** (its dearest tier still sits under Segmind's flat rate). Every render still costs real money. The `.env` lines: [docs/PROVIDERS.md](docs/PROVIDERS.md#the-lowest-cost-setup-segmind-renders-fal-upscales). The arithmetic: [docs/COST.md](docs/COST.md#the-lowest-cost-setup-priced).
 
 ## Docs
 

@@ -1,28 +1,21 @@
 // Step 4 — the default render backend. One honest card per (model, provider) pair the registry can
-// render; no winner is implied beyond the shipped default, and the caption reminds that this is only
-// a default, changeable per run. The cards are DERIVED: adding a provider to src/lib/render-models.js
-// puts a card here with no edit to this file (StepBackend.test.tsx pins that).
+// render, and the caption reminds that this is only a default, changeable per run. The cards are
+// DERIVED: adding a provider to src/lib/render-models.js puts a card here with no edit to this file
+// (StepBackend.test.tsx pins that). The screen makes exactly TWO claims of its own — the shipped
+// default, and which pair currently quotes the lowest per-second estimate — and the second is
+// computed from the same rate table the cards print, never assigned to a favourite vendor.
 import type { Dispatch } from 'react';
 import clsx from 'clsx';
-import type { Backend, Resolution } from '../../../../shared/api-types';
+import type { Backend } from '../../../../shared/api-types';
 import {
-  MODEL_IDS, aspectsFor, backendIdFor, canonicalBackendFor, castLimitFor, defaultResolutionFor,
+  MODEL_IDS, aspectsFor, backendIdFor, canonicalBackendFor, capsFor, castLimitFor,
   modelLabelFor, providersFor, resolutionsFor,
 } from '../../../../shared/render-models';
-import { perSecondUsdFor } from '../../../../shared/render-rates';
-import { usd } from '../../lib/format';
 import { FixFooter } from './FixFooter';
+// The tier rule, the money sentence and the lowest-rate arithmetic live in the sibling lib because
+// the presets step must quote the SAME figure in the SAME words one screen later.
+import { lowestRateId, rateLabel, tierFor } from './rates';
 import type { WizardAction, WizardState } from './wizard';
-
-// No rate is written here. Every figure on a card is read from the estimator's own table
-// (web/shared/render-rates.ts → web/server/lib/prices.json), at the tier that card would render at,
-// for two reasons: the price is a property of the PAIR (the same Seedance costs about half as much
-// on Segmind as on fal) AND of the TIER (Seedance bills per pixel, so 4k is eleven times 480p), and
-// a hand-copied figure is wrong the day a vendor moves a price with nothing to catch it. A pair the
-// table does not price says so — it never inherits a sibling's figure, and it is never called free,
-// because the render does cost money. Every pair the registry ships is priced today, so
-// RATE_UNKNOWN is the fallback for the NEXT provider added, not dead code.
-const RATE_UNKNOWN = 'rate not on file yet — the render still costs money';
 
 // What each MODEL is good at, in plain words. Numbers never live here: the cap, the ratio count and
 // the tier ladder on each card are read from the registry below.
@@ -48,22 +41,14 @@ const CARDS: Card[] = MODEL_IDS.flatMap((model) =>
         POINTS[model] ?? `Renders on ${p.label}`,
         `Stars up to ${cap} character${cap > 1 ? 's' : ''} · ${aspectsFor(id).length} aspect ratios · `
           + (tiers.length ? `renders ${tiers.join(' / ')}` : 'renders the endpoint’s own output'),
+        // Read off the PAIR's caps, not the model's: the same Seedance offers this on one queue and
+        // not the other, so the model-keyed POINTS map above would print it on cards where the
+        // re-render dialog shows no such control. A fact worth knowing BEFORE picking a provider —
+        // it is the difference between fixing a clip you nearly like and rolling for another one.
+        ...(capsFor(id).seedControl ? ['Segment re-renders can reuse a clip’s seed for a targeted fix'] : []),
       ],
     };
   }));
-
-/** The tier this card would render at if it were picked — the SAME precedence its click applies
- *  below (keep a tier the model offers, else fall to that model's own default). The quoted rate and
- *  the patch therefore cannot describe different renders. */
-const tierFor = (id: Backend, picked: Resolution | null): Resolution | null =>
-  (picked && resolutionsFor(id).includes(picked) ? picked : defaultResolutionFor(id) ?? null);
-
-/** What a card says about money: the estimate's own rate at the tier above, naming that tier so the
- *  figure can never be read as applying to another one. */
-const rateLabel = (id: Backend, tier: Resolution | null): string => {
-  const rate = perSecondUsdFor(id, tier);
-  return rate === null ? RATE_UNKNOWN : `≈ ${usd(rate)}/s est${tier ? ` at ${tier}` : ''}`;
-};
 
 // The shipped default: RENDER_BACKEND unset means the first model on its first provider (config.js).
 const DEFAULT_BACKEND = CARDS[0]!.id;
@@ -75,10 +60,14 @@ const selectedId = (backend: string): string => {
 
 export function StepBackend({ state, dispatch }: { state: WizardState; dispatch: Dispatch<WizardAction> }) {
   const current = selectedId(state.backend);
+  // Inside the component, never at module scope: state.resolution moves the answer (Kling's flat
+  // rate sits under Seedance-on-Segmind's once the wizard holds 720p), so a module-level constant
+  // would freeze a claim about money at import time.
+  const lowest = lowestRateId(CARDS.map((c) => c.id), state.resolution);
   return (
     <div>
       <h1 className="text-title text-ink">Pick a default render backend.</h1>
-      <p className="mt-1 text-body text-ink-secondary">They all make good videos; they trade differently — and they bill differently.</p>
+      <p className="mt-1 text-body text-ink-secondary">They all make good videos; they trade differently — and they bill differently. The lowest per-second estimate on this screen is marked.</p>
 
       <div role="radiogroup" aria-label="Render backend" className="mt-5 grid grid-cols-2 gap-2">
         {CARDS.map((b) => {
@@ -124,13 +113,26 @@ export function StepBackend({ state, dispatch }: { state: WizardState; dispatch:
                   <li key={p} className="text-caption text-ink-secondary">{p}</li>
                 ))}
               </ul>
-              <span className="tnum mt-3 text-caption text-ink-muted">{rateLabel(b.id, tier)}</span>
+              {/* mt-auto pins the money line to the card's baseline: these figures exist to be
+                  compared across the row, so they must stay on one line even when a card carries an
+                  extra bullet (the Segmind seed-control one). The marker rides HERE, not the title
+                  row — it is a claim about this number, and it must be read with it. */}
+              <span className="mt-auto flex flex-wrap items-center gap-2 pt-3">
+                <span className="tnum text-caption text-ink-muted">{rateLabel(b.id, tier)}</span>
+                {/* Same pill chrome as Default/provider, differentiated by weight and ink only: not
+                    status-done (green means finished) and not accent (it would collide with the
+                    selected card's own fill). Plain text, so it correctly joins the radio's
+                    accessible name instead of an aria-label REPLACING the rate for screen readers. */}
+                {b.id === lowest && (
+                  <span className="rounded-full bg-surface-3 px-1.5 py-px text-caption font-medium text-ink">Lowest rate</span>
+                )}
+              </span>
             </button>
           );
         })}
       </div>
 
-      <p className="mt-3 text-caption text-ink-muted">You can change this per run.</p>
+      <p className="mt-3 text-caption text-ink-muted">You can change this per run. Where a model has tiers, these rates follow the resolution you pick next.</p>
 
       <FixFooter state={state} dispatch={dispatch} canContinue={true} scope="backend" />
     </div>

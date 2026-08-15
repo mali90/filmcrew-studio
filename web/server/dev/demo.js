@@ -120,9 +120,23 @@ app.get('/__demo/health', async () => ({ demo: true, fal: fal.baseUrl, segmind: 
 // cancelled, a reopen — because "no spend" is a claim about what left the process, and only the
 // provider's own end can settle it. Voice minting and the storage handshake are not renders and do
 // not count; a probe is (it bills like a short render).
-const renderSubmits = (requests) =>
-  requests.filter((r) => r.method === 'POST' && (/(submit|probe)$/.test(r.path) || r.path.startsWith('/v2/'))).length;
+// One predicate, two readers below — the count and the last body — so "how many renders left the
+// process" and "what was in the last one" can never disagree about what counts as a render submit.
+const isRenderSubmit = (r) => r.method === 'POST' && (/(submit|probe)$/.test(r.path) || r.path.startsWith('/v2/'));
+const renderSubmits = (requests) => requests.filter(isRenderSubmit).length;
 app.get('/__demo/submits', async () => ({ fal: renderSubmits(fal.requests), segmind: renderSubmits(segmind.requests) }));
+// The last render request body each mock received, parsed. A count proves a render happened; only
+// the body proves WHAT was on the wire — which is the only way an e2e can show that "Fix this take"
+// really re-sent the seed the clip on screen rendered from and "Fresh take" really drew another.
+// A GET on purpose: the spend filter above counts POSTs, so reading this can never move the number
+// the zero-spend assertions are watching.
+const lastSubmit = (requests) => {
+  const last = requests.filter(isRenderSubmit).at(-1);
+  if (!last) return null;
+  // A body the mock recorded as something other than JSON is a harness detail, never a 500 here.
+  try { return JSON.parse(last.body); } catch { return null; }
+};
+app.get('/__demo/last-submit', async () => ({ fal: lastSubmit(fal.requests), segmind: lastSubmit(segmind.requests) }));
 
 // Both mocks must go down with the app: a leaked listener wedges the next `npm run demo`.
 process.on('SIGINT', async () => { await app.close(); await fal.close(); await segmind.close(); process.exit(0); });

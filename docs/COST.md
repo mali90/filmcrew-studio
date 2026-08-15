@@ -134,8 +134,33 @@ These are **estimates, not invoices**. Segmind bills in credits, and every finis
 reports its actual cost and your remaining credit balance, which are logged and recorded in the run's
 `prompts.json` — that is the number that actually left your account.
 
+### The lowest-cost setup, priced
+
+Three choices decide most of a bill, and each has a cheapest answer in the tables above. The `.env`
+lines live in [PROVIDERS.md](PROVIDERS.md#the-lowest-cost-setup-segmind-renders-fal-upscales); this is
+why they are the cheap ones.
+
+| Leg | The cheap answer | Why, per the tables above |
+|---|---|---|
+| **Planner** | a CLI whose vendor already covers you | Planning bills LLM usage — never free on our side, and nothing in this repo prices it. A CLI planner bills through that CLI's own sign-in: a plan you already pay for, or a free tier the vendor publishes for it (Google publishes one for the Gemini CLI). Quotas are the vendor's to state. |
+| **Render** | `seedance-2.0@segmind` at 480p | The lowest per-second rate on file: Segmind bills about half fal's for the same model, and 2.0 at 480p is the cheaper of its two models' default tiers. |
+| **Upscale** | fal.ai, picked at approve | fal tiers by the output frame ($0.01 / $0.02 / $0.08 per second); Segmind is $0.125 per second flat. Even fal's dearest tier — the one the default 9:16 shape lands in — is under that flat rate. |
+
+Three things keep this from being a law. Rates move, and these are a July/August 2026 snapshot.
+fal's portrait tier boundary is **inferred from one real invoice**, not documented by fal —
+`web/server/lib/prices.json` records the reasoning, and a future invoice can correct it. And the two
+Topaz jobs are not the same product: Segmind honours `UPSCALE_TARGET_RESOLUTION`, a 4k target fal's
+factor plan never reaches, so above 1080p you are comparing different deliveries. The approve card
+quotes both vendors live on your own cut — compare there rather than trusting this row.
+
+Rendering small and upscaling is not automatically cheaper than rendering big, either: compare the
+combined cost against a native 1080p render for your own clip lengths, as **The cheap Seedance path**
+below says.
+
 ### Keep costs down
 
+- **Start from [the lowest-cost setup](#the-lowest-cost-setup-priced)** — planner, render provider
+  and upscale vendor, each at the cheapest answer these tables support.
 - On a **long, multi-job plan**, test with **`--probe`** first — it renders only the **first job**
   and skips the final stitch, so you judge the direction for a fraction of the full price.
   Probes exist *only* on multi-job plans: a short single-job video renders whole either way, so
@@ -177,7 +202,14 @@ reports its actual cost and your remaining credit balance, which are logged and 
   pixels and a far heavier job. What Segmind's credits actually charge for it is the vendor's
   business, not this table's, so check the balance if you turn it up; nothing derives it for you, and
   4k only ever happens because you asked. `UPSCALE_PROVIDER` (default `auto`) upscales wherever the
-  run rendered, which also avoids paying a second vendor to move the file.
+  run rendered, which is the fewest moving parts — but after a Segmind render that is Segmind's flat
+  rate; `UPSCALE_PROVIDER=fal` buys the tiered one (see
+  [The lowest-cost setup, priced](#the-lowest-cost-setup-priced)). The web app asks at approve and
+  shows both figures, so this line governs terminal finishes.
+- **A re-render that "fixes this take" is not a cheaper re-render.** On the Segmind backends the
+  dialog lets you re-send the clip's own seed so an edited prompt lands as a change to *that*
+  footage — it costs exactly what a fresh take costs, and buys likelihood of landing, not a discount
+  ([how it works](PROVIDERS.md#fix-this-take-vs-a-fresh-take-segmind-seed-control)).
 
 > `npm run init` connects your keys and can run a small test render of the bundled example to
 > confirm everything works end-to-end.

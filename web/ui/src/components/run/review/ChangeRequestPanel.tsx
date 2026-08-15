@@ -13,7 +13,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { ChevronDown, Film, MessageSquare, PenLine } from 'lucide-react';
 import type { RunDetail } from '../../../../../shared/api-types';
-import { castRefCountFor } from '../../../../../shared/render-models';
+import { castRefCountFor, seedControlFor } from '../../../../../shared/render-models';
 import { api, ApiClientError } from '../../../api/client';
 import { Button } from '../../ui/Button';
 import { SegmentedControl } from '../../ui/SegmentedControl';
@@ -98,6 +98,12 @@ export function ChangeRequestPanel({ run }: { run: RunDetail }) {
   // at all. Its scoped buttons post `boundaries: 'auto'` to the endpoint SegmentRerenderDialog posts
   // to, so the answer is that dialog's own — the same helper, not a second reading of the same cut.
   const backend = run.latestRender?.backend ?? run.backend ?? 'kling';
+  // "The plan changed" means the WORDS moved: on a backend with seed control the scoped button
+  // says so out loud and posts seedMode:'fix', holding the clip's ACTUAL starting point (read off
+  // its take, not recomputed) so the revision is what changes. Omitting the field would quietly
+  // fall back to the deterministic default — after a Fresh take, that is neither this clip's seed
+  // nor a fresh one, a third starting point nobody chose. Cap-less backends keep posting no field.
+  const holdsSeed = seedControlFor(backend);
   const entryOf = (id: string | null | undefined) => (run.continuity ?? []).find((e) => e.jobId === id) ?? null;
   const { endStrength, showSeamWarning, offerCascade } = segmentJoins({
     backend,
@@ -128,7 +134,7 @@ export function ChangeRequestPanel({ run }: { run: RunDetail }) {
   });
 
   const rerenderJob = useMutation({
-    mutationFn: (cascade: boolean) => api.rerenderJob(run.id, { jobId: scopedJob!, boundaries: 'auto', ...(cascade ? { cascade: true } : {}) }),
+    mutationFn: (cascade: boolean) => api.rerenderJob(run.id, { jobId: scopedJob!, boundaries: 'auto', ...(holdsSeed ? { seedMode: 'fix' as const } : {}), ...(cascade ? { cascade: true } : {}) }),
     onSuccess: () => toast({ kind: 'success', text: 'Re-render started.' }),
     onError,
   });
@@ -174,6 +180,15 @@ export function ChangeRequestPanel({ run }: { run: RunDetail }) {
                 >
                   Re-render {scopedJob} + downstream
                 </PaidButton>
+              )}
+              {holdsSeed && (
+                <p className="text-caption text-ink-muted" data-testid="plan-changed-fix-note">
+                  Keeps {scopedJob}&rsquo;s starting point — your new words on the same picture.
+                  {/* The caption sits under BOTH scoped buttons, and the server sends no seed
+                      downstream — the same disclosure the dialog's cascade note makes, kept in
+                      step here (both surfaces must offer the same reading of one endpoint). */}
+                  {offerCascade && <> {downstream[0]} and everything after it follow from their own starting points.</>}
+                </p>
               )}
               {showSeamWarning && (
                 <p className="text-caption text-ink-muted" data-testid="rail-seam-note">

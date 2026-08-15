@@ -17,6 +17,16 @@ providers; pick a default in `.env` or switch per run with `--backend`. You only
 provider you actually render on — a Segmind-only install never needs `FAL_KEY` (see
 [Segmind-only setup](#segmind-only-setup-no-fal-account) below).
 
+**Which provider should you pick?**
+
+| If you want… | Pick |
+|---|---|
+| the same Seedance model for about half the per-second rate | **Segmind** ([figures](COST.md#segmind-about-half-fals-rate)) |
+| a re-render that can **fix this take** instead of rolling a new one | **Segmind** — no fal backend offers the choice ([why](#fix-this-take-vs-a-fresh-take-segmind-seed-control)) |
+| Kling 3.0 Omni, minted character voices, or the cheaper Topaz upscale | **fal.ai** |
+| the lowest end-to-end bill | **both** — Segmind renders, fal upscales ([recipe](#the-lowest-cost-setup-segmind-renders-fal-upscales)) |
+| one account and nothing else | **Segmind only** ([recipe](#segmind-only-setup-no-fal-account)) |
+
 1. **fal.ai** — create an account and get a key at **https://fal.ai/dashboard/keys**
    (pay-per-second; commercial use permitted).
 2. **Segmind** — create an account and get a key at **https://www.segmind.com** → Console → API
@@ -62,7 +72,7 @@ kept in step with it.
 | Combined ref budget | — | per-kind only | per-kind only | **50 across all kinds** | per-kind only |
 | Ref citation style | `elements` (no in-prompt citation) | `@Image1` (compact) | `@Image 1` (spaced) | `[Image1]` (bracket) | `@Image 1` (spaced) |
 | Shot syntax | storyboard segments | connectors ("then…") | connectors ("then…") | `Shot N:` numbered | `Shot N:` numbered |
-| `seed` | not accepted | **rejected (422)** — retakes use `--take <n>` | accepted | accepted | accepted |
+| `seed` | not accepted | **rejected (422)** — retakes use `--take <n>` | accepted — **chosen per re-render** (fix vs fresh, [below](#fix-this-take-vs-a-fresh-take-segmind-seed-control)) | accepted (always the deterministic default) | accepted — **chosen per re-render** (fix vs fresh, [below](#fix-this-take-vs-a-fresh-take-segmind-seed-control)) |
 | Native first/last frame | yes | no (seam frame demoted to a trailing ref) | yes, but **mutually exclusive with reference images** | no (seam frame demoted to a trailing ref) | yes, but **mutually exclusive with reference images** |
 | Seam mode applied | `native` (start anchored; **end best-effort**, see below) — `none` on a text-to-video job | `soft` always | `native` only on a **cast-less** job, else `soft` | `soft` always | `native` only on a **cast-less** job, else `soft` |
 | Duration field | string | string | integer | string | integer |
@@ -130,7 +140,10 @@ that was not sent.
 Which provider upscales is `UPSCALE_PROVIDER=auto|fal|segmind` (default `auto`). `auto` upscales
 wherever the run **rendered**, so a master never round-trips through a second vendor, and falls back
 to whichever provider actually has a key — that fallback is what lets a Segmind-only install finish
-a 1080p film with no fal account at all.
+a 1080p film with no fal account at all. `auto` is the fewest moving parts, not the cheapest: after a
+Segmind render it picks Segmind's flat-rate Topaz, while fal's tiered rate sits below that flat rate
+in every case this app prices ([why](COST.md#the-lowest-cost-setup-priced)). The web app asks at
+approve and quotes both vendors; `UPSCALE_PROVIDER` decides only for terminal finishes.
 
 > **`target_fps` is pinned on purpose.** Segmind's Topaz **defaults `target_fps` to 60**, and both
 > Seedance models render at 24fps — an unpinned call would hand back a frame-**interpolated** clip
@@ -158,7 +171,8 @@ no separate text-to-video tier, so an idea with no image references rides the sa
 Two **2.0-on-fal** quirks worth knowing: that endpoint accepts **no `seed` and no `negative_prompt`**
 (both are rejected with HTTP 422), so retakes use the `--take <n>` prompt nonce and appearance
 guards ride the prompt itself (`SEEDANCE_AVOID`, `SEEDANCE_TEXT_RULE`, `SEEDANCE_STYLE`). Seedance
-2.5 and both Segmind backends *do* take a seed. Jobs must total **at least 4 seconds** — the planner
+2.5 and both Segmind backends *do* take a seed — and on the Segmind pair that seed is a choice you
+make per re-render ([below](#fix-this-take-vs-a-fresh-take-segmind-seed-control)). Jobs must total **at least 4 seconds** — the planner
 packs to this automatically.
 
 ### How Segmind's transport differs
@@ -194,6 +208,95 @@ The default follows what you have: `fal-storage` when a fal key is present, `dat
 not — so a Segmind-only install works out of the box, and `npm run doctor` flags the one broken
 combination (`fal-storage` with no `FAL_KEY`) instead of letting it fail on the first upload.
 
+### Fix this take vs a fresh take (Segmind seed control)
+
+Segmind documents `seed` as a reproducibility control, and both its Seedance models accept one — so
+re-rendering a single segment in the web app asks **what the re-render should change**, right under
+the boundary plan:
+
+- **Fix this take** re-sends the seed the clip on screen actually rendered from. The number is read
+  back out of that take's own `prompts.json` rather than recomputed from a formula, so "the same
+  starting point" means one that really happened — including on a take rendered by an older build or
+  with an explicit `--seed`. An edited prompt then lands as a change *to that footage* and the rest
+  stays close. Close, not guaranteed: the vendor promises no more than that, and neither does the
+  wording in the dialog.
+- **Fresh take** draws a new seed, so the model interprets the segment from scratch. It is the
+  default — the dialog is opened by someone who did not like the clip — and it is genuinely fresh: a
+  draw that came back equal to the seed already on disk is re-drawn rather than sold as a new take.
+
+**A fix costs exactly what a fresh take costs.** Both render the same segment for the same duration
+at the same rate, so the seed decides where the render starts and never what it bills; the price on
+the button does not move when you switch between the two.
+
+The choice belongs to **one re-render, not to the run**: there is no `.env` knob, nothing is
+persisted, and every re-render asks again with *Fresh take* pre-selected. A cascade carries no seed
+either — the choice applies to the segment you picked, and the downstream jobs are re-rendered to
+rebuild the chain exactly as they always were. One surface decides for you, and says so: the rail's
+"the plan changed" shortcut posts an explicit *fix* — the words moved, so the picture holds, and a
+caption under the button states it. Choosing *fresh* for a plan change is one click away in the
+dialog.
+
+The control appears only where the registry declares the capability (`capsFor('<id>').seedControl`,
+true on the two `@segmind` ids). Everywhere else it is not shown at all rather than shown greyed out,
+because those re-renders send no seed field and their request bodies are unchanged:
+`seedance-2.5@fal` accepts a seed but is deliberately given no control, `kling-o3@fal` takes none,
+and `seedance-2.0@fal` rejects one outright (422, above) — all three keep rendering from the
+deterministic per-job seed they always used. Asking for a seed mode on a backend without the cap is
+refused with a 400 *before* a take directory or a cost-ledger row exists, rather than being quietly
+ignored, because silently dropping it would sell a paid "fresh take" that re-sent the same starting
+point.
+
+From a terminal the same lever is a flag with none of the gating —
+`npm run render-job -- --spec runs/<id>/spec.json --job K2 --out runs/<id>/renders/t3 --seed 12345` — validated before the render is
+queued, and independent of `--take <n>`, which varies the *words* rather than the starting point.
+Every take records what it was sent in its `prompts.json` sidecar: `seed` where the endpoint took
+one, `seed_unused` where it did not.
+
+### The lowest-cost setup (Segmind renders, fal upscales)
+
+The cheapest way to run this project by the rates this app quotes from
+(`web/server/lib/prices.json`; the arithmetic is in [COST.md](COST.md#the-lowest-cost-setup-priced)):
+
+```
+LLM_PROVIDER=gemini                    # any planner whose vendor already covers you
+LLM_TRANSPORT=cli                      # bills through that CLI's own sign-in
+LLM_MODEL=gemini-2.5-flash             # any id your provider lists — see the planner section below
+RENDER_BACKEND=seedance-2.0@segmind    # the cheapest per-second row on file (480p default)
+SEGMIND_API_KEY=paste_your_segmind_key_here
+FAL_KEY=paste_your_fal_key_here        # only the upscale (and Kling / voices) runs here
+UPSCALE_PROVIDER=fal                   # `auto` would upscale on Segmind after a Segmind render
+```
+
+- **Planner — the vendor's tier, not ours.** Planning always bills LLM usage; none of it is free on
+  our side. `LLM_TRANSPORT=cli` spawns the planner's own CLI (`claude`, `codex`, `gemini`,
+  `copilot`) and bills through that CLI's sign-in — a plan you already pay for (Copilot, for one,
+  needs an active subscription), or a free tier the vendor publishes for it: Google publishes one for
+  the Gemini CLI, signed in with a Google account. Quotas and eligibility are the vendor's to state
+  and to change, so check their page, not this one. `LLM_TRANSPORT=api` bills per call instead.
+- **Render on Segmind.** The same Seedance model bills about half on Segmind as on fal, and
+  `seedance-2.0@segmind` at its default 480p is the cheapest per-second rate on file
+  ([the table](COST.md#segmind-about-half-fals-rate)). `seedance-2.5@segmind` costs more per second
+  and buys a 30s job window and four starred characters. Both carry the
+  [fix this take](#fix-this-take-vs-a-fresh-take-segmind-seed-control) re-render control that no fal
+  backend offers.
+- **Upscale on fal.** fal's Topaz is tiered by the output frame — $0.01/s up to 720p, $0.02/s to
+  1080p, $0.08/s above — while Segmind's is **$0.125/s flat** on the input duration. The default 9:16
+  shape lands in fal's dearest tier, and even that sits under Segmind's flat rate, so for every case
+  this app prices, fal is the cheaper Topaz. The web app asks at approve and shows **both** vendors'
+  live figures; `.env` decides only for terminal finishes, where `auto` follows the render provider
+  to Segmind.
+
+**What that fal key changes.** `npm run doctor` then requires it (`UPSCALE_PROVIDER=fal` says so),
+reference uploads default to fal's CDN (`SEGMIND_UPLOAD_MODE=fal-storage`; set `data-uri` to keep
+them inline and off fal), and Kling 3.0 Omni plus minted character voices (≈ $0.007 once per
+character) become available. No fal account at all is still supported — see
+[Segmind-only setup](#segmind-only-setup-no-fal-account) below, which upscales on Segmind because it
+must.
+
+**Still not free.** Every render spends money at whichever provider you picked, planning spends your
+LLM allowance, and these rates are a snapshot — re-check `segmind.com/models/<slug>/pricing` and
+fal's model pages before a long run.
+
 ### Segmind-only setup (no fal account)
 
 You can run this project entirely on Segmind. In `.env`:
@@ -207,7 +310,9 @@ RENDER_BACKEND=seedance-2.5@segmind   # or seedance-2.0@segmind
 
 **What works:** planning, rendering either Seedance model, the local ffmpeg stitch, and the
 approve-time Topaz upscale — the whole path from idea to finished 1080p `.mp4`, with no `FAL_KEY`
-anywhere. `npm run doctor` treats this as a valid setup and will not ask you for a fal key.
+anywhere. `npm run doctor` treats this as a valid setup and will not ask you for a fal key. If you
+do have a fal key, the cheaper Topaz is fal's — see
+[the lowest-cost setup](#the-lowest-cost-setup-segmind-renders-fal-upscales) above.
 
 **What does not:** **Kling 3.0 Omni** (fal-only — `kling-o3@fal` is the only backend that renders it)
 and **minted character voices** (`npm run mint-voice` needs `FAL_KEY`). Without minted voices,

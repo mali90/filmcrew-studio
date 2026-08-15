@@ -56,3 +56,21 @@ test('both mocks are closed on SIGINT and SIGTERM (a leaked listener wedges the 
     assert.match(block[0], /fal\.close\(\)/, `${sig} still closes the fal mock`);
   }
 });
+
+// `/__demo/submits` can only say HOW MANY renders left the process. Proving that a "Fix this take"
+// re-render really re-sent the seed its clip rendered from needs the request itself, so the harness
+// also exposes the last render body per mock. Two structural properties matter and both are money
+// ones: it is a GET (the spend filter counts POSTs, so an e2e reading it cannot inflate the number
+// a zero-spend assertion is watching), and it shares ONE definition of "render submit" with the
+// counter — two filters would eventually count different requests than they report.
+test('/__demo/last-submit exposes the last render body without disturbing the spend count', () => {
+  assert.match(SRC, /app\.get\('\/__demo\/last-submit'/, 'a GET: reading a body must never look like a submit');
+  assert.ok(!/app\.post\('\/__demo\/last-submit'/.test(SRC), 'a POST here would be counted as a render submit');
+  for (const mock of ['fal', 'segmind']) {
+    assert.match(SRC, new RegExp(`__demo/last-submit[\\s\\S]{0,200}${mock}\\.requests`), `it reads the ${mock} mock's log`);
+  }
+  // one predicate, both readers — a body the count ignores (or vice versa) is a silent disagreement
+  assert.match(SRC, /const isRenderSubmit = \(r\) =>/, 'the submit predicate is named once');
+  assert.match(SRC, /renderSubmits = \(requests\) => requests\.filter\(isRenderSubmit\)/, 'the counter uses it');
+  assert.match(SRC, /lastSubmit = \(requests\)[\s\S]{0,160}filter\(isRenderSubmit\)/, 'and so does the body reader');
+});

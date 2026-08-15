@@ -10,6 +10,7 @@ import { server, http, HttpResponse } from '../../test/msw';
 import { ToastProvider } from '../ui/Toast';
 import { StepFal } from './StepFal';
 import { initialWizardState, wizardReducer, type WizardState } from './wizard';
+import PRICES from '../../../../server/lib/prices.json';
 
 const SEGMIND_SEED: Partial<WizardState> = {
   backend: 'seedance-2.5@segmind' as WizardState['backend'],
@@ -65,5 +66,23 @@ describe('StepFal stored-key guard (Segmind path)', () => {
     renderStep(false);
     expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled();
     expect(calls).toHaveLength(0);
+  });
+});
+
+// The optional fal key on the Segmind path is the upscale half of the low-cost setup, so the
+// paragraph makes ONE comparative claim — and no figure, because a figure here would be a second
+// copy of prices.json. The claim is relative, so the test checks the relation, not a number.
+describe('StepFal — why a Segmind install still wants a fal key', () => {
+  it('states the upscale claim in words, quoting nothing', () => {
+    renderStep(false);
+    const para = screen.getByText(/every fal\.ai tier on file bills under Segmind’s flat per-second rate/);
+    expect(para).toBeInTheDocument();
+    expect(para.textContent ?? '').not.toMatch(/\$|\bfree\b/i);
+  });
+
+  it('…and prices.json still makes that sentence true', () => {
+    // if this fails the sentence above is no longer true — change the copy, not the test
+    expect(Math.max(...(Object.values(PRICES.topaz.perSecondUsd) as number[])))
+      .toBeLessThan(PRICES['topaz@segmind'].perSecondUsd);
   });
 });

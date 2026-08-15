@@ -67,7 +67,7 @@ test('render-job CLI: re-renders one job of a multi-job spec into --out', async 
   } finally { cleanup(); }
 });
 
-test('render-job CLI: bad --take and missing --job are usage errors', async () => {
+test('render-job CLI: bad --take, bad --seed and missing --job are usage errors', async () => {
   const { dir, cleanup } = mkTmp('renderjob-cli-usage');
   try {
     const specPath = path.join(dir, 'spec.json');
@@ -78,6 +78,18 @@ test('render-job CLI: bad --take and missing --job are usage errors', async () =
     const badTake = await runCli('src/cli/render-job.js', ['--spec', specPath, '--job', 'K1', '--take', 'two'], { env: FAL_ENV });
     assert.equal(badTake.code, 1);
     assert.match(badTake.stderr, /--take/);
+    const badSeed = await runCli('src/cli/render-job.js', ['--spec', specPath, '--job', 'K1', '--seed', 'lucky'], { env: FAL_ENV });
+    assert.equal(badSeed.code, 1);
+    assert.match(badSeed.stderr, /--seed must be an integer/);
+    // A bare --seed is a MEANT flag with a lost value: refusing beats silently rendering the
+    // deterministic default the caller typed the flag to replace.
+    const bareSeed = await runCli('src/cli/render-job.js', ['--spec', specPath, '--job', 'K1', '--seed'], { env: FAL_ENV });
+    assert.equal(bareSeed.code, 1);
+    assert.match(bareSeed.stderr, /--seed needs a value/);
+    // `--seed "$SEED"` with the variable unset is the commonest real form of a lost value.
+    const emptySeed = await runCli('src/cli/render-job.js', ['--spec', specPath, '--job', 'K1', '--seed', ''], { env: FAL_ENV });
+    assert.equal(emptySeed.code, 1);
+    assert.match(emptySeed.stderr, /--seed needs a value/);
     // Pinning an end and freeing it are two answers to one question — neither may silently win.
     const bothWays = await runCli('src/cli/render-job.js',
       ['--spec', specPath, '--job', 'K1', '--first-frame-from', path.join(dir, 'pin.png'), '--no-first-frame'], { env: FAL_ENV });

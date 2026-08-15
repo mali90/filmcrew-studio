@@ -169,7 +169,7 @@ test('seedance-2.5@segmind: spaced refs, INT duration 4–30, native frames that
     resolutions: ['480p', '720p'], defaultResolution: '720p',
     aspects: SIX_ASPECTS,
     nativeFirstFrame: true, nativeLastFrame: true, firstFrameExcludesRefs: true,
-    supportsSeed: true, supportsReturnLastFrame: true,
+    supportsSeed: true, seedControl: true, supportsReturnLastFrame: true,
     refStyle: 'spaced', shotSyntax: 'numbered', knobsKey: 'seedance25',
     argMap: {
       images: 'reference_images', audios: 'reference_audios', videos: 'reference_videos',
@@ -192,7 +192,7 @@ test('seedance-2.0@segmind: the same queue, a smaller model — 9 images, 3 audi
     resolutions: ['480p', '720p', '1080p', '4k'], defaultResolution: '480p',
     aspects: SIX_ASPECTS,
     nativeFirstFrame: true, nativeLastFrame: true, firstFrameExcludesRefs: true,
-    supportsSeed: true, supportsReturnLastFrame: true,
+    supportsSeed: true, seedControl: true, supportsReturnLastFrame: true,
     refStyle: 'spaced', shotSyntax: 'connectors', knobsKey: 'seedance',
     argMap: {
       images: 'reference_images', audios: 'reference_audios', videos: 'reference_videos',
@@ -203,6 +203,27 @@ test('seedance-2.0@segmind: the same queue, a smaller model — 9 images, 3 audi
   // entry, so `seedance-2.0@fal` cannot gain a ratio fal will 422 on.
   assert.deepEqual(RENDER_MODELS['seedance-2.0'].aspects, ['16:9', '9:16', '1:1']);
   assert.equal(demotesOpeningFrame(capsFor('seedance-2.0@segmind')), true);
+});
+
+// ── `seedControl`: accepting a seed vs. it being worth choosing ─────────────
+// Two different facts, and conflating them is what a `provider === 'segmind'` branch would do. The
+// invariants are derived from BACKEND_IDS rather than listed, so a new entry has to answer both
+// questions on purpose instead of inheriting one from the other.
+test('seedControl implies supportsSeed — a chosen seed nothing sends is a lie', () => {
+  for (const id of BACKEND_IDS) {
+    const caps = capsFor(id);
+    if (caps.seedControl) assert.equal(caps.supportsSeed, true, id);
+  }
+});
+
+test('seedControl is declared on the Segmind entries and nowhere else', () => {
+  // seedance-2.5@fal accepts a seed too and deliberately gets NO control (see the plan's scope):
+  // the reverse implication must therefore stay false, or the dialog would appear on a fal card.
+  for (const id of BACKEND_IDS) {
+    assert.equal(Boolean(capsFor(id).seedControl), id.endsWith('@segmind'), id);
+  }
+  assert.equal(capsFor('seedance-2.5@fal').supportsSeed, true, 'and it is not for want of a seed argument');
+  assert.equal(BACKEND_IDS.filter((id) => capsFor(id).seedControl).length, 2, 'exactly the two Segmind entries');
 });
 
 test('demotesOpeningFrame stays FALSE only where a native slot coexists with refs (kling)', () => {

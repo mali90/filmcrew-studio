@@ -73,6 +73,10 @@ test('prompt preview → edit → re-render dialog (cancelled) → approve → r
   // "Seamless" is only ever said of a native anchor; whatever this backend does, the sentence must
   // not promise more than the renderer's own rule allows.
   await expect(plan).not.toContainText(/guaranteed/i);
+  // The seeded run renders on Kling, whose caps carry no `seedControl` — so the fix/fresh choice is
+  // ABSENT here, not greyed. A control on this dialog would be offering a body the server answers
+  // with a 400, and this is the only test that walks the real registry into the real dialog.
+  await expect(dialog.getByTestId('regen-mode')).toHaveCount(0);
   await dialog.getByRole('button', { name: /^cancel$/i }).click();
   await expect(dialog).toBeHidden();
   expect(await submits(), 'reading a prompt, saving an edit and cancelling a paid dialog spend nothing').toEqual(before);

@@ -4,6 +4,7 @@ import { neutralizeDotenv } from '../helpers/env.js';
 import { loadGoldenSpec } from '../helpers/fixtures.js';
 neutralizeDotenv();
 const { seedForJob, downstreamJobs } = await import('../../src/lib/pipeline.js');
+const seedCore = await import('../../src/lib/render-seed.js');
 
 test('seedForJob: deterministic per job position, take variation offsets by 7', () => {
   assert.equal(seedForJob(0, 0), 70000);
@@ -11,6 +12,13 @@ test('seedForJob: deterministic per job position, take variation offsets by 7', 
   assert.equal(seedForJob(0, 1), 70007);
   assert.equal(seedForJob(2, 3), 70221);
   assert.equal(seedForJob(1, undefined), 70100, 'missing take = base seed');
+});
+
+// The formula moved to the zero-import seed module so web/server can compute it without dragging
+// config.js into its static graph. pipeline.js re-exports the SAME binding — not a copy — which is
+// what keeps every existing importer (and the two numbers above) speaking of one function.
+test('pipeline.js re-exports the seed module\'s own function, never a second implementation', () => {
+  assert.equal(seedForJob, seedCore.seedForJob);
 });
 
 test('downstreamJobs: jobs after the given one, in stitch order (their seams go stale on re-render)', () => {

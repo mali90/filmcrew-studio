@@ -109,7 +109,8 @@ import {
 /** How a boundary frame gets applied: a true anchor, a reference-guided likeness, or nothing. */
 export type PinStrength = 'native' | 'soft' | 'none';
 
-/** Only the caps fields the seam rule reads — the registry is untyped JS. */
+/** Only the caps fields this file reads — the seam rule's, plus `seedControl` below. The registry
+ *  is untyped JS, so anything not declared here is simply not surfaced to the UI. */
 interface SeamCaps {
   family?: string;
   nativeFirstFrame?: boolean;
@@ -118,6 +119,8 @@ interface SeamCaps {
   maxImages?: number;
   maxCombinedRefs?: number | null;
   argMap?: Record<string, string | null> | null;
+  /** Whether a re-render on this backend may CHOOSE its seed — see seedControlFor. */
+  seedControl?: boolean;
 }
 
 /** The merged caps bundle for a backend id (throws on an id no provider entry serves). */
@@ -133,6 +136,23 @@ const pinStrengths = registryPinStrengths as (p: SeamArgs & { otherRefCount?: nu
  * why this is read from the registry helper rather than spelled out at each call site.
  */
 export const castRefCountFor = registryCastRefCountFor as (spec: unknown, jobId: string) => number;
+
+/**
+ * Whether a paid re-render on this backend may CHOOSE its starting point — reuse the seed the
+ * segment's current take rendered from ("fix this take"), or draw a new one ("fresh take").
+ *
+ * Registry-derived on purpose: this is the ONE question the dialog and the setup card ask, and
+ * answering it with `provider === 'segmind'` would fork the moment another queue documents the same
+ * control. An id this build cannot resolve answers FALSE — the control is then hidden and the
+ * re-render behaves exactly as it always has, which is the safe way to be wrong about money.
+ */
+export function seedControlFor(backend: Backend | string): boolean {
+  try {
+    return Boolean(capsFor(backend).seedControl);
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Can this backend pin that end AT ALL? The model's own answer (`chooseSeamMode`), with no

@@ -127,10 +127,17 @@ export function StepFal({ state, dispatch, falKeyStored = false }: { state: Wiza
           />
         </div>
 
+        {/* The upscale claim is RELATIVE and carries no figure on purpose: it is true of every
+            Topaz tier in prices.json today ($0.08 worst fal tier under Segmind's $0.125 flat), and
+            StepFal.test.tsx asserts that against the table so the sentence fails loudly rather than
+            going quietly stale. Honest for THIS flow specifically — the approve bar defaults to
+            fal whenever a fal key exists. */}
         <p className="mt-5 text-caption text-ink-muted">
-          Optional: Kling 3.0 Omni and minting persistent character voices run on fal.ai. Add a fal
-          key too, or skip it — a Segmind-only install renders and upscales without one. If you add
-          one it must validate: renders would route reference uploads through it.
+          Optional: a fal.ai key. Kling 3.0 Omni and minting persistent character voices run on
+          fal.ai — and so does the less expensive upscale: approving a video quotes Topaz on both
+          vendors, and every fal.ai tier on file bills under Segmind&rsquo;s flat per-second rate. A
+          Segmind-only install still renders and upscales without one; a key you do add must
+          validate, because renders would route reference uploads through it.
         </p>
         <div className="mt-2">{falField}</div>
         {storedInPlay && (

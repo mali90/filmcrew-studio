@@ -7,8 +7,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ToastProvider } from '../ui/Toast';
 import { StepBackend } from './StepBackend';
+import { lowestRateId } from './rates';
 import { initialWizardState, type WizardState } from './wizard';
-import { BACKEND_IDS } from '../../../../../src/lib/render-models.js';
+import type { Backend } from '../../../../shared/api-types';
+import { modelLabelFor, providerLabelFor } from '../../../../shared/render-models';
+import { BACKEND_IDS, capsFor } from '../../../../../src/lib/render-models.js';
 
 function renderStep(over: Partial<WizardState> = {}) {
   const dispatch = vi.fn();
@@ -89,6 +92,36 @@ describe('StepBackend — the cards are the registry', () => {
   });
 });
 
+// One more thing the cards say, and it is a capability of the PAIR: on the queues that document a
+// seed as a reproducibility control, a segment re-render can re-send the seed a clip already used
+// and land a prompt tweak on that same picture. Worth knowing at the moment a provider is picked —
+// and printed from the registry, never from the model-keyed POINTS map, which would put it on a
+// card whose re-render dialog offers no such control.
+describe('StepBackend — the seed-control bullet is registry-derived', () => {
+  const SEED_BULLET = /reuse a clip’s seed for a targeted fix/;
+
+  it('appears on exactly the cards whose caps carry seedControl, and nowhere else', () => {
+    const expected = BACKEND_IDS.filter((id: string) => capsFor(id).seedControl);
+    expect(expected.length).toBeGreaterThan(0);   // a build with the cap nowhere would pass vacuously
+
+    const { group } = renderStep();
+    const cards = within(group).getAllByRole('radio');
+    const withBullet = cards.filter((c) => SEED_BULLET.test(c.textContent ?? ''));
+    expect(withBullet).toHaveLength(expected.length);
+    // and they are the same cards: every one of them is a Segmind pair today, which is the only
+    // provider whose caps carry it
+    for (const card of withBullet) expect(within(card).getByText('Segmind')).toBeInTheDocument();
+  });
+
+  it('states the capability without quoting money — a fix is not the cheap option', () => {
+    const { group } = renderStep();
+    const card = within(group).getByRole('radio', { name: /Seedance 2\.0 Segmind/ });
+    expect(card).toHaveTextContent('Segment re-renders can reuse a clip’s seed for a targeted fix');
+    const bullet = within(card).getByText(SEED_BULLET);
+    expect(bullet.textContent ?? '').not.toMatch(/\$|\bfree\b|cheap/i);
+  });
+});
+
 describe('StepBackend — honest money copy', () => {
   it('quotes fal Seedance 2.5\'s real published rate', () => {
     const { group } = renderStep();
@@ -136,5 +169,52 @@ describe('StepBackend — honest money copy', () => {
     expect(within(group).getByRole('radio', { name: /Seedance 2\.5 fal/ })).toHaveTextContent('$0.47');
     // Kling has no ladder at all: its endpoint's own output, one flat rate, no tier to name.
     expect(within(group).getByRole('radio', { name: /Kling 3\.0/ })).toHaveTextContent('$0.11');
+  });
+});
+
+// The one comparative claim this screen makes. It is DERIVED (web/shared/render-rates.ts, at the
+// tier each card would render at), so the assertions below never name a winner: they ask
+// lowestRateId who it is and check the badge is on that card. A hard-coded id here would keep
+// passing on the day a vendor moves a price and the badge starts pointing at the dearer pair.
+describe('StepBackend — the lowest-rate marker is computed, never assigned', () => {
+  const IDS = BACKEND_IDS as Backend[];
+  /** The radio's accessible name starts with the card's model + provider labels, both registry-read. */
+  const nameOf = (id: Backend) =>
+    new RegExp(`${modelLabelFor(id)} ${providerLabelFor(id)}`.replace(/\./g, '\\.'));
+
+  it('marks exactly one card, and it is the one lowestRateId names', () => {
+    const { group } = renderStep();
+    expect(within(group).getAllByText('Lowest rate')).toHaveLength(1);
+
+    const winner = lowestRateId(IDS, initialWizardState.resolution);
+    expect(winner).not.toBeNull();
+    const card = within(group).getByRole('radio', { name: nameOf(winner!) });
+    expect(within(card).getByText('Lowest rate')).toBeInTheDocument();
+    // …and it still quotes the figure the badge is a claim ABOUT: the pill rides the money line,
+    // so a marker without a rate beside it would be an unsupported superlative.
+    expect(card.textContent ?? '').toMatch(/\$\d/);
+  });
+
+  it('re-ranks with the tier the wizard is holding — the marker is not a property of a provider', () => {
+    const { group } = renderStep({ backend: 'seedance-2.0@fal', resolution: '720p' });
+    const winner = lowestRateId(IDS, '720p');
+    expect(winner).not.toBeNull();
+    expect(within(group).getAllByText('Lowest rate')).toHaveLength(1);
+    expect(within(within(group).getByRole('radio', { name: nameOf(winner!) })).getByText('Lowest rate'))
+      .toBeInTheDocument();
+    // Today it really does move (Kling's flat rate undercuts Segmind's 720p tier), which is why the
+    // footnote tells the user these rates follow the resolution picked next. If a price change ever
+    // makes one pair win at every tier, this line is the place to notice — and the footnote, not
+    // the marker, is what would need re-wording.
+    expect(winner).not.toBe(lowestRateId(IDS, initialWizardState.resolution));
+  });
+
+  it('says "Lowest rate" and nothing grander — not "Best value", not "Free"', () => {
+    // A rate is per second; Kling packs multiple shots into one job. The wording is the mitigation,
+    // so drift in it is a correctness bug, not copy-editing.
+    const { group } = renderStep();
+    const badge = within(group).getByText('Lowest rate');
+    expect(badge.textContent).toBe('Lowest rate');
+    expect(badge.textContent ?? '').not.toMatch(/\bfree\b|best value|cheapest|cheap/i);
   });
 });

@@ -16,6 +16,10 @@ import { safeChild } from './paths.js';
 // pure function over a run record, and the model registry imports nothing at all.
 import { computeLineage, resolveBoundaries, BOUNDARY_MODES } from './lineage.js';
 import { capsFor, normalizeBackend } from '../../../src/lib/render-models.js';
+// …and the seed vocabulary from the module that owns it (zero imports, like the registry), beside
+// the reader that turns a chosen mode into the number this take will really be sent with.
+import { SEED_MODES, randomSeed } from '../../../src/lib/render-seed.js';
+import { resolveSeed } from './seed-choice.js';
 // The cast count the seam rule reads, from the module that owns the rule — a job with no elements
 // of its own inherits the WHOLE roster, and that subtlety is worth deriving in exactly one place.
 import { castRefCountFor } from '../../../src/lib/seam-rule.js';
@@ -55,7 +59,7 @@ const ledgerLine = (est) => ({
   ...(est?.unknownPrice ? { unpriced: true } : {}),
 });
 
-export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, childEnv, mgr, bus, isAlive = defaultIsAlive, now = () => new Date() }) {
+export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, childEnv, mgr, bus, isAlive = defaultIsAlive, now = () => new Date(), newSeed = randomSeed }) {
   // Seedance price scales with resolution, and the knob is per model (2.5 has its own) — so the
   // ledger records what THIS run's backend will actually be billed for. The per-run pick travels as
   // its own field rather than pre-collapsed into `resolution`: the estimator ranks it the way the
@@ -610,7 +614,16 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
     });
   }
 
-  function enqueueRenderJob(runId, { jobId, takeDir, seamFrom, firstFrameFrom, lastFrameFrom, feedback, take, promptOverrides }) {
+  /**
+   * Queue one segment's render child. `seed` is the only argument here that is emitted ONE WAY: a
+   * chosen seed becomes `--seed <n>`, and no seed at all becomes NO flag rather than some "default"
+   * value spelled out. That is deliberate — the alternative to a chosen seed is not "no seed", it is
+   * the child's own documented deterministic default (pipeline.seedForJob), and a cap-less backend
+   * must keep receiving byte-for-byte what it received before this control existed. Passing a number
+   * here for every re-render would change what those backends are sent while claiming to change
+   * nothing.
+   */
+  function enqueueRenderJob(runId, { jobId, takeDir, seamFrom, firstFrameFrom, lastFrameFrom, feedback, take, promptOverrides, seed }) {
     return mgr.enqueue({
       runId, lane: 'spend', kind: 'render-job',
       script: CLI(root, 'render-job.js'),
@@ -635,6 +648,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
         ...(lastFrameFrom ? ['--last-frame-from', lastFrameFrom] : ['--no-last-frame']),
         ...(feedback ? ['--feedback', feedback] : []),
         ...(take ? ['--take', String(take)] : []),
+        ...(seed != null ? ['--seed', String(seed)] : []),
         ...(promptOverrides ? ['--prompt-overrides', promptOverrides] : []),
       ],
       env: env(runId), cwd: root,
@@ -991,7 +1005,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
     return revise(runId, { feedback: CONTENT_POLICY_REVISE_FEEDBACK });
   }
 
-  function rerenderJob(runId, { jobId, cascade = false, feedback, take, boundaries = 'auto' }) {
+  function rerenderJob(runId, { jobId, cascade = false, feedback, take, boundaries = 'auto', seedMode }) {
     assertNotFinalized(runId);
     const dir = dirFor(runId);
     const spec = readJson(path.join(dir, 'spec.json'));
@@ -1002,14 +1016,33 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
     if (!BOUNDARY_MODES.includes(mode)) {
       throw Object.assign(new Error(`"${mode}" is not a boundary plan`), { statusCode: 400, hint: `boundaries: ${BOUNDARY_MODES.join(', ')}` });
     }
-    assertNoSpendInFlight(runId);
+    // The manifest is read HERE — a pure file read, ahead of every guard — because the backend it
+    // records is what decides whether `seedMode` is even askable, and that verdict has to come
+    // BEFORE assertNoSpendInFlight, nextTakeDir, the mkdir and the ledger row. A mistyped seed mode
+    // must burn no take number and record no cost, exactly as a mistyped boundary plan does not.
     const m = readManifest(dir);
+    const backend = m?.backend ?? 'kling';
+    if (seedMode != null) {
+      if (!SEED_MODES.includes(seedMode)) {
+        throw Object.assign(new Error(`"${seedMode}" is not a re-render seed mode`), { statusCode: 400, hint: `seedMode: ${SEED_MODES.join(', ')}` });
+      }
+      // …and refused where the backend has no seed control, rather than quietly ignored: silently
+      // dropping it would sell a paid "fresh take" that re-sends the very same starting point.
+      if (!capsOf(backend)?.seedControl) {
+        throw Object.assign(new Error(`${backend} does not choose a re-render seed`), {
+          statusCode: 400,
+          hint: 'this backend always renders from its own deterministic seed — omit seedMode',
+        });
+      }
+    }
+    // Resolved while everything is still free, from the CURRENT take's own record (seed-choice.js).
+    const seed = resolveSeed({ mode: seedMode, runDir: dir, manifest: m, jobId, jobIndex: jobs.indexOf(jobId), newSeed });
+    assertNoSpendInFlight(runId);
     const takeDir = nextTakeDir(dir);
     const takeId = path.basename(takeDir);
     fs.mkdirSync(takeDir, { recursive: true });
     const downstream = jobs.slice(jobs.indexOf(jobId) + 1);
     const cascadeJobs = cascade ? downstream : [];
-    const backend = m?.backend ?? 'kling';
     const est = estimateRender(spec, { backend, mode: 'job', jobId, cascade, ...estOpts(backend, m?.resolution) });
 
     // WS2-P5 — which boundaries this take pins, decided by the pure rule over the cut as it stands.
@@ -1060,7 +1093,9 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
     // promoted onto the plan lane while the chain is still draining must not swap it underneath.
     reserved(takeDir, () => snapshotSpec(takeDir, spec));
     updateManifest(dir, (mm) => {
-      mm.takes.push({ id: takeId, mode: 'job', jobId, cascade, revision: mm.revisions.at(-1)?.id ?? null, createdAt: now().toISOString(), estUsd: est.totalUsd, feedback: feedback ?? null, promptSource: overrides.promptSource });
+      // `seed` is recorded only when one was CHOSEN — the row then says which starting point this
+      // take was paid for, and its absence says the child used its own deterministic default.
+      mm.takes.push({ id: takeId, mode: 'job', jobId, cascade, revision: mm.revisions.at(-1)?.id ?? null, createdAt: now().toISOString(), estUsd: est.totalUsd, feedback: feedback ?? null, promptSource: overrides.promptSource, ...(seed != null ? { seed } : {}) });
       mm.costLedger.push({ ts: now().toISOString(), action: `rerender ${jobId}${cascade ? ' + downstream' : ''}`, ...ledgerLine(est) });
       mm.lastError = null;
       return mm;
@@ -1069,7 +1104,10 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
     const queued = enqueueRenderJob(runId, {
       jobId, takeDir, seamFrom, firstFrameFrom,
       lastFrameFrom: cascadeJobs.length ? undefined : lastFrameFrom, // the last cascade job gets it
-      feedback, take, promptOverrides: overrides.args[1] ?? null,
+      // The seed rides on THIS segment alone. A cascade re-renders the downstream jobs to rebuild
+      // the chain, not because the user disliked them — pinning them to a chosen starting point
+      // would change footage nobody asked to change (pendingCascade above carries no seed).
+      feedback, take, promptOverrides: overrides.args[1] ?? null, seed,
     });
     emitStatus(runId);
     // What was actually pinned, not what was asked for: a boundary whose frame is not on disk is
@@ -1089,7 +1127,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, c
       startMode: firstFrameFrom ? opening.startMode : 'none',
       endMode: lastFrameFrom ? closing.endMode : 'none',
     };
-    return { takeId, queued, estUsd: est.totalUsd, cascadeJobs, boundaries: applied };
+    return { takeId, queued, estUsd: est.totalUsd, cascadeJobs, boundaries: applied, seed: seed ?? null };
   }
 
   function assemble(runId, { composition } = {}) {

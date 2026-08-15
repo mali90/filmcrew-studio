@@ -9,6 +9,7 @@ import type { Aspect } from '../../../../shared/api-types';
 import { aspectsFor, capsFor, modelLabelFor, resolutionsFor } from '../../../../shared/render-models';
 import { Button } from '../ui/Button';
 import { SegmentedControl } from '../ui/SegmentedControl';
+import { rateLabel, tierFor } from './rates';
 import type { WizardAction, WizardState } from './wizard';
 
 // Silhouette + what each ratio is FOR — a lookup, not the list: WHICH ratios are offered is the
@@ -88,6 +89,9 @@ export function StepPresets({ state, dispatch }: { state: WizardState; dispatch:
             segments={resolutionsFor(state.backend).map((r) => ({ value: r, label: r }))}
           />
         </div>
+        {/* The same figure, in the same words, the backend card quoted — a tier change here is the
+            one edit that can outdate the "Lowest rate" marker one step back. */}
+        <p className="tnum mt-1.5 text-caption text-ink-muted">{rateLabel(state.backend, tierFor(state.backend, state.resolution))}</p>
         <p className="mt-1.5 text-caption text-ink-faint">
           {capsFor(state.backend).family === 'seedance'
             ? `${modelLabelFor(state.backend)}’s own tiers — Seedance bills per pixel, so higher tiers cost more per second. Approving a finished video can upscale it to 1080p.`

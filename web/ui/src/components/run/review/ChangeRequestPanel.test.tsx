@@ -117,6 +117,45 @@ describe('ChangeRequestPanel', () => {
     await waitFor(() => expect(body).toEqual({ jobId: 'K1', boundaries: 'auto', cascade: true }));
   });
 
+  it('a plan-changed re-render on Segmind holds the clip\u2019s starting point \u2014 and says so', async () => {
+    markPaidConfirmed();
+    const run = withCast(withRevision('K1'), 'seedance-2.0@segmind', 1);
+    let body: unknown = null;
+    server.use(
+      http.post('/api/runs/:id/rerender-job', async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json({ takeId: 't2', estUsd: 4.16, cascadeJobs: [], boundaries: { mode: 'auto' }, seed: 70000 });
+      }),
+    );
+
+    renderReview(<ChangeRequestPanel run={run} />);
+    // The words moved, the picture holds: the post is an EXPLICIT fix. Omission would mean the
+    // deterministic default \u2014 after a Fresh take that is neither this clip\u2019s seed nor a fresh
+    // one, a third starting point nobody chose.
+    expect(screen.getByTestId('plan-changed-fix-note')).toHaveTextContent(
+      'Keeps K1\u2019s starting point \u2014 your new words on the same picture.');
+    await waitFor(() => expect(screen.getAllByLabelText('estimated cost $4.16').length).toBeGreaterThan(0));
+    fireEvent.click(screen.getByRole('button', { name: /Re-render K1 only/ }));
+    await waitFor(() => expect(body).toEqual({ jobId: 'K1', boundaries: 'auto', seedMode: 'fix' }));
+  });
+
+  it('a cap-less backend gets no fix note and posts no seed field (the Kling body test above is the wire proof)', () => {
+    renderReview(<ChangeRequestPanel run={withRevision('K1')} />);
+    expect(screen.queryByTestId('plan-changed-fix-note')).not.toBeInTheDocument();
+  });
+
+  it('when the cascade button is offered, the fix note says downstream keeps its own starting points', async () => {
+    // 9 cast references on the 9-image Segmind endpoint: the closing pin has no slot, the join
+    // breaks, and the cascade button appears — so the caption under BOTH buttons must disclose
+    // that the held starting point applies to the chosen segment alone (the dialog's cascade
+    // note makes the identical disclosure; the two surfaces must read the same).
+    const run = withCast(withRevision('K1'), 'seedance-2.0@segmind', 9);
+    renderReview(<ChangeRequestPanel run={run} />);
+    expect(screen.getByRole('button', { name: /Re-render K1 \+ downstream/ })).toBeInTheDocument();
+    expect(screen.getByTestId('plan-changed-fix-note')).toHaveTextContent(
+      'K2 and everything after it follow from their own starting points.');
+  });
+
   it('row 3 opens the segment dialog, and that dialog is the only re-render implementation', async () => {
     markPaidConfirmed();
     const run = makeRun('review');

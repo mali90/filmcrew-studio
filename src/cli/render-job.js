@@ -6,6 +6,12 @@
 //                       opening frame (same cross-job chaining a full render does)
 //   --take <n>          retake variation (Seedance: "Alternate take n" prompt nonce; Kling renders
 //                       are naturally fresh takes — fal accepts no seed)
+//   --seed <int>        the render's starting point, replacing the deterministic per-job default.
+//                       Re-sending a previous take's seed turns a prompt tweak into a targeted
+//                       change to that clip; a new number is a fresh interpretation. Independent of
+//                       --take, which varies the WORDS. Endpoints that take no seed (fal's Seedance
+//                       2.0) ignore it and record it as `seed_unused`, exactly as they already do
+//                       with the default.
 //   --feedback "…"      per-take director note (Seedance prompt front matter; for Kling, revise
 //                       the spec instead: npm run revise)
 //   --probe             render this job at the probe resolution (Seedance 480p; Kling ignores it)
@@ -34,6 +40,7 @@ import log from '../lib/logger.js';
 import { parseArgs } from '../lib/args.js';
 import { readJson, newRunId } from '../lib/util.js';
 import { renderJob } from '../lib/pipeline.js';
+import { isSeed, SEED_MIN, SEED_MAX } from '../lib/render-seed.js';
 import { readPromptOverrides } from '../lib/prompt-overrides.js';
 
 const args = parseArgs();
@@ -47,6 +54,20 @@ async function main() {
 
   const take = str('take') === undefined ? 0 : Number(str('take'));
   if (!Number.isInteger(take) || take < 0) throw new Error(`--take must be a non-negative integer (got "${str('take')}").`);
+
+  // Checked here with --take and before any spend, for the same reason every boundary flag below is:
+  // a seed the endpoint would reject must cost nothing. The two never contradict each other — the
+  // seed picks the starting point, --take varies the prompt — so both may be passed together.
+  // A `--seed` with no value — bare, or an empty string from an unset shell variable — must
+  // refuse, not silently fall back to the default: the caller typed the flag because they meant a
+  // PARTICULAR starting point, and a paid render on the wrong one costs real money. str() maps
+  // both empty forms to undefined, so ask args whether the key itself was supplied.
+  if ('seed' in args && str('seed') === undefined) throw new Error('--seed needs a value (an integer) — pass --seed <int> or drop the flag.');
+  const seedArg = str('seed');
+  const seed = seedArg === undefined ? undefined : Number(seedArg);
+  if (seedArg !== undefined && !isSeed(seed)) {
+    throw new Error(`--seed must be an integer between ${SEED_MIN} and ${SEED_MAX} (got "${seedArg}").`);
+  }
 
   // Boundary and override flags are checked BEFORE anything is queued, and before a run dir is even
   // created: a typo must cost nothing, not a render and not a stray directory.
@@ -75,6 +96,7 @@ async function main() {
     clearLastFrame: !!args['no-last-frame'],
     promptOverrides: overrides,
     lowRes: !!args.probe,
+    seed,
   });
 
   process.stdout.write(JSON.stringify({ runDir, ...r }, null, 2) + '\n');

@@ -1,8 +1,42 @@
 # Changelog
 
-## Unreleased
+## 1.5.0 — 2026-08-15
 
 ### Added
+- **A Segmind re-render now asks what it should change: fix this take, or a fresh one.** Segmind's
+  Seedance 2.0 and 2.5 accept a `seed` — the number that decides where a generation starts — and
+  every web re-render has quietly re-sent the same one since those backends landed, so a paid
+  "re-render" could come back as a near-copy of the clip you had just rejected, with no way to ask
+  for anything else. The re-render dialog now puts that choice under the boundary plan, with one live
+  sentence saying what the selected option actually does. **Fresh take** is the default and draws a
+  new seed, so the model interprets the segment from scratch — and a draw that came back equal to the
+  seed already on disk is re-drawn, because a "fresh take" that repeats the old starting point is the
+  exact money trap this removes. **Fix this take** re-sends the seed the clip on screen really
+  rendered from: the number is read back out of that take's own `prompts.json` rather than
+  recomputed from a formula, so it is a starting point that genuinely happened — including on takes
+  rendered by older builds — which is what makes a prompt edit land as a change to *that* footage
+  while the rest stays close. Close, and worded as close: the vendor guarantees no more, so neither
+  does the copy. **Neither option is the cheaper one.** Both render the same segment at the same
+  rate, the price on the paid button does not move when you switch, and each sentence about a fix
+  says outright that it costs what a fresh take costs. Where the segment already carries a saved
+  prompt edit, the dialog points at the pairing rather than picking it for you — the selection is
+  never moved on your behalf. The choice belongs to one re-render and nothing else: no `.env` knob,
+  no persisted preference, and a cascade carries no seed, so the downstream jobs are still re-rendered
+  only to rebuild the chain. The rail's "the plan changed" shortcut posts an explicit fix on these
+  backends — revised words on the clip's own starting point, stated in a caption — instead of
+  falling back to a default that, after a fresh take, would be a starting point nobody chose. On the wire, `POST /api/runs/:id/rerender-job` takes
+  `seedMode: 'fix' | 'fresh'`, reports the seed it actually sent as `seed` (null when none was
+  chosen), and records it on the take row so a take says which starting point was paid for. An
+  unknown mode — or any mode at all on a backend that has no seed control — is a **400 raised before
+  a take directory or a ledger row exists**, never a silently ignored field, because dropping it
+  would sell a "fresh take" that re-sent the same seed. Backends without the capability are
+  untouched: the control is hidden rather than greyed out, no field rides along, and their requests
+  go out byte for byte as before (`seedance-2.5@fal` accepts a seed and is deliberately given no
+  control; fal's Seedance 2.0 rejects one outright). The setup wizard's backend cards now say which
+  providers offer this *before* you commit to one, and the CLI has the same lever with none of the
+  gating — `npm run render-job -- --seed <int>`, validated before anything is queued and independent
+  of `--take <n>`, which varies the words rather than the starting point. Full write-up in
+  [docs/PROVIDERS.md](docs/PROVIDERS.md).
 - **You now pick who runs the approve-time Topaz upscale — fal.ai or Segmind — with both real
   prices on the table.** Turning the upscale toggle on in the approve bar opens a small provider
   control, defaulting to fal.ai (its per-output-second rate usually lands under Segmind's flat
@@ -927,6 +961,27 @@
   still still points nowhere, and the pin stays on the one segment it brackets.
 
 ### Changed
+- **The docs now answer "which provider?" where you pick one, and ship a lowest-cost recipe.** The
+  one thing only Segmind can do — re-render a segment on the clip's own seed to *fix this take* —
+  was written up in its own section and nowhere near the decision, and the cheapest way to run the
+  project was never stated anywhere. [docs/PROVIDERS.md](docs/PROVIDERS.md) now opens the
+  render-backend section with a decision table (half the per-second rate, the fix-vs-fresh re-render, Kling 3.0 Omni
+  and minted voices, the lowest end-to-end bill, one account only), and the README says the same in
+  its backend paragraph and as its own "what you get" bullet. A new **The lowest-cost setup (Segmind
+  renders, fal upscales)** section carries the exact `.env` lines and reads as a sibling of the
+  Segmind-only recipe; [docs/COST.md](docs/COST.md) prices it leg by leg, and both README and
+  [docs/SETUP.md](docs/SETUP.md) point at the pair from where the question comes up — Step 4, the
+  upscale command, and the "it cost more than expected" answer. Nothing is sold as free: planning
+  always bills your LLM usage, a CLI planner bills through that CLI's own sign-in, and the only free
+  tier named is the one Google publishes for its Gemini CLI. This also corrected a contradiction both
+  docs carried — `UPSCALE_PROVIDER=auto` was endorsed as though following the render provider were
+  also the cheaper finish, when after a Segmind render it is the dearer one: fal's tiered Topaz sits
+  under Segmind's $0.125/s flat rate for every shape this app prices, so `auto` is now described as
+  the fewest moving parts and the approve card's live two-vendor quote is named as where the real
+  comparison happens. The README's cost table pairs each Segmind row under the fal row it undercuts
+  (rates unchanged), and the setup wizard's welcome, planner, backend and fal steps now say the same
+  things the docs do. Two stale Kling-only lines in SETUP.md were swept out along the way (reference
+  images go "to the render model", the Job Planner packs "render jobs within the model's limits").
 - **Long Seedance prompts are no longer silently shortened.** The whole-prompt byte clamp defaulted
   to 5000 bytes, so a rich multi-shot prompt — the kind Seedance is best at — was cut off mid-sentence
   and sent with an ellipsis where the last shots used to be, with nothing on screen saying so. That

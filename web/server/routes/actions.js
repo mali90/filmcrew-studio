@@ -31,11 +31,13 @@ export function registerActionRoutes(app) {
 
   app.post('/api/runs/:id/rerender-job', async (req, reply) => {
     guard(req);
-    const { jobId, cascade = false, feedback, take, boundaries } = req.body ?? {};
+    const { jobId, cascade = false, feedback, take, boundaries, seedMode } = req.body ?? {};
     if (!jobId) throw Object.assign(new Error('jobId is required'), { statusCode: 400, hint: 'which job should be re-rendered, e.g. K2' });
-    // `boundaries` (auto|both|start|end|none) is validated in the service, so a programmatic caller
-    // gets the same 400 the HTTP one does.
-    const r = svc.rerenderJob(req.params.id, { jobId, cascade: !!cascade, feedback, take: Number(take) || undefined, boundaries });
+    // `boundaries` (auto|both|start|end|none) and `seedMode` (fix|fresh) are validated in the
+    // service, so a programmatic caller gets the same 400 the HTTP one does. Both are forwarded RAW
+    // for that reason: coercing a bad value here would turn a 400 into a silent default, and the
+    // seed mode in particular decides what a paid re-render is sent.
+    const r = svc.rerenderJob(req.params.id, { jobId, cascade: !!cascade, feedback, take: Number(take) || undefined, boundaries, seedMode });
     return reply.code(202).send(r);
   });
 
