@@ -101,6 +101,11 @@ The tool reads your keys and choices from a text file named `.env`. The easiest 
    Remember: value right after `=`, no spaces, no quotes, no `<placeholder>` brackets, no trailing
    spaces. **Save** the file.
 
+> **Want the cheapest setup?** Three lines decide most of your bill — the planner, the render
+> provider and who upscales. The recipe (with the exact `.env` lines) is
+> [The lowest-cost setup](PROVIDERS.md#the-lowest-cost-setup-segmind-renders-fal-upscales); why each
+> leg is the cheap one is [in COST.md](COST.md#the-lowest-cost-setup-priced).
+
 ---
 
 ## Step 5 — Health check
@@ -178,9 +183,13 @@ result covers just that first job.
 ```
 npm run upscale -- --in out/ocean-lighthouse.mp4
 ```
-optional `--provider fal|segmind|auto` (default `auto` — whichever provider the run rendered on, else
-whichever has a key). `--factor <1-4>` (auto-picks to reach ~1080p when omitted) and `--model Proteus`
-are **fal-only**; Segmind's Topaz takes a target resolution instead (`UPSCALE_TARGET_RESOLUTION`,
+optional `--provider fal|segmind|auto`. This standalone command has no render to follow, so `auto`
+here picks fal whenever a fal key is set, Segmind otherwise — which is also the cheaper Topaz in
+every case this repo prices ([COST.md](COST.md#the-lowest-cost-setup-priced)). Only the
+render/assemble/approve flows know which provider rendered a clip, and there `auto` follows it —
+after a Segmind render that is Segmind's flat per-second rate, so set `UPSCALE_PROVIDER=fal` if you
+want those flows on fal's tiered one. `--factor <1-4>` (auto-picks to reach ~1080p when
+omitted) and `--model Proteus` are **fal-only**; Segmind's Topaz takes a target resolution instead (`UPSCALE_TARGET_RESOLUTION`,
 default `1080p`) and keeps the source frame rate.
 
 > You can also run `node src/cli/engine.js …` directly instead of `npm run …`.
@@ -196,7 +205,7 @@ default `1080p`) and keeps the source frame rate.
 - `elements/last-frame/` — *(optional)* lock the closing frame.
 
 > ⚠️ **Switching to your own images? Remove the bundled sample first.** The engine feeds **every**
-> image in `elements/references/` to Kling, so delete/move the bundled sample images
+> image in `elements/references/` to the render model, so delete/move the bundled sample images
 > (macOS `rm elements/references/wren-*.png` · Windows `Remove-Item elements/references/wren-*.png`,
 > or drag them to Trash) before rendering your own brief.
 
@@ -245,7 +254,8 @@ when you answer yes to the upscale question, or when you accept an AI-suggested 
 upscale=yes — including under `npm run init -- --yes --brief "…"`, which accepts the suggestion
 without asking you anything), which adds the paid Topaz pass, unasked, to everything
 you finish from a terminal — renders and stitches alike — so that stitch costs then too. See
-[COST.md](COST.md).
+[COST.md](COST.md). Cheaper by construction:
+[the lowest-cost setup](PROVIDERS.md#the-lowest-cost-setup-segmind-renders-fal-upscales).
 
 ---
 
@@ -261,7 +271,7 @@ The **engine** is 8 small AI "agents," each filling in one block of the movie pl
 | 3 | Cinematographer | Camera angles, movement, framing |
 | 4 | Casting / Elements | Which subjects and reference images to use |
 | 5 | Sound / Voice | Audio and any spoken lines |
-| 6 | Job Planner | Splits the work into Kling "jobs" within the limits |
+| 6 | Job Planner | Splits the work into render jobs within the model's limits |
 | 7 | Continuity / QC | Checks everything is consistent and valid |
 
 A **QC** step re-runs any agent whose block fails validation, so the plan is sound before a single

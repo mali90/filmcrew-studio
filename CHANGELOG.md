@@ -961,6 +961,27 @@
   still still points nowhere, and the pin stays on the one segment it brackets.
 
 ### Changed
+- **The docs now answer "which provider?" where you pick one, and ship a lowest-cost recipe.** The
+  one thing only Segmind can do — re-render a segment on the clip's own seed to *fix this take* —
+  was written up in its own section and nowhere near the decision, and the cheapest way to run the
+  project was never stated anywhere. [docs/PROVIDERS.md](docs/PROVIDERS.md) now opens the
+  render-backend section with a decision table (half the per-second rate, the fix-vs-fresh re-render, Kling 3.0 Omni
+  and minted voices, the lowest end-to-end bill, one account only), and the README says the same in
+  its backend paragraph and as its own "what you get" bullet. A new **The lowest-cost setup (Segmind
+  renders, fal upscales)** section carries the exact `.env` lines and reads as a sibling of the
+  Segmind-only recipe; [docs/COST.md](docs/COST.md) prices it leg by leg, and both README and
+  [docs/SETUP.md](docs/SETUP.md) point at the pair from where the question comes up — Step 4, the
+  upscale command, and the "it cost more than expected" answer. Nothing is sold as free: planning
+  always bills your LLM usage, a CLI planner bills through that CLI's own sign-in, and the only free
+  tier named is the one Google publishes for its Gemini CLI. This also corrected a contradiction both
+  docs carried — `UPSCALE_PROVIDER=auto` was endorsed as though following the render provider were
+  also the cheaper finish, when after a Segmind render it is the dearer one: fal's tiered Topaz sits
+  under Segmind's $0.125/s flat rate for every shape this app prices, so `auto` is now described as
+  the fewest moving parts and the approve card's live two-vendor quote is named as where the real
+  comparison happens. The README's cost table pairs each Segmind row under the fal row it undercuts
+  (rates unchanged), and the setup wizard's welcome, planner, backend and fal steps now say the same
+  things the docs do. Two stale Kling-only lines in SETUP.md were swept out along the way (reference
+  images go "to the render model", the Job Planner packs "render jobs within the model's limits").
 - **Long Seedance prompts are no longer silently shortened.** The whole-prompt byte clamp defaulted
   to 5000 bytes, so a rich multi-shot prompt — the kind Seedance is best at — was cut off mid-sentence
   and sent with an ellipsis where the last shots used to be, with nothing on screen saying so. That
