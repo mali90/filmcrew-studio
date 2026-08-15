@@ -49,7 +49,9 @@ export function StepLlm({ state, dispatch }: { state: WizardState; dispatch: Dis
     <div>
       <h1 className="text-title text-ink">Choose your planner.</h1>
       <p className="mt-1 text-body text-ink-secondary">
-        This model writes the production plan. Planning calls cost pennies at most.
+        This model writes the production plan. Planning bills your LLM usage — how much depends
+        on the provider, the model and how you connect. Where a vendor&rsquo;s own CLI has a free
+        tier, its card says so.
       </p>
 
       <div role="radiogroup" aria-label="LLM provider" className="mt-5 grid grid-cols-2 gap-2">

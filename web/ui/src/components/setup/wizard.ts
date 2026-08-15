@@ -83,10 +83,16 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
   }
 }
 
+// The per-card note may name a VENDOR's own free tier, because that is a fact about their plan —
+// it must never imply the planning itself is free (it bills, on every provider), and it carries no
+// quota numbers: a figure we cannot re-check reads as a promise the moment the vendor moves it.
+// Only a tier the docs actually stand behind earns the clause: Copilot's CLI runs on an active
+// Copilot subscription (docs/PROVIDERS.md), so its note stays bare. wizard.test.ts enforces all
+// three rules mechanically, so a note added later cannot quietly break them.
 export const PROVIDERS: { id: Provider; name: string; note: string; keyEnv: string | null }[] = [
   { id: 'claude', name: 'Claude', note: 'API key or CLI', keyEnv: 'ANTHROPIC_API_KEY' },
   { id: 'openai', name: 'OpenAI', note: 'API key or CLI', keyEnv: 'OPENAI_API_KEY' },
-  { id: 'gemini', name: 'Gemini', note: 'API key or CLI', keyEnv: 'GEMINI_API_KEY' },
+  { id: 'gemini', name: 'Gemini', note: 'API key or CLI — its CLI has a free tier', keyEnv: 'GEMINI_API_KEY' },
   { id: 'copilot', name: 'Copilot', note: 'CLI only', keyEnv: null },
 ];
 
