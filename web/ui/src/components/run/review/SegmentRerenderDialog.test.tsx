@@ -17,7 +17,7 @@ import type { Backend, ContinuityEntry, JobView, ProductionSpec, RunDetail } fro
 import { ALL_BACKENDS, capsFor, pinStrengthFor, pinStrengthsFor } from '../../../../../shared/render-models';
 import { chooseSeamMode } from '../../../../../../src/lib/prompt-compose.js';
 import { server, http, HttpResponse } from '../../../test/msw';
-import { makeRun } from '../../../test/fixtures';
+import { ESTIMATE, makeRun, promptView } from '../../../test/fixtures';
 import { renderReview, markPaidConfirmed, clearPaidState } from './test-helpers';
 import { SegmentRerenderDialog } from './SegmentRerenderDialog';
 import { Dialog } from '../../ui/Dialog';
@@ -565,5 +565,149 @@ describe('pin strength agrees with the renderer, backend for backend', () => {
     expect(pinStrengthFor('nonsense@nowhere', { castRefCount: 0, end: 'in' })).toBe('none');
     expect(pinStrengthsFor('nonsense@nowhere', { castRefCount: 0, hasSeamIn: true, hasSeamOut: true }))
       .toEqual({ in: 'none', out: 'none' });
+  });
+});
+
+// ── Fix this take vs fresh take (Segmind seed control) ──────────────────────────────────────────
+// This endpoint has ALWAYS re-sent the segment's deterministic seed, so every web re-render was a
+// silent "fix" — a near-repeat of the clip the user just rejected, billed in full. Making that a
+// choice is the point of the control, which is why three things below are load-bearing:
+//
+//   * it is REGISTRY-gated and HIDDEN where the cap is absent — a greyed control would advertise a
+//     capability the request cannot carry (the server 400s a seedMode on a cap-less backend), and
+//     the four body assertions above are the tripwire that fal's request bytes did not move;
+//   * it opens on Fresh — the default must be the option that really changes something;
+//   * it says nothing about money. Both modes render one segment at the same rate.
+describe('SegmentRerenderDialog — fix this take vs fresh take', () => {
+  const modeOf = (label: string) => screen.getByRole('radio', { name: label }).getAttribute('aria-checked');
+
+  it('is shown on exactly the backends whose caps carry seedControl', () => {
+    for (const backend of ALL_BACKENDS) {
+      const { unmount } = open(onBackend(threeSegmentRun(), backend));
+      expect(Boolean(screen.queryByTestId('regen-mode')), backend).toBe(Boolean(capsFor(backend).seedControl));
+      unmount();
+    }
+  });
+
+  it('opens on Fresh take, and says what that means', () => {
+    open(onBackend(threeSegmentRun(), 'seedance-2.0@segmind'));
+    expect(modeOf('Fresh take')).toBe('true');
+    expect(modeOf('Fix this take')).toBe('false');
+    const caption = screen.getByTestId('regen-mode-sentence');
+    expect(caption).toHaveTextContent('K2 is rendered again from a new starting point');
+    // the two labels differ only in this sentence, so it is announced rather than merely repainted
+    expect(caption).toHaveAttribute('aria-live', 'polite');
+  });
+
+  it('a lone segment has no boundary plan to make and still gets the choice', () => {
+    const run = threeSegmentRun();
+    run.spec!.kling.jobs = [run.spec!.kling.jobs[0]];
+    run.latestRender!.jobs = [clip('K1')];
+    run.continuity = [head];
+    open(onBackend(run, 'seedance-2.0@segmind'), 'K1');
+    expect(screen.queryByRole('radio', { name: 'Custom' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('regen-mode')).toBeInTheDocument();
+    expect(screen.getByTestId('regen-mode-sentence')).toHaveTextContent('K1 is rendered again');
+  });
+
+  it('posts the mode it is showing — fresh by default, fix once picked', async () => {
+    markPaidConfirmed();
+    const bodies: unknown[] = [];
+    server.use(http.post('/api/runs/:id/rerender-job', async ({ request }) => {
+      bodies.push(await request.json());
+      return HttpResponse.json({ takeId: 't2', estUsd: 4.16, cascadeJobs: [], boundaries: { mode: 'auto' }, seed: 4242 });
+    }));
+
+    const { unmount } = open(onBackend(threeSegmentRun(), 'seedance-2.0@segmind'));
+    await screen.findByLabelText('estimated cost $4.16');
+    fireEvent.click(screen.getByRole('button', { name: /^Re-render K2/ }));
+    await waitFor(() => expect(bodies).toEqual([{ jobId: 'K2', boundaries: 'auto', seedMode: 'fresh' }]));
+    unmount();
+
+    open(onBackend(threeSegmentRun(), 'seedance-2.0@segmind'));
+    await screen.findByLabelText('estimated cost $4.16');
+    fireEvent.click(screen.getByRole('radio', { name: 'Fix this take' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Re-render K2/ }));
+    await waitFor(() => expect(bodies).toHaveLength(2));
+    expect(bodies[1]).toEqual({ jobId: 'K2', boundaries: 'auto', seedMode: 'fix' });
+  });
+
+  // Same rule the boundary boxes follow (and the same reason): the dialog resets on the SEGMENT and
+  // on opening, never on a run snapshot — an SSE tick under an open dialog must not quietly move a
+  // paid choice the user already made.
+  it('resets to Fresh per segment, and a run update underneath an open dialog does not', () => {
+    const run = onBackend(threeSegmentRun(), 'seedance-2.0@segmind');
+    const { rerender } = renderReview(<SegmentRerenderDialog run={run} jobId="K2" open onClose={() => {}} />);
+    fireEvent.click(screen.getByRole('radio', { name: 'Fix this take' }));
+    expect(modeOf('Fix this take')).toBe('true');
+
+    rerender(<SegmentRerenderDialog run={{ ...run, status: 'rendering' }} jobId="K2" open onClose={() => {}} />);
+    expect(modeOf('Fix this take')).toBe('true');
+
+    rerender(<SegmentRerenderDialog run={run} jobId="K3" open onClose={() => {}} />);
+    expect(modeOf('Fresh take')).toBe('true');
+  });
+
+  it('switching mode re-prices nothing — the starting point is not a price', async () => {
+    let estimates = 0;
+    server.use(http.get('/api/runs/:id/estimate', () => { estimates += 1; return HttpResponse.json(ESTIMATE); }));
+    open(onBackend(threeSegmentRun(), 'seedance-2.0@segmind'));
+    await screen.findByLabelText('estimated cost $4.16');
+    expect(estimates).toBe(1);
+    fireEvent.click(screen.getByRole('radio', { name: 'Fix this take' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Fresh take' }));
+    await waitFor(() => expect(screen.getByTestId('regen-mode-sentence')).toHaveTextContent('new starting point'));
+    expect(estimates).toBe(1);
+  });
+
+  it('never sells a fix as the cheaper option', () => {
+    open(onBackend(threeSegmentRun(), 'seedance-2.0@segmind'));
+    fireEvent.click(screen.getByRole('radio', { name: 'Fix this take' }));
+    const block = screen.getByTestId('regen-mode');
+    expect(block).toHaveTextContent('Same price as a fresh take.');
+    expect(block.textContent ?? '').not.toMatch(/\$/);
+    expect(block.textContent ?? '').not.toMatch(/\b(free|cheap|cheaper|discount)\b/i);
+  });
+
+  // The server sends the chosen seed for THIS segment only (a cascade's children keep their own
+  // deterministic default), so a ticked cascade must not be read as "fix everything after it".
+  it('a ticked cascade says the mode applies to this segment alone', () => {
+    open(onBackend(threeSegmentRun(), 'seedance-2.0@segmind'));
+    expect(screen.queryByTestId('regen-cascade-note')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('radio', { name: 'Custom' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /End on K3/ }));   // unpinned ending → cascade offered
+    fireEvent.click(screen.getByRole('checkbox', { name: /Also re-render K3/ }));
+    expect(screen.getByTestId('regen-cascade-note')).toHaveTextContent(
+      'This applies to K2 only — K3 and everything after it are re-rendered to follow it, each from its own starting point.',
+    );
+  });
+
+  it('a saved prompt edit sharpens the fix sentence and nudges — it never moves the selection', async () => {
+    server.use(http.get('/api/runs/:id/prompts', ({ params }) => HttpResponse.json({
+      runId: String(params.id),
+      backend: 'seedance-2.0@segmind',
+      jobs: ['K1', 'K2', 'K3'],
+      prompts: [promptView('K1'), promptView('K2', { source: 'override' })],
+      orphaned: [],
+    })));
+    open(onBackend(threeSegmentRun(), 'seedance-2.0@segmind'));
+
+    // the hint arrives with the prompt read; the default does NOT move with it
+    expect(await screen.findByTestId('regen-edit-hint')).toHaveTextContent('K2 carries a saved prompt edit');
+    expect(modeOf('Fresh take')).toBe('true');
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Fix this take' }));
+    expect(screen.getByTestId('regen-mode-sentence')).toHaveTextContent('your prompt edit lands on this picture');
+    expect(screen.getByTestId('regen-mode-sentence')).toHaveTextContent('close, not guaranteed');
+    // the nudge has done its job once fix is picked — the sentence now says the same thing
+    expect(screen.queryByTestId('regen-edit-hint')).not.toBeInTheDocument();
+  });
+
+  it('an unedited segment gets no nudge, and the fix sentence pairs itself with an edit instead', async () => {
+    open(onBackend(threeSegmentRun(), 'seedance-2.0@segmind'));
+    fireEvent.click(screen.getByRole('radio', { name: 'Fix this take' }));
+    await waitFor(() =>
+      expect(screen.getByTestId('regen-mode-sentence')).toHaveTextContent('expect nearly the same clip'));
+    expect(screen.queryByTestId('regen-edit-hint')).not.toBeInTheDocument();
   });
 });

@@ -12,7 +12,7 @@
 // Keeping the copy in pure functions is what makes that testable at all — a string baked into JSX
 // can only be checked by rendering the whole component.
 import { describe, it, expect } from 'vitest';
-import { jointFor, seamStrengthWords, boundaryPlanSentence } from './lib';
+import { jointFor, seamStrengthWords, boundaryPlanSentence, regenerationSentence } from './lib';
 
 // These were red specs behind a `describe.skipIf(!READY)` arming guard while WS2-P2/P5 were being
 // built. The helpers have landed, so the guard is gone and the imports are direct and typed: a
@@ -118,5 +118,68 @@ describe('SegmentRerenderDialog boundary sentence (plain words, recomputed live)
     const s = boundaryPlanSentence({ jobId: 'K2', prev: { jobId: 'K1' }, next: null, boundaries: 'auto', pinStrength: 'soft' });
     expect(s).not.toContain('K3');
     expect(s).toContain('K1');
+  });
+});
+
+// ── Fix this take vs fresh take (Segmind seed control) ──────────────────────────────────────────
+// The sentence under the re-render dialog's mode control is the ONLY place a user is told what
+// re-sending a seed does, and it sells a paid render either way. Two claims it must never make:
+// that a fix is guaranteed (the vendor promises reproducibility of the starting point, not of the
+// picture), and that a fix costs less (both modes render one segment at the same rate). Keeping it
+// pure is what makes those testable at all.
+describe('regenerationSentence — what fix and fresh actually mean', () => {
+  it('fresh says the model starts over, and warns not to expect a tweak', () => {
+    expect(regenerationSentence({ jobId: 'K2', mode: 'fresh' })).toBe(
+      'K2 is rendered again from a new starting point, so the model interprets it from scratch.'
+      + ' Expect a different take, not a tweak of this one.',
+    );
+  });
+
+  it('fix with a pending prompt edit says where the edit lands — and hedges it', () => {
+    expect(regenerationSentence({ jobId: 'K2', mode: 'fix', promptEdited: true })).toBe(
+      'K2 is rendered again from the same starting point (the seed this clip used), so your prompt edit'
+      + ' lands on this picture and the rest stays close — close, not guaranteed. Same price as a fresh take.',
+    );
+  });
+
+  it('fix with no edit predicts nearly the same clip, and names the option to pair it with', () => {
+    expect(regenerationSentence({ jobId: 'K2', mode: 'fix' })).toBe(
+      'K2 is rendered again from the same starting point (the seed this clip used). With the prompt'
+      + ' unchanged, expect nearly the same clip — this is the option to pair with a prompt edit.'
+      + ' Same price as a fresh take.',
+    );
+  });
+
+  it('promptEdited only sharpens the fix sentence — fresh reads the same either way', () => {
+    expect(regenerationSentence({ jobId: 'K2', mode: 'fresh', promptEdited: true }))
+      .toBe(regenerationSentence({ jobId: 'K2', mode: 'fresh' }));
+    expect(regenerationSentence({ jobId: 'K2', mode: 'fix', promptEdited: true }))
+      .not.toBe(regenerationSentence({ jobId: 'K2', mode: 'fix' }));
+  });
+
+  it('names the segment it is about, and never a neighbour', () => {
+    for (const mode of ['fix', 'fresh'] as const) {
+      const s = regenerationSentence({ jobId: 'K2', mode });
+      expect(s.startsWith('K2 ')).toBe(true);
+      expect(s).not.toContain('K1');
+      expect(s).not.toContain('K3');
+    }
+  });
+
+  it('promises no seam, quotes no money, and carries no emoji', () => {
+    for (const promptEdited of [false, true]) {
+      for (const mode of ['fix', 'fresh'] as const) {
+        const s = regenerationSentence({ jobId: 'K2', mode, promptEdited });
+        // the seed decides the starting point; it says nothing about how the clip JOINS its
+        // neighbours, so borrowing the seam vocabulary here would promise a join nobody planned
+        expect(s).not.toMatch(/seamless/i);
+        expect(s).not.toMatch(/\bfree\b/i);
+        expect(s).not.toMatch(/cheap|cheaper|discount|\$/i);
+        // the word may appear only in the disclaimer — a fix that "is guaranteed" is a promise the
+        // vendor never made about the picture, only about the starting point
+        if (/guarantee/i.test(s)) expect(s).toMatch(/not guaranteed/);
+        expect(s).not.toMatch(/[\u{1F000}-\u{1FAFF}\u{2190}-\u{2BFF}\u{FE0F}]/u);
+      }
+    }
   });
 });

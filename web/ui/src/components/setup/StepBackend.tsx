@@ -6,7 +6,7 @@ import type { Dispatch } from 'react';
 import clsx from 'clsx';
 import type { Backend, Resolution } from '../../../../shared/api-types';
 import {
-  MODEL_IDS, aspectsFor, backendIdFor, canonicalBackendFor, castLimitFor, defaultResolutionFor,
+  MODEL_IDS, aspectsFor, backendIdFor, canonicalBackendFor, capsFor, castLimitFor, defaultResolutionFor,
   modelLabelFor, providersFor, resolutionsFor,
 } from '../../../../shared/render-models';
 import { perSecondUsdFor } from '../../../../shared/render-rates';
@@ -48,6 +48,11 @@ const CARDS: Card[] = MODEL_IDS.flatMap((model) =>
         POINTS[model] ?? `Renders on ${p.label}`,
         `Stars up to ${cap} character${cap > 1 ? 's' : ''} · ${aspectsFor(id).length} aspect ratios · `
           + (tiers.length ? `renders ${tiers.join(' / ')}` : 'renders the endpoint’s own output'),
+        // Read off the PAIR's caps, not the model's: the same Seedance offers this on one queue and
+        // not the other, so the model-keyed POINTS map above would print it on cards where the
+        // re-render dialog shows no such control. A fact worth knowing BEFORE picking a provider —
+        // it is the difference between fixing a clip you nearly like and rolling for another one.
+        ...(capsFor(id).seedControl ? ['Segment re-renders can reuse a clip’s seed for a targeted fix'] : []),
       ],
     };
   }));

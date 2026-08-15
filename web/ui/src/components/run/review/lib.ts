@@ -1,5 +1,5 @@
 // Small pure helpers shared by the review/deliver components.
-import type { ContinuityEntry, Manifest, ProductionSpec } from '../../../../../shared/api-types';
+import type { ContinuityEntry, Manifest, ProductionSpec, SeedMode } from '../../../../../shared/api-types';
 import { pinStrengthFor, pinStrengthsFor, type PinStrength } from '../../../../../shared/render-models';
 
 export type { PinStrength };
@@ -256,6 +256,42 @@ export function downstreamSeamSentence({ jobId, nextId, endStrength }: {
   return endStrength !== 'none'
     ? `${opener} Ending ${jobId} on ${nextId}'s opening frame keeps that join ${seamStrengthWords(endStrength)}, so ${nextId} and everything after it can stay exactly as they are.`
     : `${opener} Re-rendering ${jobId} changes that frame, so ${nextId}'s join will break.`;
+}
+
+// ── What a re-render's SEED choice means (Segmind seed control) ──────────────────────────────────
+// Segmind documents `seed` as a reproducibility control: re-sending the number a clip already
+// rendered from makes a prompt tweak land as a change to that footage, while a new number is a
+// fresh interpretation. Two things this copy must never do, both of them money problems:
+//
+//   1. Promise the fix. Same seed + same prompt is "nearly the same clip", not "the same clip", and
+//      same seed + an edit is "close" — the vendor guarantees neither, so neither is sold as one.
+//   2. Imply a price difference. Both modes render one segment at the same rate; a user who reads
+//      "fix" as the cheap option would be picking with the wrong reason, so each fix sentence says
+//      outright that it costs what a fresh take costs.
+
+/**
+ * The caption under the fix/fresh control, as a PURE function — the one place this vocabulary
+ * exists, so it is testable without rendering the dialog (the same reason boundaryPlanSentence is).
+ *
+ * @param p.promptEdited  this segment's plan prompt carries a saved edit (the pen the tiles wear).
+ *   It only sharpens the 'fix' sentence into what the edit will do; it never changes the selection,
+ *   and unknown data reads as `false` — a hint we cannot substantiate is simply not given.
+ */
+export function regenerationSentence({ jobId, mode, promptEdited = false }: {
+  jobId: string;
+  mode: SeedMode;
+  promptEdited?: boolean;
+}): string {
+  if (mode === 'fresh') {
+    return `${jobId} is rendered again from a new starting point, so the model interprets it from scratch.`
+      + ' Expect a different take, not a tweak of this one.';
+  }
+  return promptEdited
+    ? `${jobId} is rendered again from the same starting point (the seed this clip used), so your prompt edit`
+      + ' lands on this picture and the rest stays close — close, not guaranteed. Same price as a fresh take.'
+    : `${jobId} is rendered again from the same starting point (the seed this clip used). With the prompt`
+      + ' unchanged, expect nearly the same clip — this is the option to pair with a prompt edit.'
+      + ' Same price as a fresh take.';
 }
 
 // ── Delivery lifecycle (WS2-P6) ──────────────────────────────────────────────────────────────────

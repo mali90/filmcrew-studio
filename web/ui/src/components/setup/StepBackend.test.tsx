@@ -8,7 +8,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ToastProvider } from '../ui/Toast';
 import { StepBackend } from './StepBackend';
 import { initialWizardState, type WizardState } from './wizard';
-import { BACKEND_IDS } from '../../../../../src/lib/render-models.js';
+import { BACKEND_IDS, capsFor } from '../../../../../src/lib/render-models.js';
 
 function renderStep(over: Partial<WizardState> = {}) {
   const dispatch = vi.fn();
@@ -86,6 +86,36 @@ describe('StepBackend — the cards are the registry', () => {
       type: 'patch',
       patch: { backend: 'seedance-2.0@segmind', segmindCheck: { state: 'idle' } },
     });
+  });
+});
+
+// One more thing the cards say, and it is a capability of the PAIR: on the queues that document a
+// seed as a reproducibility control, a segment re-render can re-send the seed a clip already used
+// and land a prompt tweak on that same picture. Worth knowing at the moment a provider is picked —
+// and printed from the registry, never from the model-keyed POINTS map, which would put it on a
+// card whose re-render dialog offers no such control.
+describe('StepBackend — the seed-control bullet is registry-derived', () => {
+  const SEED_BULLET = /reuse a clip’s seed for a targeted fix/;
+
+  it('appears on exactly the cards whose caps carry seedControl, and nowhere else', () => {
+    const expected = BACKEND_IDS.filter((id: string) => capsFor(id).seedControl);
+    expect(expected.length).toBeGreaterThan(0);   // a build with the cap nowhere would pass vacuously
+
+    const { group } = renderStep();
+    const cards = within(group).getAllByRole('radio');
+    const withBullet = cards.filter((c) => SEED_BULLET.test(c.textContent ?? ''));
+    expect(withBullet).toHaveLength(expected.length);
+    // and they are the same cards: every one of them is a Segmind pair today, which is the only
+    // provider whose caps carry it
+    for (const card of withBullet) expect(within(card).getByText('Segmind')).toBeInTheDocument();
+  });
+
+  it('states the capability without quoting money — a fix is not the cheap option', () => {
+    const { group } = renderStep();
+    const card = within(group).getByRole('radio', { name: /Seedance 2\.0 Segmind/ });
+    expect(card).toHaveTextContent('Segment re-renders can reuse a clip’s seed for a targeted fix');
+    const bullet = within(card).getByText(SEED_BULLET);
+    expect(bullet.textContent ?? '').not.toMatch(/\$|\bfree\b|cheap/i);
   });
 });
 
