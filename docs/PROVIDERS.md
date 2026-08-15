@@ -62,7 +62,7 @@ kept in step with it.
 | Combined ref budget | — | per-kind only | per-kind only | **50 across all kinds** | per-kind only |
 | Ref citation style | `elements` (no in-prompt citation) | `@Image1` (compact) | `@Image 1` (spaced) | `[Image1]` (bracket) | `@Image 1` (spaced) |
 | Shot syntax | storyboard segments | connectors ("then…") | connectors ("then…") | `Shot N:` numbered | `Shot N:` numbered |
-| `seed` | not accepted | **rejected (422)** — retakes use `--take <n>` | accepted | accepted | accepted |
+| `seed` | not accepted | **rejected (422)** — retakes use `--take <n>` | accepted — **chosen per re-render** (fix vs fresh, [below](#fix-this-take-vs-a-fresh-take-segmind-seed-control)) | accepted (always the deterministic default) | accepted — **chosen per re-render** (fix vs fresh, [below](#fix-this-take-vs-a-fresh-take-segmind-seed-control)) |
 | Native first/last frame | yes | no (seam frame demoted to a trailing ref) | yes, but **mutually exclusive with reference images** | no (seam frame demoted to a trailing ref) | yes, but **mutually exclusive with reference images** |
 | Seam mode applied | `native` (start anchored; **end best-effort**, see below) — `none` on a text-to-video job | `soft` always | `native` only on a **cast-less** job, else `soft` | `soft` always | `native` only on a **cast-less** job, else `soft` |
 | Duration field | string | string | integer | string | integer |
@@ -158,7 +158,8 @@ no separate text-to-video tier, so an idea with no image references rides the sa
 Two **2.0-on-fal** quirks worth knowing: that endpoint accepts **no `seed` and no `negative_prompt`**
 (both are rejected with HTTP 422), so retakes use the `--take <n>` prompt nonce and appearance
 guards ride the prompt itself (`SEEDANCE_AVOID`, `SEEDANCE_TEXT_RULE`, `SEEDANCE_STYLE`). Seedance
-2.5 and both Segmind backends *do* take a seed. Jobs must total **at least 4 seconds** — the planner
+2.5 and both Segmind backends *do* take a seed — and on the Segmind pair that seed is a choice you
+make per re-render ([below](#fix-this-take-vs-a-fresh-take-segmind-seed-control)). Jobs must total **at least 4 seconds** — the planner
 packs to this automatically.
 
 ### How Segmind's transport differs
@@ -193,6 +194,47 @@ References reach Segmind one of two ways, set by `SEGMIND_UPLOAD_MODE`:
 The default follows what you have: `fal-storage` when a fal key is present, `data-uri` when it is
 not — so a Segmind-only install works out of the box, and `npm run doctor` flags the one broken
 combination (`fal-storage` with no `FAL_KEY`) instead of letting it fail on the first upload.
+
+### Fix this take vs a fresh take (Segmind seed control)
+
+Segmind documents `seed` as a reproducibility control, and both its Seedance models accept one — so
+re-rendering a single segment in the web app asks **what the re-render should change**, right under
+the boundary plan:
+
+- **Fix this take** re-sends the seed the clip on screen actually rendered from. The number is read
+  back out of that take's own `prompts.json` rather than recomputed from a formula, so "the same
+  starting point" means one that really happened — including on a take rendered by an older build or
+  with an explicit `--seed`. An edited prompt then lands as a change *to that footage* and the rest
+  stays close. Close, not guaranteed: the vendor promises no more than that, and neither does the
+  wording in the dialog.
+- **Fresh take** draws a new seed, so the model interprets the segment from scratch. It is the
+  default — the dialog is opened by someone who did not like the clip — and it is genuinely fresh: a
+  draw that came back equal to the seed already on disk is re-drawn rather than sold as a new take.
+
+**A fix costs exactly what a fresh take costs.** Both render the same segment for the same duration
+at the same rate, so the seed decides where the render starts and never what it bills; the price on
+the button does not move when you switch between the two.
+
+The choice belongs to **one re-render, not to the run**: there is no `.env` knob, nothing is
+persisted, and every re-render asks again with *Fresh take* pre-selected. A cascade carries no seed
+either — the choice applies to the segment you picked, and the downstream jobs are re-rendered to
+rebuild the chain exactly as they always were.
+
+The control appears only where the registry declares the capability (`capsFor('<id>').seedControl`,
+true on the two `@segmind` ids). Everywhere else it is not shown at all rather than shown greyed out,
+because those re-renders send no seed field and their request bodies are unchanged:
+`seedance-2.5@fal` accepts a seed but is deliberately given no control, `kling-o3@fal` takes none,
+and `seedance-2.0@fal` rejects one outright (422, above) — all three keep rendering from the
+deterministic per-job seed they always used. Asking for a seed mode on a backend without the cap is
+refused with a 400 *before* a take directory or a cost-ledger row exists, rather than being quietly
+ignored, because silently dropping it would sell a paid "fresh take" that re-sent the same starting
+point.
+
+From a terminal the same lever is a flag with none of the gating —
+`npm run render-job -- --from runs/<id> --job K2 --seed 12345` — validated before the render is
+queued, and independent of `--take <n>`, which varies the *words* rather than the starting point.
+Every take records what it was sent in its `prompts.json` sidecar: `seed` where the endpoint took
+one, `seed_unused` where it did not.
 
 ### Segmind-only setup (no fal account)
 
