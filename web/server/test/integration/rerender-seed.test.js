@@ -233,6 +233,25 @@ test("a take row's seed never leaks onto a cascade's downstream job", () => {
   assert.equal(r.seed, seedForJob(1, 0));
 });
 
+// A revision can reorder the plan, and a re-render take snapshots the plan it rendered from: with
+// the sidecar and the row both gone, the recovered default must use the SOURCE take's job order,
+// or K2's formula quietly becomes another segment's.
+test("a recovered default uses the source take's snapshotted job order, not the live plan's", () => {
+  const runId = 'web-19990201000012-snapidx';
+  const { dir, svc } = fakeService(runId, [
+    { job: 'K1', take: 't1', sidecar: sidecar({ job_id: 'K1', seed: 111 }) },
+    { job: 'K2', take: 't2', sidecar: null }, // cleaned take; no row was ever written for it
+    { job: 'K3', take: 't1', sidecar: sidecar({ job_id: 'K3', seed: 333 }) },
+  ]);
+  // t2 rendered from a snapshot in which K2 was FIRST; the live plan has it second.
+  fs.writeFileSync(path.join(dir, 'renders', 't2', 'spec.json'), JSON.stringify({
+    kling: { jobs: [{ job_id: 'K2' }, { job_id: 'K1' }, { job_id: 'K3' }] },
+  }));
+
+  const r = svc.rerenderJob(runId, { jobId: 'K2', seedMode: 'fix' });
+  assert.equal(r.seed, seedForJob(0, 0), "K2's original default was drawn at index 0, and index 0 is recovered");
+});
+
 // ── 'fresh': a NEW starting point, and never the one already on disk ────────────────────────────
 
 test("'fresh' draws a new seed, records it in the take row and the reply, and sends it", () => {

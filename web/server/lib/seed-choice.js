@@ -22,6 +22,17 @@ const own = (obj, key) => (obj && Object.hasOwn(obj, key) ? obj[key] : undefined
 // filesystem path: a manifest is a file on disk, and a take id is never a reason to leave the run.
 const TAKE_ID = /^t\d{1,4}$/;
 
+/** Job order as the SOURCE take rendered it: a re-render take snapshots its plan (snapshotSpec),
+ *  and a revision that reordered jobs since must not shift a recovered default onto another
+ *  segment's formula. The caller's live index is the fallback for takes that predate snapshots
+ *  (a first full render, a legacy run). */
+function jobIndexAt({ runDir, take, jobId, jobIndex }) {
+  const snap = take ? readJson(path.join(runDir, 'renders', take, 'spec.json')) : null;
+  const ids = snap?.kling?.jobs?.map?.((j) => j?.job_id);
+  const i = Array.isArray(ids) ? ids.indexOf(jobId) : -1;
+  return i === -1 ? jobIndex : i;
+}
+
 /** Which take holds this job's CURRENT clip — the one the reviewer is looking at, which is what
  *  "fix this take" means. `clipLineage` is the record composeCut keeps; the clip path is the
  *  fallback for a manifest written before it existed (its take dir is two levels up from the clip). */
@@ -60,8 +71,9 @@ export function currentSeedFor({ runDir, manifest, jobId, jobIndex }) {
   const row = manifest?.takes?.find?.((t) => t && t.id === take && t.jobId === jobId);
   if (Number.isInteger(row?.seed)) return row.seed;
   // `nonce` is the take number the renderer offset its default by; absent/garbage ⇒ 0, which is the
-  // plain seedForJob(jobIndex, 0) the very first take rendered from.
-  return seedForJob(jobIndex, Number(sidecar?.nonce) || 0);
+  // plain seedForJob(index, 0) the very first take rendered from — at the index the SOURCE take
+  // gave this job, which a later reordering revision does not move.
+  return seedForJob(jobIndexAt({ runDir, take, jobId, jobIndex }), Number(sidecar?.nonce) || 0);
 }
 
 /** How many times a 'fresh' draw may come back equal to the current seed before it is accepted. */
