@@ -121,6 +121,23 @@ test('bannedArgs are deleted LAST — a banned key can never survive another rul
   assert.ok(!('seed' in fal) && !('negative_prompt' in fal));
 });
 
+// `seedControl` is a UI/server capability ("is the seed worth CHOOSING here?"), never an argument.
+// The builder must not read it: if it ever gated emission on the new cap, seedance-2.5@fal — which
+// accepts a seed and deliberately offers no control — would silently stop sending one, and every
+// take on it would become unreproducible.
+test('seedControl changes NOTHING on the wire — only supportsSeed decides', () => {
+  const controlled = { ...CAPS_25, seedControl: true };
+  const uncontrolled = { ...CAPS_25, seedControl: false };
+  const intent = { ...BASE, seed: 70000, resolution: '720p' };
+  assert.deepEqual(buildSeedanceArgs(intent, controlled), buildSeedanceArgs(intent, uncontrolled));
+  assert.equal(buildSeedanceArgs(intent, uncontrolled).seed, 70000, 'a seed still rides where the endpoint takes one');
+  // …and declaring the control cannot smuggle a seed onto an endpoint that 422s on it.
+  assert.ok(!('seed' in buildSeedanceArgs(intent, { ...FAL20, seedControl: true })));
+  // The shipped Segmind entries are the same story from the registry's side.
+  assert.equal(buildSeedanceArgs({ ...BASE, seed: 12345, resolution: '720p' }, capsFor('seedance-2.5@segmind')).seed, 12345);
+  assert.equal(buildSeedanceArgs({ ...BASE, seed: 12345, resolution: '1080p' }, capsFor('seedance-2.0@segmind')).seed, 12345);
+});
+
 test('return_last_frame rides caps.supportsReturnLastFrame', () => {
   assert.equal(buildSeedanceArgs({ ...BASE, returnLastFrame: true, resolution: '720p' }, CAPS_25).return_last_frame, true);
   assert.ok(!('return_last_frame' in buildSeedanceArgs({ ...BASE, returnLastFrame: true }, FAL20)));

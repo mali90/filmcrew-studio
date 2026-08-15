@@ -61,7 +61,9 @@ export interface Manifest {
   createdAt: string;
   revisions: { id: string; feedback: string | null; scope: string; owners: number[]; createdAt: string }[];
   /** `promptSource` records whose words a take rendered: the agents' plan, or a saved edit. */
-  takes: { id: string; mode: 'probe' | 'full' | 'job'; jobId?: string; cascade?: boolean; revision: string | null; createdAt: string; estUsd?: number | null; feedback?: string | null; promptSource?: 'plan' | 'override' }[];
+  /** `seed` is present only when the re-render CHOSE one (a backend with `seedControl`); its
+   *  absence means the take rendered from the deterministic per-job default. */
+  takes: { id: string; mode: 'probe' | 'full' | 'job'; jobId?: string; cascade?: boolean; revision: string | null; createdAt: string; estUsd?: number | null; feedback?: string | null; promptSource?: 'plan' | 'override'; seed?: number }[];
   // `stitcher`/`joints`/`matched` describe how the seams were joined ('seamless' = colour-matched
   // chained joints, 'concat' = a hard cut at every seam). Absent on cuts made before that existed.
   cuts: { id: string; take: string; master: string | null; shortSide?: number | null; stitcher?: 'seamless' | 'concat'; joints?: number; matched?: number; createdAt: string }[];
@@ -240,7 +242,16 @@ export interface BoundaryPlan {
   startMode: 'native' | 'soft' | 'none' | 'unsupported';
   endMode: 'native' | 'soft' | 'none' | 'unsupported';
 }
-export interface RerenderJobBody { jobId: string; cascade?: boolean; feedback?: string; take?: number; boundaries?: BoundaryMode }
+/**
+ * Where a paid re-render STARTS. 'fix' re-sends the seed the segment's current take rendered from,
+ * so a prompt edit lands as a targeted change to that footage; 'fresh' draws a new seed for a new
+ * interpretation. OMITTED means neither was asked for: the render child uses its own deterministic
+ * per-job default, byte-for-byte as it did before this field existed. Never persisted — the choice
+ * belongs to one re-render, not to the run. Only offered on backends whose caps declare
+ * `seedControl` (Segmind's Seedance 2.0/2.5); anywhere else the server 400s on it.
+ */
+export type SeedMode = 'fix' | 'fresh';
+export interface RerenderJobBody { jobId: string; cascade?: boolean; feedback?: string; take?: number; boundaries?: BoundaryMode; seedMode?: SeedMode }
 /** POST /api/runs/:id/approve — finalize (free) or upscale-and-finalize (paid). */
 export interface ApproveBody {
   upscale: boolean;
@@ -267,6 +278,10 @@ export interface RerenderJobResult {
   estUsd: number | null;
   cascadeJobs: string[];
   boundaries: BoundaryPlan;
+  /** The seed this take was actually sent with, or null when none was chosen (the child used its
+   *  deterministic default). Reported for the same reason `boundaries` is: the reply says what was
+   *  APPLIED, never what was requested. */
+  seed: number | null;
 }
 // `usd`/`totalUsd` are NULLABLE on purpose: some providers publish no per-second rate (every Segmind
 // model we drive), and the estimator answers "I don't know" rather than guessing a sibling's price or

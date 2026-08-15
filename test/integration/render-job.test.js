@@ -124,6 +124,26 @@ test('seedance: --take and --feedback reach the prompt (Alternate take + Directo
   } finally { take.cleanup(); }
 });
 
+// The other side of the seed control: a caller may CHOOSE a seed (the web re-render's "fix this
+// take"/"fresh take"), but an endpoint that rejects one still receives none. fal's Seedance 2.0
+// bans `seed` outright, so the ban outranks the caller — and the number is written down as
+// `seed_unused` rather than dropped, which is what keeps the sidecar's account of a take honest.
+test('seedance on fal: an explicit seed is STILL never sent — it is recorded as seed_unused', async () => {
+  const take = mkTmp('rj-seed-fal');
+  try {
+    const spec = threeJobSpec();
+    spec.render_backend = 'seedance';
+    const before = fal.requests.length;
+    await renderJob(spec, 'K1', { runDir: take.dir, seed: 12345 });
+
+    const body = JSON.parse(lastSubmit(before).body);
+    assert.ok(!('seed' in body), 'fal\'s 2.0 endpoint 422s on a seed — bannedArgs wins over any caller');
+    const sidecar = JSON.parse(fs.readFileSync(path.join(take.dir, 'K1', 'prompts.json'), 'utf8'));
+    assert.equal(sidecar.seed, null, 'nothing was sent, so nothing is claimed as sent');
+    assert.equal(sidecar.seed_unused, 12345, 'the caller\'s number, recorded as the one that could not ride');
+  } finally { take.cleanup(); }
+});
+
 test('unknown job id and invalid spec are rejected before any submission', async () => {
   const take = mkTmp('rj-guard');
   try {

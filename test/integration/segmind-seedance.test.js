@@ -47,7 +47,7 @@ const out = mkTmp('sgsd-out');
 const cache = mkTmp('sgsd-cache');
 config.paths.out = out.dir;
 config.paths.cache = cache.dir;
-const { renderSpec } = await import('../../src/lib/pipeline.js');
+const { renderSpec, renderJob } = await import('../../src/lib/pipeline.js');
 
 const submitsSince = (from) => sg.requests.slice(from).filter((q) => q.method === 'POST');
 
@@ -159,6 +159,25 @@ test('seam frame — NATIVE first_frame_url with no cast refs, DEMOTED to a trai
     assert.equal(b2.reference_images.length, b1.reference_images.length + 1, 'the seam frame took one extra slot');
     assert.match(b2.prompt, /Use @Image 2 as the literal first frame of this clip/);
   } finally { cast.cleanup(); }
+});
+
+// The seed a re-render CHOOSES (web: "fix this take" / "fresh take") reaches the wire as itself and
+// is recorded as itself. Both halves matter: the payload is what the model actually starts from, and
+// the sidecar is where the NEXT re-render reads that starting point back out of — a seed that landed
+// in one but not the other would make "fix this take" fix a number nothing rendered from.
+test('an explicit seed replaces the deterministic default on the wire AND in the sidecar', async () => {
+  const { dir, cleanup } = mkTmp('sg-seed');
+  try {
+    const spec = loadGoldenSpec();
+    spec.kling.jobs = [{ job_id: 'K1', shots: ['S1'], elements: ['subject'] }];
+    const before = sg.requests.length;
+    await renderJob(spec, 'K1', { runDir: dir, seed: 12345, lowRes: true });
+
+    assert.equal(JSON.parse(submitsSince(before)[0].body).seed, 12345, 'not seedForJob(0, 0) = 70000');
+    const sidecar = JSON.parse(fs.readFileSync(path.join(dir, 'K1', 'prompts.json'), 'utf8'));
+    assert.equal(sidecar.seed, 12345, 'so a later re-render can read this take\'s real starting point back');
+    assert.equal(sidecar.seed_unused, null, 'the endpoint took it — nothing was "unused"');
+  } finally { cleanup(); }
 });
 
 test('seedance-2.0@segmind: its own slug, "Cut to:" connectors, 1080p, and its 15s ceiling', async () => {

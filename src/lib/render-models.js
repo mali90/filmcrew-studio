@@ -115,6 +115,13 @@ export const RENDER_MODELS = {
         nativeLastFrame: true,
         firstFrameExcludesRefs: true,
         supportsSeed: true, // fal's 2.0 endpoint 422s on a seed; Segmind's takes one
+        // …and here the seed is worth CHOOSING, which is a different fact from accepting one:
+        // Segmind documents it as a reproducibility control, so re-sending the seed a clip already
+        // used makes a tweaked prompt land as a targeted change to that footage, while a new seed
+        // is a fresh interpretation. This is the cap the re-render dialog and the setup card read;
+        // `supportsSeed` only says the argument survives the wire (it is true on seedance-2.5@fal
+        // too, which deliberately gets no such control), and neither may be inferred from the other.
+        seedControl: true,
         supportsReturnLastFrame: true,
         refStyle: 'spaced',
         shotSyntax: 'connectors',
@@ -190,6 +197,7 @@ export const RENDER_MODELS = {
         nativeLastFrame: true,
         firstFrameExcludesRefs: true,
         supportsSeed: true,
+        seedControl: true, // as on 2.0@segmind: the seed is a documented control here, not just an accepted argument
         supportsReturnLastFrame: true,
         refStyle: 'spaced',
         shotSyntax: 'numbered',

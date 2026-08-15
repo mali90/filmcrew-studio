@@ -9,6 +9,7 @@ import log from './logger.js';
 import { ensureDir, writeJson, readJson, slug } from './util.js';
 import { validateSpec } from './spec-schema.js';
 import { BACKEND_IDS, LEGACY_BACKENDS, capsFor, normalizeBackend } from './render-models.js';
+import { seedForJob } from './render-seed.js';
 import { renderKlingJobFal } from './fal-kling.js';
 import { falAdapter } from './fal-seedance.js';
 import { segmindAdapter } from './segmind-seedance.js';
@@ -69,9 +70,12 @@ export function resolveBackend(spec, explicit) {
   return id;
 }
 
-/** Deterministic per-job seed (recorded in the renderers' prompts.json sidecars for traceability —
- *  neither fal endpoint accepts a seed input); `take` offsets it so retakes are distinguishable. */
-export const seedForJob = (index, take = 0) => 70000 + index * 100 + (Number(take) || 0) * 7;
+/** The DEFAULT per-job seed, re-exported from the zero-import seed module so every caller that has
+ *  always asked pipeline.js for it keeps working. It is a default, not the only seed a render can
+ *  have: `renderJob` takes an explicit `seed` (and the CLI a `--seed`), because Segmind's Seedance
+ *  2.0/2.5 and fal's 2.5 accept a seed, and re-sending a previous take's seed turns a prompt tweak
+ *  into a targeted change to that footage. Endpoints that take none (fal's 2.0) record it as `seed_unused` either way. */
+export { seedForJob };
 
 /** Job ids after `jobId` in stitch order — their seam frames go stale when `jobId` is re-rendered. */
 export function downstreamJobs(spec, jobId) {
@@ -335,15 +339,18 @@ export async function renderSpec(spec, { runDir, probe = false, upscale = false,
  * @param {string} jobId
  * @param {{runDir:string, backend?:string, take?:number, feedback?:string, seamFrom?:string,
  *          lowRes?:boolean, firstFrameFrom?:string, lastFrameFrom?:string, clearFirstFrame?:boolean,
- *          clearLastFrame?:boolean, promptOverrides?:string}} opts
+ *          clearLastFrame?:boolean, promptOverrides?:string, seed?:number}} opts
  *   `firstFrameFrom`/`lastFrameFrom` pin this job's own boundaries and outrank both the authored
  *   `job.first_frame`/`job.last_frame` and the `seamFrom` chain (jobWithPins);
  *   `clearFirstFrame`/`clearLastFrame` decide that end the other way — the authored frame is
  *   dropped, so the end is free (opening) or a plain cut (closing); `promptOverrides` is a sidecar
- *   file snapshotted into the take dir.
+ *   file snapshotted into the take dir; `seed` replaces the deterministic default (seedForJob) for
+ *   THIS take, which is how a caller asks for the same starting point as a previous take (a prompt
+ *   tweak then lands as a targeted change) or for a genuinely different one. Endpoints that accept
+ *   no seed record it as `seed_unused` and render exactly as they would have.
  * @returns {Promise<{jobId:string, clip:string, totalDuration:number, segments:number, backend:string, staleDownstream:string[]}>}
  */
-export async function renderJob(spec, jobId, { runDir, backend, take = 0, feedback, seamFrom, lowRes = false, firstFrameFrom, lastFrameFrom, clearFirstFrame = false, clearLastFrame = false, promptOverrides } = {}) {
+export async function renderJob(spec, jobId, { runDir, backend, take = 0, feedback, seamFrom, lowRes = false, firstFrameFrom, lastFrameFrom, clearFirstFrame = false, clearLastFrame = false, promptOverrides, seed: seedOverride } = {}) {
   const be = resolveBackend(spec, backend);
   // Structural pass first, so an invalid spec fails with the full validation report rather than a
   // job-lookup error.
@@ -412,7 +419,7 @@ export async function renderJob(spec, jobId, { runDir, backend, take = 0, feedba
 
   log.step(`Render job — ${jobId} — ${RENDERERS[be].label}${take ? ` [take ${take}]` : ''}`);
   const r = await RENDERERS[be].render({
-    job: effJob, spec, runDir, seed: seedForJob(idx, take), lowRes, startFrame, endFrame, seamInFrom,
+    job: effJob, spec, runDir, seed: seedOverride ?? seedForJob(idx, take), lowRes, startFrame, endFrame, seamInFrom,
     feedsNext: config.kling.chainFrames && staleDownstream.length > 0, nonce: take, feedback,
   });
 
