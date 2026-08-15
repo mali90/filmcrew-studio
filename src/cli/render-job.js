@@ -58,6 +58,11 @@ async function main() {
   // Checked here with --take and before any spend, for the same reason every boundary flag below is:
   // a seed the endpoint would reject must cost nothing. The two never contradict each other — the
   // seed picks the starting point, --take varies the prompt — so both may be passed together.
+  // A `--seed` with no value — bare, or an empty string from an unset shell variable — must
+  // refuse, not silently fall back to the default: the caller typed the flag because they meant a
+  // PARTICULAR starting point, and a paid render on the wrong one costs real money. str() maps
+  // both empty forms to undefined, so ask args whether the key itself was supplied.
+  if ('seed' in args && str('seed') === undefined) throw new Error('--seed needs a value (an integer) — pass --seed <int> or drop the flag.');
   const seedArg = str('seed');
   const seed = seedArg === undefined ? undefined : Number(seedArg);
   if (seedArg !== undefined && !isSeed(seed)) {

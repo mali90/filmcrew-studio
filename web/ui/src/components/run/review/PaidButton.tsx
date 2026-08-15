@@ -1,7 +1,7 @@
 // Every money-bearing button in the review flow goes through this wrapper: the price is stated
 // on the button (CostTag), the very first paid click per browser asks once, and the click is the
 // natural moment to request OS-notification permission ("I'll be waiting").
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AlertTriangle } from 'lucide-react';
 import { Button, useFirstPaidConfirm, type ButtonProps } from '../../ui/Button';
@@ -29,6 +29,10 @@ export function PaidButton({
 }) {
   const { needsConfirm, confirm } = useFirstPaidConfirm();
   const [asking, setAsking] = useState(false);
+  // Stable identity on purpose: an inline arrow ref would detach/re-attach on EVERY re-render
+  // (React 18 callback-ref semantics), and this page re-renders per SSE log line — the note would
+  // yank the scroll position back down while the user re-reads a seam warning above it.
+  const reveal = useCallback((el: HTMLDivElement | null) => { el?.scrollIntoView?.({ block: 'nearest' }); }, []);
 
   const go = () => {
     requestNotifyPermission();
@@ -45,6 +49,11 @@ export function PaidButton({
         role="group"
         aria-label="This one spends real money"
         data-testid="paid-inline-confirm"
+        // The slot lives in the parent dialog's scrollable content (Dialog caps itself at the
+        // viewport); if the user has scrolled elsewhere the note would mount off-screen and the
+        // paid click would look like a no-op. Reveal it the moment it exists — `nearest` is a
+        // no-op when it is already in view. Optional call: jsdom has no scrollIntoView.
+        ref={reveal}
         className="flex flex-col gap-2 rounded-r2 border border-line bg-[var(--status-warn-soft)] p-2.5 text-dense text-ink-secondary"
       >
         <p className="flex gap-2">
