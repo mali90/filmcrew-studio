@@ -608,6 +608,11 @@ describe('SegmentRerenderDialog — fix this take vs fresh take', () => {
     expect(screen.queryByRole('radio', { name: 'Custom' })).not.toBeInTheDocument();
     expect(screen.getByTestId('regen-mode')).toBeInTheDocument();
     expect(screen.getByTestId('regen-mode-sentence')).toHaveTextContent('K1 is rendered again');
+    // With no boundary block above it, the seed control is the dialog's FIRST control — initial
+    // focus must land on the checked 'Fresh take' radio, not the unchecked 'Fix this take' first
+    // in DOM order, where a Space reflex would silently flip a paid choice (Dialog.tsx skips
+    // roving-tabindex members for exactly this dialog).
+    expect(document.activeElement).toBe(screen.getByRole('radio', { name: 'Fresh take' }));
   });
 
   it('posts the mode it is showing — fresh by default, fix once picked', async () => {

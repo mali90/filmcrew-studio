@@ -129,7 +129,10 @@ export function StepBackend({ state, dispatch }: { state: WizardState; dispatch:
                   <li key={p} className="text-caption text-ink-secondary">{p}</li>
                 ))}
               </ul>
-              <span className="tnum mt-3 text-caption text-ink-muted">{rateLabel(b.id, tier)}</span>
+              {/* mt-auto pins the rate to the card's baseline: these figures exist to be compared
+                  across the row, so they must stay on one line even when a card carries an extra
+                  bullet (the Segmind seed-control one). */}
+              <span className="tnum mt-auto pt-3 text-caption text-ink-muted">{rateLabel(b.id, tier)}</span>
             </button>
           );
         })}

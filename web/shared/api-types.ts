@@ -60,8 +60,8 @@ export interface Manifest {
   environment?: string | null;              // selected world/mood/style bible slug (null = none) — revisions re-inject it
   createdAt: string;
   revisions: { id: string; feedback: string | null; scope: string; owners: number[]; createdAt: string }[];
-  /** `promptSource` records whose words a take rendered: the agents' plan, or a saved edit. */
-  /** `seed` is present only when the re-render CHOSE one (a backend with `seedControl`); its
+  /** `promptSource` records whose words a take rendered: the agents' plan, or a saved edit.
+   *  `seed` is present only when the re-render CHOSE one (a backend with `seedControl`); its
    *  absence means the take rendered from the deterministic per-job default. */
   takes: { id: string; mode: 'probe' | 'full' | 'job'; jobId?: string; cascade?: boolean; revision: string | null; createdAt: string; estUsd?: number | null; feedback?: string | null; promptSource?: 'plan' | 'override'; seed?: number }[];
   // `stitcher`/`joints`/`matched` describe how the seams were joined ('seamless' = colour-matched

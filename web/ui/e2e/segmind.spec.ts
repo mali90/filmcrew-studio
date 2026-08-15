@@ -94,6 +94,14 @@ test('a Segmind run renders and upscales end to end, priced at Segmind\'s own ra
     await dialog.getByRole('radio', { name: mode }).click();
     const go = dialog.getByRole('button', { name: /^re-render K1/i });
     await expect(go).toBeEnabled();
+    // The paid button must be REACHABLE, not merely attached: the seed block made this the
+    // tallest dialog in the app, and a Dialog without scroll containment would push the action
+    // row below the fold exactly here (Dialog.tsx pins it while the content scrolls).
+    const box = await go.boundingBox();
+    const viewport = page.viewportSize()!;
+    expect(box).not.toBeNull();
+    expect(box!.y).toBeGreaterThanOrEqual(0);
+    expect(box!.y + box!.height).toBeLessThanOrEqual(viewport.height);
     await go.click();
     // the first paid click of the browser profile asks once, INSIDE this dialog (spec D13b)
     const confirm = dialog.getByTestId('paid-inline-confirm');

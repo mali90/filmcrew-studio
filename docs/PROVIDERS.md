@@ -231,7 +231,7 @@ ignored, because silently dropping it would sell a paid "fresh take" that re-sen
 point.
 
 From a terminal the same lever is a flag with none of the gating —
-`npm run render-job -- --from runs/<id> --job K2 --seed 12345` — validated before the render is
+`npm run render-job -- --spec runs/<id>/spec.json --job K2 --out runs/<id>/renders/t3 --seed 12345` — validated before the render is
 queued, and independent of `--take <n>`, which varies the *words* rather than the starting point.
 Every take records what it was sent in its `prompts.json` sidecar: `seed` where the endpoint took
 one, `seed_unused` where it did not.

@@ -90,7 +90,7 @@ npm run engine -- --brief "your idea here" --render --probe   # long multi-job v
 | `npm run doctor` | Health check (keys, ffmpeg, and everything a render needs). |
 | `npm run engine -- --brief "..." --render` | Plan a one-line idea and render it. Add `--probe` (multi-job plans: first job only), `--upscale`, `--backend seedance`, `--cast <names>`, `--environment <name>`; drop `--render` for the plan only. |
 | `npm run revise -- --from runs/<id> --feedback "..."` | Send director feedback back through the owning agents. |
-| `npm run render-job -- --from runs/<id> --job K2` | Re-render one job as a new take (seam-chained). Pin either end to a neighbour with `--first-frame-from` / `--last-frame-from`, and send edited words with `--prompt-overrides`. |
+| `npm run render-job -- --spec runs/<id>/spec.json --job K2 --out runs/<id>/renders/t3` | Re-render one job as a new take (seam-chained). Pin either end to a neighbour with `--first-frame-from` / `--last-frame-from`, send edited words with `--prompt-overrides`, and keep or change the starting point with `--seed` (Segmind Seedance). |
 | `npm run render -- --spec <spec.json>` | Render an existing plan. |
 | `npm run assemble -- --from runs/<id>/renders/<take>` | Finish or re-stitch a prior render — free, no API calls (unless you pass `--upscale`, or have `UPSCALE_ENABLED=true` in your `.env`: either one adds a paid Topaz pass over every sub-1080p clip in it). |
 | `npm run mint-voice -- <name> <clip.mp3>` | Give a character a persistent voice (once per character). |
