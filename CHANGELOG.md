@@ -22,7 +22,9 @@
   prompt edit, the dialog points at the pairing rather than picking it for you — the selection is
   never moved on your behalf. The choice belongs to one re-render and nothing else: no `.env` knob,
   no persisted preference, and a cascade carries no seed, so the downstream jobs are still re-rendered
-  only to rebuild the chain. On the wire, `POST /api/runs/:id/rerender-job` takes
+  only to rebuild the chain. The rail's "the plan changed" shortcut posts an explicit fix on these
+  backends — revised words on the clip's own starting point, stated in a caption — instead of
+  falling back to a default that, after a fresh take, would be a starting point nobody chose. On the wire, `POST /api/runs/:id/rerender-job` takes
   `seedMode: 'fix' | 'fresh'`, reports the seed it actually sent as `seed` (null when none was
   chosen), and records it on the take row so a take says which starting point was paid for. An
   unknown mode — or any mode at all on a backend that has no seed control — is a **400 raised before

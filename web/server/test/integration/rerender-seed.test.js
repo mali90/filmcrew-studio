@@ -194,6 +194,45 @@ test("'fix' reads the take's own nonce, so a retake's default is recovered too",
   assert.equal(svc.rerenderJob(runId, { jobId: 'K2', seedMode: 'fix' }).seed, seedForJob(1, 3));
 });
 
+// A cleaned take dir loses its prompts.json but not its manifest row: rerenderJob records the
+// CHOSEN seed beside the jobId it chose it for, and that record outlives the sidecar. Without this
+// fallback a Fresh-777 clip would be "fixed" onto the deterministic formula — a paid targeted
+// tweak that comes back as a different clip.
+test("'fix' falls back to the manifest take row's recorded seed when the sidecar is gone", () => {
+  const runId = 'web-19990201000010-rowseed';
+  const { dir, svc, enqueued } = fakeService(runId, [
+    { job: 'K1', take: 't1', sidecar: sidecar({ job_id: 'K1', seed: 111 }) },
+    { job: 'K2', take: 't2', sidecar: null }, // t2 was a Fresh re-render; its dir was cleaned
+    { job: 'K3', take: 't1', sidecar: sidecar({ job_id: 'K3', seed: 333 }) },
+  ]);
+  const m = readManifest(dir);
+  m.takes.push({ id: 't2', mode: 'job', jobId: 'K2', createdAt: '2026-08-02T00:00:00.000Z', seed: 777 });
+  writeManifest(dir, m);
+
+  const r = svc.rerenderJob(runId, { jobId: 'K2', seedMode: 'fix' });
+  assert.equal(flag(enqueued.at(-1), '--seed'), '777', 'the recorded Fresh seed, not the formula');
+  assert.equal(r.seed, 777);
+});
+
+// …but only for the job the row names: a cascade renders downstream jobs into the PRIMARY's take
+// dir, and the primary's chosen seed is not the starting point any downstream job rendered from.
+test("a take row's seed never leaks onto a cascade's downstream job", () => {
+  const runId = 'web-19990201000011-rowleak';
+  const { dir, svc, enqueued } = fakeService(runId, [
+    { job: 'K1', take: 't2', sidecar: sidecar({ job_id: 'K1', seed: 888 }) },
+    { job: 'K2', take: 't2', sidecar: null }, // cascaded into K1's t2; its sidecar was cleaned
+    { job: 'K3', take: 't1', sidecar: sidecar({ job_id: 'K3', seed: 333 }) },
+  ]);
+  const m = readManifest(dir);
+  m.takes.push({ id: 't2', mode: 'job', jobId: 'K1', cascade: true, createdAt: '2026-08-02T00:00:00.000Z', seed: 888 });
+  writeManifest(dir, m);
+
+  const r = svc.rerenderJob(runId, { jobId: 'K2', seedMode: 'fix' });
+  assert.equal(flag(enqueued.at(-1), '--seed'), String(seedForJob(1, 0)),
+    "K1's chosen 888 belongs to K1 — K2 rendered from its own deterministic default");
+  assert.equal(r.seed, seedForJob(1, 0));
+});
+
 // ── 'fresh': a NEW starting point, and never the one already on disk ────────────────────────────
 
 test("'fresh' draws a new seed, records it in the take row and the reply, and sends it", () => {

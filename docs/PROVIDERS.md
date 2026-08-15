@@ -218,7 +218,10 @@ the button does not move when you switch between the two.
 The choice belongs to **one re-render, not to the run**: there is no `.env` knob, nothing is
 persisted, and every re-render asks again with *Fresh take* pre-selected. A cascade carries no seed
 either — the choice applies to the segment you picked, and the downstream jobs are re-rendered to
-rebuild the chain exactly as they always were.
+rebuild the chain exactly as they always were. One surface decides for you, and says so: the rail's
+"the plan changed" shortcut posts an explicit *fix* — the words moved, so the picture holds, and a
+caption under the button states it. Choosing *fresh* for a plan change is one click away in the
+dialog.
 
 The control appears only where the registry declares the capability (`capsFor('<id>').seedControl`,
 true on the two `@segmind` ids). Everywhere else it is not shown at all rather than shown greyed out,

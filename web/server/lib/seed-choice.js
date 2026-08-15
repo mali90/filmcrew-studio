@@ -42,8 +42,9 @@ function currentTakeOf(manifest, jobId) {
  * The sidecar records the seed honestly in two keys — `seed` is what was SENT, `seed_unused` what an
  * endpoint that accepts none would have been sent — and exactly one is ever non-null, so both are
  * read: a run that switched backends still has a recoverable starting point. With no sidecar at all
- * (a legacy or cleaned take) the deterministic default is recomputed from the take's own prompt
- * nonce, which is what the renderer would have used.
+ * (a legacy or cleaned take) the manifest take row that queued the re-render is asked next — it
+ * records the CHOSEN seed beside the jobId it was chosen for — and only then is the deterministic
+ * default recomputed from the take's own prompt nonce, which is what the renderer would have used.
  *
  * @param {{runDir:string, manifest:object|null, jobId:string, jobIndex:number}} args
  * @returns {number} always a number — "fix" must never be the option that cannot be offered
@@ -53,6 +54,11 @@ export function currentSeedFor({ runDir, manifest, jobId, jobIndex }) {
   const sidecar = take ? readJson(path.join(runDir, 'renders', take, jobId, 'prompts.json')) : null;
   if (Number.isInteger(sidecar?.seed)) return sidecar.seed;
   if (Number.isInteger(sidecar?.seed_unused)) return sidecar.seed_unused;
+  // Sidecar gone (cleaned take dir): the take row still records the seed rerenderJob chose. Matched
+  // on BOTH ids — a cascade renders downstream jobs into the primary's take dir, and the primary's
+  // chosen seed must never be "fixed" onto a downstream job that rendered from its own default.
+  const row = manifest?.takes?.find?.((t) => t && t.id === take && t.jobId === jobId);
+  if (Number.isInteger(row?.seed)) return row.seed;
   // `nonce` is the take number the renderer offset its default by; absent/garbage ⇒ 0, which is the
   // plain seedForJob(jobIndex, 0) the very first take rendered from.
   return seedForJob(jobIndex, Number(sidecar?.nonce) || 0);
