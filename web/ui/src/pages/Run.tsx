@@ -7,7 +7,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import type { RunDetail } from '../../../shared/api-types';
 import { api } from '../api/client';
 import { useRunEvents } from '../api/useRunEvents';
-import { seconds, spendLabel } from '../lib/format';
+import { elapsed, seconds, spendLabel } from '../lib/format';
 import { PhaseStrip } from '../components/run/PhaseStrip';
 import { AgentRail } from '../components/run/AgentRail';
 import { SpecInspector } from '../components/run/SpecInspector';
@@ -21,11 +21,22 @@ import { PromptSheet, PromptSheetProvider } from '../components/run/review/Promp
 /** The rail's calm fact sheet while clips render. */
 function RunFacts({ run }: { run: RunDetail }) {
   const ledger = run.manifest?.costLedger ?? [];
+  // The cast the run actually pins, per character with its reference count (U2a) — the picker's
+  // other half, verifiable after Create without opening the spec inspector.
+  const refCounts = new Map<string, number>();
+  for (const el of run.spec?.kling?.elements ?? []) {
+    const who = el.character ?? el.id;
+    refCounts.set(who, (refCounts.get(who) ?? 0) + 1);
+  }
+  const cast = [...refCounts].map(([who, n]) => `${who} (${n} ref${n === 1 ? '' : 's'})`).join(' · ');
   const facts: [string, string][] = [
     ['backend', run.backend ?? '—'],
     ['aspect', run.aspect ?? '—'],
+    // the per-run resolution pick changes the bill, so it must be verifiable here (U2a)
+    ['resolution', run.manifest?.resolution ?? 'model default'],
     ['duration', seconds(run.durationS)],
     ['takes', String(run.manifest?.takes?.length ?? 0)],
+    ...(cast ? ([['cast', cast]] as [string, string][]) : []),
     ['est. cost so far', spendLabel(ledger)],
   ];
   return (
@@ -39,6 +50,44 @@ function RunFacts({ run }: { run: RunDetail }) {
           </div>
         ))}
       </dl>
+    </section>
+  );
+}
+
+/** The deliver interstitial (U7): reads the same cached estimate ApproveBar fetched, so the target
+ *  it names is the provider's real one — never a hardcoded "1080p" over a 720p/4K plan. */
+function UpscaleInterstitial({ run }: { run: RunDetail }) {
+  // The vendor THIS upscale is billing: approve just wrote it on the ledger line. Quoting the
+  // env-derived default here instead could name the wrong target the moment the pick diverges
+  // (Segmind honors UPSCALE_TARGET_RESOLUTION; fal lifts toward ~1080p). When the pick is on
+  // record the query key matches the estimate ApproveBar already cached for that provider.
+  const ledgerProvider = [...(run.manifest?.costLedger ?? [])].reverse().find((l) => l.action === 'upscale')?.provider ?? null;
+  const estimate = useQuery({
+    queryKey: ['estimate', run.id, 'upscale', null, ledgerProvider],
+    queryFn: () => api.estimate(run.id, { mode: 'upscale', provider: ledgerProvider ?? undefined }),
+  });
+  const targetShort = estimate.data?.targetShortSide ?? 1080;
+  const targetLabel = targetShort >= 2160 ? '4K' : `${targetShort}p`;
+  const startedAt = run.manifest?.activeJob?.startedAt ?? null;
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!startedAt) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [startedAt]);
+  return (
+    <section role="status" className="rounded-r3 border border-line bg-surface-1 p-5">
+      <h2 className="text-heading text-ink">Approved — upscaling with Topaz</h2>
+      <p className="mt-1 text-dense text-ink-muted">
+        {/* while the estimate loads, the target clause is dropped rather than guessed */}
+        {estimate.data
+          ? <>Topaz is lifting the stitched master toward ~{targetLabel}. The final file lands here when it finishes.</>
+          : <>Topaz is lifting the stitched master. The final file lands here when it finishes.</>}
+      </p>
+      <div className="sweep mt-3 h-1 w-full" aria-hidden />
+      {startedAt && (
+        <p className="tnum mt-2 text-caption text-ink-muted">{elapsed(now - new Date(startedAt).getTime())}</p>
+      )}
     </section>
   );
 }
@@ -62,6 +111,12 @@ export default function RunPage() {
   const latestCutId = run?.manifest?.cuts?.at(-1)?.id ?? null;
   useEffect(() => { setCutId(null); }, [id, latestCutId]);
 
+  // A real stream drop, never the initial connect (U8): only once THIS run's stream has actually
+  // been open does a disconnected EventSource mean the picture on screen may be going stale. A live
+  // snapshot is no proof of that — the REST fallback fills `live.run` too, and it routinely answers
+  // first, so reading it here warned on healthy page loads (and forever on a blocked stream).
+  const linkDropped = live.hasConnected && !live.connected;
+
   if (!run) return null; // sub-400ms fetch — no skeleton flash
 
   // attention: keep whichever stage the run actually reached under the banner
@@ -73,6 +128,13 @@ export default function RunPage() {
     case 'planning':
       main = (
         <>
+          {/* Revising from review morphs the whole page into the agent rail — honest about what is
+              happening, but silent about what was NOT lost. Say it (U9). */}
+          {(run.manifest?.takes?.length ?? 0) > 0 && (
+            <div className="rounded-r3 border border-line bg-surface-1 px-4 py-3 text-dense text-ink-secondary" data-testid="revise-in-review-notice">
+              Revising the plan — your clips, takes and cut are untouched. Review returns when the agents finish, and nothing re-renders until you choose.
+            </div>
+          )}
           <div id="section-plan"><AgentRail run={run} live={live} /></div>
           <LogViewer run={run} live={live} defaultExpanded />
         </>
@@ -89,20 +151,32 @@ export default function RunPage() {
       );
       rail = <SpecInspector run={run} />;
       break;
-    case 'rendering':
+    case 'rendering': {
       // an approved run being Topaz-upscaled is DELIVERING — bouncing back to the job cards reads
       // as a regression to the render step
+      //
+      // A job-mode re-render replaces ONE clip of a cut the user is reviewing — tearing the review
+      // room down for it would take away the very video they just paid to improve (U1). Full
+      // renders, probes and first renders replace everything, so JobCards stays the honest view.
+      //
+      // The re-render is ONE interval, and `activeJob` names only its middle: it is empty while the
+      // job waits behind another run's child (the queue is global, only the SPEND lock is per run),
+      // and it reads `assemble` while the free stitch that follows rebuilds the master. Keyed on it,
+      // the stage was torn down and rebuilt on both sides of the model process. The take being
+      // worked on is what actually names the interval, and `rerender-job` records its mode before it
+      // enqueues anything — so a full render or a probe can never be mistaken for one.
+      const segmentRerender = run.phase === 'render'
+        && run.manifest?.takes?.at(-1)?.mode === 'job'
+        && (run.manifest?.cuts?.length ?? 0) > 0;
       main = run.phase === 'deliver' ? (
         <>
-          <div id="section-deliver">
-            <section role="status" className="rounded-r3 border border-line bg-surface-1 p-5">
-              <h2 className="text-heading text-ink">Approved — upscaling to 1080p</h2>
-              <p className="mt-1 text-dense text-ink-muted">
-                Topaz is lifting the stitched master. The final file lands here when it finishes.
-              </p>
-              <div className="sweep mt-3 h-1 w-full" aria-hidden />
-            </section>
-          </div>
+          <div id="section-deliver"><UpscaleInterstitial run={run} /></div>
+          <LogViewer run={run} live={live} />
+        </>
+      ) : segmentRerender ? (
+        <>
+          <div id="section-review"><ReviewStage run={run} cutId={cutId} setCutId={setCutId} /></div>
+          <PromptSheet run={run} />
           <LogViewer run={run} live={live} />
         </>
       ) : (
@@ -112,6 +186,7 @@ export default function RunPage() {
           <LogViewer run={run} live={live} />
         </>
       );
+      // no ApproveBar in the segment-re-render state — nothing is approvable mid-render
       rail = (
         <>
           <RunFacts run={run} />
@@ -119,6 +194,7 @@ export default function RunPage() {
         </>
       );
       break;
+    }
     case 'attention':
       main = (
         <>
@@ -151,11 +227,13 @@ export default function RunPage() {
           <LogViewer run={run} live={live} />
         </>
       );
+      // Approve on top (U6): the free, happy-path exit must not sit below a money accordion and a
+      // history list — that layout reads as "you are expected to keep spending".
       rail = (
         <>
+          <ApproveBar run={run} cutId={cutId} />
           <ChangeRequestPanel run={run} />
           <TakesHistory run={run} />
-          <ApproveBar run={run} cutId={cutId} />
         </>
       );
       break;
@@ -168,9 +246,22 @@ export default function RunPage() {
   return (
     // The prompt sheet's open target is held above `main`: the controls that open it live in the
     // plan card, the job cards and the clip strip, while the one panel lives under the stage band.
-    <PromptSheetProvider>
+    //
+    // Keyed by run, because React Router reuses this component across /runs/A → /runs/B: an open
+    // target is a job id of the run it was opened on, and carried into another run it would query
+    // that run's prompt API with a foreign job (and a foreign take, since the panel keys on the
+    // target alone) — a 404 or "sent nothing" where B's plan belongs. `id` only changes when the
+    // URL does, so a same-run re-render still keeps the sheet, and any edit open inside it.
+    <PromptSheetProvider key={id}>
       <div>
         <PhaseStrip run={run} agents={live.agents} activeKind={live.activeKind} />
+        {/* Silence during paid work is the most expensive kind of silence (U8): EventSource retries
+            by itself, the user just needs to know the picture may be stale meanwhile. */}
+        {linkDropped && (run.status === 'planning' || run.status === 'rendering') && (
+          <div role="status" className="-mx-6 border-b border-line bg-[var(--status-warn-soft)] px-6 py-2 text-dense text-ink-secondary">
+            Live updates dropped — reconnecting. The run keeps going on the server; this page may lag until the stream is back.
+          </div>
+        )}
         {run.idea && (
           <div className="sticky top-[104px] z-20 -mx-6 h-10 border-b border-line bg-surface-0/90 px-6 backdrop-blur">
             <div className="mx-auto flex h-full max-w-[1280px] items-center gap-3">

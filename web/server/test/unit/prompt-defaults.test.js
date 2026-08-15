@@ -117,14 +117,112 @@ for (const backend of ['kling', 'seedance-2.0@fal', 'seedance-2.5@fal']) {
 
 // The byte-parity above only catches a default that MOVES A BYTE. These two are budgets: a drift in
 // either silently changes what the editor's meter allows before the composed bytes ever change.
+//
+// The Seedance assertion is deliberately a MAPPING rather than raw equality, and the reason is the
+// wire contract: config.js says "uncapped" with 0, the PromptView says it with `null` (0 would meter
+// every edit as instantly over, and `maxBytes − pinBytes` would go negative). The lockstep is
+// unchanged in force — config.js and prompt-service.js must still agree about whether a cap exists
+// at all — only its shape moved.
 test('the byte budgets themselves come from config.js, not from a second opinion', async () => {
   const seedance = (await view(bareRoot, 'seedance-2.0@fal')).prompts[0];
-  assert.equal(seedance.maxBytes, cfg.seedance.promptMaxBytes,
-    'the Seedance whole-prompt budget must be config.js\'s SEEDANCE_PROMPT_MAX_BYTES default');
+  assert.equal(cfg.seedance.promptMaxBytes, 0,
+    'config.js ships the Seedance whole-prompt clamp OFF — no provider documents a prompt-length limit');
+  assert.equal(seedance.maxBytes, null,
+    'and prompt-service.js must mirror "no cap" as null, never as 0 or NaN');
+  assert.equal(typeof seedance.pinBytes, 'number',
+    'the system\'s own share is still a measured number — it just has no budget to be subtracted from');
 
   const kling = (await view(bareRoot, 'kling')).prompts[0];
   assert.equal(kling.segmentMaxBytes, cfg.kling.segmentMaxBytes,
     'the Kling per-segment budget must be config.js\'s KLING_SEGMENT_MAX_BYTES default');
+  assert.equal(kling.segmentMaxBytes, 500, 'fal\'s o3 schema really enforces this one — it does not move');
+});
+
+// The knob is the lever for anyone who meets a provider 422 on a very long prompt. A removed default
+// and a knob that quietly stopped clamping look identical from the outside, so the SET path is
+// pinned through the same mirror.
+test('a run that SETS SEEDANCE_PROMPT_MAX_BYTES gets that number as its meter denominator', async () => {
+  const cappedRoot = path.join(tmpRoot, 'capped');
+  fs.mkdirSync(cappedRoot, { recursive: true });
+  fs.writeFileSync(path.join(cappedRoot, '.env'), 'SEEDANCE_PROMPT_MAX_BYTES=1200\n');
+  const capped = (await view(cappedRoot, 'seedance-2.0@fal')).prompts[0];
+  assert.equal(capped.maxBytes, 1200, "the run's own knob reaches the preview");
+  assert.equal(buildConfig({ SEEDANCE_PROMPT_MAX_BYTES: '1200' }).seedance.promptMaxBytes, 1200,
+    'and config.js reads it the same way — the two mirrors still agree');
+});
+
+// The preview and the render child read the SAME file — and the promise only holds if they read it
+// the same WAY. The child reads it through dotenv (`import 'dotenv/config'`), which drops a trailing
+// `# comment`, accepts an `export ` prefix, and keeps the LAST assignment. Reading it as the
+// wizard's ordered entries instead answered all three differently, so an ordinary .env previewed one
+// prompt and paid for another.
+test('a dotenv-valid .env previews exactly what the render child will read from it', async () => {
+  const { parse } = await import('dotenv');
+  const quirkyRoot = path.join(tmpRoot, 'quirky');
+  const plainRoot = path.join(tmpRoot, 'plain');
+  for (const d of [quirkyRoot, plainRoot]) fs.mkdirSync(d, { recursive: true });
+  const quirky = [
+    'export SEEDANCE_PROMPT_MAX_BYTES=1200',
+    'SEEDANCE_STYLE=hand-held documentary # the look for this run',
+    'SEEDANCE_AVOID=the guard that was replaced',
+    'SEEDANCE_AVOID=the guard that wins',
+  ].join('\n') + '\n';
+  fs.writeFileSync(path.join(quirkyRoot, '.env'), quirky);
+  // What the CHILD gets, from dotenv's own parser — never a second reading of ours.
+  const child = parse(quirky);
+  assert.deepEqual(child, {
+    SEEDANCE_PROMPT_MAX_BYTES: '1200',
+    SEEDANCE_STYLE: 'hand-held documentary',
+    SEEDANCE_AVOID: 'the guard that wins',
+  }, 'dotenv itself reads it this way');
+  fs.writeFileSync(path.join(plainRoot, '.env'), Object.entries(child).map(([k, v]) => `${k}=${v}`).join('\n') + '\n');
+
+  const got = (await view(quirkyRoot, 'seedance-2.0@fal')).prompts[0];
+  const want = (await view(plainRoot, 'seedance-2.0@fal')).prompts[0];
+  assertBytesEqual(got.prompt, want.prompt, 'the preview of a dotenv-valid .env');
+  assert.equal(got.maxBytes, 1200, 'an `export`ed budget is still the budget the render will apply');
+  assert.ok(got.prompt.includes('the guard that wins'), 'the assignment dotenv keeps is the one previewed');
+  assert.ok(!got.prompt.includes('# the look'), 'a trailing comment is not part of the value');
+});
+
+// Same rule, one layer down: reading the .env the same WAY is not enough if the two sides then
+// COERCE the value differently. dotenv keeps the padding INSIDE a quoted value, and config.js trims
+// a boolean before testing it — so `" true "` is the flag ON in the render child. A mirror that
+// tests the raw value reads it OFF, and the preview then describes a render nobody is going to pay
+// for: no chained opening pin, no speech rule, no dialogue. The coercion is therefore ONE shared
+// rule (src/lib/env-file.js `envBool`), pinned here from the outside, through the preview.
+test('a dotenv-valid PADDED boolean previews the flag the render child will really apply', async () => {
+  const { parse } = await import('dotenv');
+  const paddedRoot = path.join(tmpRoot, 'padded');
+  const bareBoolRoot = path.join(tmpRoot, 'plain-bool');
+  for (const d of [paddedRoot, bareBoolRoot]) fs.mkdirSync(d, { recursive: true });
+
+  // Both knobs default to TRUE, so a padded `" true "` is the case that separates the two readings:
+  // trimmed it is the default the child renders with, untrimmed it silently flips the preview off.
+  const padded = 'KLING_CHAIN_FRAMES=" true "\nSEEDANCE_GENERATE_AUDIO=" true "\n';
+  fs.writeFileSync(path.join(paddedRoot, '.env'), padded);
+  assert.deepEqual(parse(padded), { KLING_CHAIN_FRAMES: ' true ', SEEDANCE_GENERATE_AUDIO: ' true ' },
+    'dotenv keeps the padding inside a quoted value — this is what the child gets');
+  const child = buildConfig(parse(padded));
+  assert.equal(child.kling.chainFrames, true, 'and config.js trims it: the child DOES chain frames');
+  assert.equal(child.seedance.generateAudio, true, 'and the child DOES render native audio');
+
+  fs.writeFileSync(path.join(bareBoolRoot, '.env'), 'KLING_CHAIN_FRAMES=true\nSEEDANCE_GENERATE_AUDIO=true\n');
+
+  // Kling: chaining is what hands job 2 its opening frame, so the seam the sheet PROMISES moves.
+  const gotKling = await view(paddedRoot, 'kling');
+  const wantKling = await view(bareBoolRoot, 'kling');
+  assert.equal(gotKling.prompts[1].seam.in, wantKling.prompts[1].seam.in,
+    'the opening pin the preview promises must be the one the render will apply');
+  assert.equal(wantKling.prompts[1].seam.in, 'native',
+    '…which for a chained Kling job is a real anchor, not a guess');
+
+  // Seedance: the audio flag rides through voice-refs.js (the ONE mirror run-service budgets from),
+  // and it moves prompt BYTES — the speech rule, every dialogue clause and the speaker list.
+  const got = (await view(paddedRoot, 'seedance-2.0@fal')).prompts[0];
+  const want = (await view(bareBoolRoot, 'seedance-2.0@fal')).prompts[0];
+  assertBytesEqual(got.prompt, want.prompt, 'the preview of a padded SEEDANCE_GENERATE_AUDIO');
+  assert.ok(want.prompt.includes('Speech rule'), 'audio ON is what the child renders, so the speech rule rides');
 });
 
 // A knob that is NOT env-tunable cannot drift by .env, only by edit — so it is asserted directly.

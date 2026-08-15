@@ -50,9 +50,6 @@ export const DEFAULT_TEXT_RULE = 'No on-screen text, letters, captions, or signs
 // silently turning every shot into 1s rather than throwing somewhere far away.
 export const DEFAULT_SHOT_SECONDS = 5;
 
-// Same idea for the whole-prompt clamp: no documented model cap, and 5000 carries a rich 6-shot prompt.
-export const DEFAULT_PROMPT_MAX_BYTES = 5000;
-
 // Capitalize a speaker id for the spoken-line clause (e.g. a future line.speaker); default neutral.
 export const speakerName = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : 'The character');
 
@@ -74,12 +71,62 @@ export function trimToBytes(s, maxBytes) {
   return out;
 }
 
-/** Clamp to ≤ maxBytes UTF-8 bytes (reserving room for the ellipsis) without splitting a multibyte char. */
+/**
+ * The Seedance whole-prompt cap a settings bag asks for, or 0 for "no cap".
+ *
+ * The clamp SHIPS OFF: Segmind's 2.0/2.5 API pages declare no prompt-length limit and fal's
+ * published Seedance schemas declare no `maxLength` on `prompt` (they DO bound their other fields,
+ * so the absence is meaningful; fal publishes no schema at all for the two reference-to-video
+ * endpoints this repo calls by default, so those are unverified rather than known-unbounded).
+ * ByteDance only RECOMMENDS staying under ~1000 words, which is a quality note about what the model
+ * attends to, not an API limit. So the old 5000 was a house rule that shortened long multi-shot
+ * prompts where nobody could see it. 0 is the uncapped sentinel throughout, and what config.js and
+ * web/server's mirror both default SEEDANCE_PROMPT_MAX_BYTES to — that knob is still the lever for
+ * anyone who meets a provider 422 in the wild.
+ *
+ * ONE normalizer, because the three sites that used to write `Number(x) || DEFAULT` each collapsed
+ * an explicit 0 back into an ambient default — and with 0 meaning uncapped that is the difference
+ * between sending a prompt and silently shortening it. There is deliberately no DEFAULT_* constant
+ * to fall back to: a fallback would swallow an explicit 0 the day someone puts a number back, which
+ * is the exact bug this exists to remove. UNSET is 0 too: '' and undefined are how config.js and
+ * web/server's mirror spell "no knob".
+ *
+ * An UNREADABLE value is the one thing that is NOT silently uncapped. `SEEDANCE_PROMPT_MAX_BYTES=5,000`
+ * (or `5kb`, or `5 000`) parses to NaN, which would read exactly like unset — quietly disabling the
+ * lever a user reached for after a provider 422, and answering their next 422 the same way. So it
+ * throws instead, on both halves at once: the renderer refuses before it submits, and the preview
+ * reports it as that job's `error`, in the place the number would otherwise have been drawn.
+ * config.js cannot refuse it itself — every entry point imports it at module scope, the doctor
+ * included, and the doctor's job is to REPORT a broken setup rather than die with it.
+ * @param {{promptMaxBytes?:number|string}|null} [settings]
+ * @returns {number} the cap in UTF-8 bytes, or 0 when there is none
+ * @throws {Error} when a cap was set to something that is not a number
+ */
+export function promptCapOf(settings) {
+  const raw = settings?.promptMaxBytes;
+  if (raw === undefined || raw === null || raw === '') return 0;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) {
+    throw new Error(
+      `SEEDANCE_PROMPT_MAX_BYTES is not a number of bytes (got "${String(raw)}") — and a knob nobody can read is not "no cap": `
+      + 'it would send the very prompt a provider refused. Set a whole number of bytes, or leave it empty (or 0) for no cap.',
+    );
+  }
+  return n > 0 ? n : 0;
+}
+
+/**
+ * Clamp to ≤ maxBytes UTF-8 bytes (reserving room for the ellipsis) without splitting a multibyte
+ * char. A budget that is not a positive finite number means NO cap and returns the string untouched
+ * — the old arithmetic turned a 0 budget into a lone ellipsis, i.e. an emptied paid prompt.
+ */
 export function clampBytes(s, maxBytes) {
+  const cap = Number(maxBytes);
+  if (!Number.isFinite(cap) || cap <= 0) return s;
   const buf = Buffer.from(s, 'utf8');
-  if (buf.length <= maxBytes) return s;
+  if (buf.length <= cap) return s;
   const ELL = '…';
-  let end = Math.max(0, maxBytes - Buffer.byteLength(ELL, 'utf8')); // leave room so the result never exceeds maxBytes
+  let end = Math.max(0, cap - Buffer.byteLength(ELL, 'utf8')); // leave room so the result never exceeds the cap
   while (end > 0 && (buf[end] & 0xc0) === 0x80) end--; // back off a UTF-8 continuation byte
   return `${buf.slice(0, end).toString('utf8').trimEnd()}${ELL}`;
 }
@@ -161,21 +208,31 @@ export function composeKlingStoryboard(job, spec, settings, opts = {}) {
   return { segments, totalDuration, parts };
 }
 
+/** The bytes of one Kling segment left for the authored scene body: the cap minus the scaffolding. */
+const klingBodyBudget = ({ leadPrefix, head, say, tail }, cap) =>
+  cap - utf8Bytes(leadPrefix) - utf8Bytes(head) - utf8Bytes(say) - utf8Bytes(tail);
+
 /**
  * One Kling segment: the system scaffolding wrapped around ONE scene body, clamped to the
  * per-segment byte cap. Shared by the plan path and `applyOverride`, so a hand-edited body is
- * fitted by exactly the rules the agents' body is fitted by — there is no second trimmer.
+ * wrapped by exactly the rules the agents' body is wrapped by — there is no second composer.
+ *
+ * `trim` is the ONE thing the two callers do not share: the agents' body is normalized and re-cut to
+ * fit (nobody promised them otherwise), a user's is neither — see applyOverride. That includes the
+ * edges: an edit saved with a blank line or padding around it is stored and metered with those
+ * bytes, so quietly dropping them here would send something other than what the editor showed.
  */
-function klingSegmentPrompt(parts, sceneBody, cap) {
+function klingSegmentPrompt(parts, sceneBody, cap, { trim = true } = {}) {
   const { leadPrefix, head, say, tail, who, lineText, hit } = parts;
-  let body = String(sceneBody ?? '').trim();
+  let body = String(sceneBody ?? '');
+  if (trim) body = body.trim();
   // fal enforces the 512 cap in UTF-8 BYTES, not JS characters. The SPOKEN clause is protected:
   // reserve its full length (+ lead/framing/camera) and trim only the SCENE body to fit — the words
   // are never cut here (the old blanket end-trim lopped the dialogue off the end → mid-word gibberish).
-  const budget = cap - utf8Bytes(leadPrefix) - utf8Bytes(head) - utf8Bytes(say) - utf8Bytes(tail);
-  if (utf8Bytes(body) > budget) body = budget > 3 ? trimToBytes(body, budget - 3).trimEnd() + '...' : '';
+  const budget = klingBodyBudget(parts, cap);
+  if (trim && utf8Bytes(body) > budget) body = budget > 3 ? trimToBytes(body, budget - 3).trimEnd() + '...' : '';
   let prompt = leadPrefix + head + body + say + tail;
-  if (utf8Bytes(prompt) > cap) {
+  if (trim && utf8Bytes(prompt) > cap) {
     // Words + lead/framing alone exceed the cap (a very long line — QC's length guard should stop
     // this upstream). Drop scene framing/camera to keep the words; only if the words ALONE are still
     // over cap, clip the quoted text at a byte boundary and RE-CLOSE the quote — never leave it
@@ -272,7 +329,8 @@ function jobSpeakers(job, spec, audioOn) {
 /**
  * The SYSTEM front matter for one Seedance job: style, identity, guards, take/note directives, the
  * first-frame pin and the per-speaker voice notes. It sits ahead of the shot bodies so it survives
- * the byte clamp — and it is exactly what a user's prompt edit may NOT spend (see pinBytesOf).
+ * the byte clamp wherever a cap is set (Seedance ships uncapped) — and it is exactly what a user's
+ * prompt edit may NOT spend (see pinBytesOf).
  */
 function seedanceFrontMatter(job, spec, settings, opts = {}) {
   const { refGroups = [], audioRefFor = null, startFrameRef = null, endFrameRef = null, feedback = '', nonce = 0 } = opts;
@@ -315,7 +373,8 @@ function seedanceFrontMatter(job, spec, settings, opts = {}) {
  * @param {object} job   spec.kling.jobs[i]
  * @param {object} spec  the full Production Spec
  * @param {{audioOn:boolean, promptMaxBytes:number, defaultShotSeconds:number, style?:string,
- *          avoid?:string, textRule?:string}} settings  from seedancePromptSettings()
+ *          avoid?:string, textRule?:string}} settings  from seedancePromptSettings().
+ *   `promptMaxBytes` 0 or absent = no whole-prompt clamp, which is what ships (promptCapOf).
  * @param {{
  *   refGroups?: {name:string, refs:string[]}[],   // character → its @ImageN labels, prompt order (from the renderer)
  *   audioRefFor?: (speaker:string) => string|null,// speaker → its @AudioN label (uploaded voice ref), or null
@@ -350,8 +409,9 @@ export function composeSeedanceJobPrompt(job, spec, settings, opts = {}) {
   }).join('');
 
   const front = seedanceFrontMatter(job, spec, settings, opts);
-  const maxBytes = Number(settings?.promptMaxBytes) || DEFAULT_PROMPT_MAX_BYTES;
-  const prompt = clampBytes(`${front}\n\n${joined}`, maxBytes);
+  // Uncapped unless a caller SETS promptMaxBytes; a cap that is set still re-cuts the agents' own
+  // text (nobody promised them otherwise), which is the asymmetry applyOverride documents below.
+  const prompt = clampBytes(`${front}\n\n${joined}`, promptCapOf(settings));
   // Same duration derivation as composeKlingStoryboard, so both backends agree with the job planner.
   const totalDuration = shots.reduce((a, s) => a + shotSeconds(s, defaultShotSeconds), 0);
   return { prompt, shotPrompts: blocks, totalDuration, speakers: jobSpeakers(job, spec, audioOn), front };
@@ -364,18 +424,33 @@ export function composeSeedanceJobPrompt(job, spec, settings, opts = {}) {
  *
  * The user owns the WORDS; the system owns the CONTRACT. So an override replaces only the shot
  * bodies — the front matter (style, identity clause, text/speech rules, director note, take
- * directive), the seam pins and the byte clamp are all re-composed on top, from this render's own
- * settings. That is why a stored override never contains a pin sentence: pins name `@Image3` labels
- * that only exist once THIS render has laid out its references, so storing one would freeze a
- * stale (or plain wrong) reference into every future take.
+ * directive), the seam pins and — where a cap is set — the byte clamp are all re-composed on top,
+ * from this render's own settings. That is why a stored override never contains a pin sentence:
+ * pins name `@Image3` labels that only exist once THIS render has laid out its references, so
+ * storing one would freeze a stale (or plain wrong) reference into every future take.
  *
  * Pure, and shape-preserving: hand it what a composer returned and it returns the same shape.
+ *
+ * THE ONE ASYMMETRY WITH THE PLAN PATH, wherever a cap is set at all (Seedance ships uncapped;
+ * Kling's 500 B per segment is fal's own o3 limit): the agents' own text is CLAMPED to it (see
+ * composeSeedanceJobPrompt and klingSegmentPrompt's `trim`) — we wrote it, we may re-cut it. A
+ * user's words are not. `savePromptOverride` could only budget the front matter of the render it
+ * could see; a re-render adds "Alternate take N" and "Director note: …", and a revise pass can grow
+ * the identity or lip-sync clauses, so words that fitted at save time need not fit at submit time.
+ * Clamping them here would delete the tail of a PAID prompt where nobody could see it went, against
+ * an editor that promises an edit is sent word for word. So the overrun is measured into
+ * `overflowBytes` and `assertOverrideFits` refuses on the render path instead. Not one byte of them
+ * is touched on the way out for the same reason — including the edges: an override is trimmed only
+ * to ASK whether it is blank (a blank one is no edit at all and leaves that shot on the plan), never
+ * to normalize what a non-blank one sends, because the sidecar stores and the editor meters exactly
+ * the bytes the user typed.
  *
  * @param {object} composed  a `composeKlingStoryboard` or `composeSeedanceJobPrompt` result
  * @param {{prompt?:string, segments?:string[]}|null} override  the sidecar entry for this job
  * @param {object} settings  the same settings the composer was given (byte budgets live here)
- * @returns {object} the composed result with the user's words in it (the input, untouched, when
- *   there is nothing to apply — an absent, empty or blank override changes nothing)
+ * @returns {object} the composed result with the user's words in it, plus `overflowBytes` — how
+ *   many bytes of them no longer fit (0 when they do). The input, untouched, when there is nothing
+ *   to apply: an absent, empty or blank override changes nothing.
  */
 export function applyOverride(composed, override, settings) {
   if (!composed || !override) return composed;
@@ -389,28 +464,64 @@ export function applyOverride(composed, override, settings) {
     const cap = Number(settings?.segmentMaxBytes);
     const bodies = Array.isArray(override.segments) ? override.segments : [override.prompt];
     let touched = false;
+    let overflowBytes = 0;
     const segments = composed.segments.map((s, i) => {
       const body = bodies[i];
+      // Trimming is only ever the QUESTION ("did they leave this shot blank?"), never something done
+      // to the words: what is measured below and composed on the next line is the body as saved.
       if (typeof body !== 'string' || !body.trim()) return s;
       touched = true;
-      return { ...s, prompt: klingSegmentPrompt(composed.parts[i], body, cap) };
+      overflowBytes += Math.max(0, utf8Bytes(body) - klingBodyBudget(composed.parts[i], cap));
+      return { ...s, prompt: klingSegmentPrompt(composed.parts[i], body, cap, { trim: false }) };
     });
-    return touched ? { ...composed, segments, promptSource: 'override' } : composed;
+    return touched ? { ...composed, segments, promptSource: 'override', overflowBytes } : composed;
   }
 
   // Seedance: ONE document per job. `segments` is accepted (a per-shot editor may hand them over)
   // and joined plainly — the connector words belong to the agents' blocks, not to a user's prose.
-  const body = (typeof override.prompt === 'string' ? override.prompt : override.segments.join('\n')).trim();
-  if (!body) return composed;
-  const maxBytes = Number(settings?.promptMaxBytes) || DEFAULT_PROMPT_MAX_BYTES;
+  // Trimmed ONLY to ask whether the override is all blank — what ships is the body as saved. The
+  // sidecar stores it byte for byte and the editor's meter prices it byte for byte, so an edit that
+  // deliberately opens or closes on a blank line has to arrive carrying those bytes.
+  const body = typeof override.prompt === 'string' ? override.prompt : override.segments.join('\n');
+  if (!body.trim()) return composed;
+  const cap = promptCapOf(settings);
+  const prompt = `${composed.front}\n\n${body}`;
   return {
     ...composed,
-    prompt: clampBytes(`${composed.front}\n\n${body}`, maxBytes),
+    prompt,
     // `shotPrompts` is the record of the authored bodies that were SENT. With an override there is
     // one body (or the user's own per-shot split), and claiming the plan's blocks would be a lie.
-    shotPrompts: Array.isArray(override.segments) ? override.segments.map((s) => String(s).trim()) : [body],
+    shotPrompts: Array.isArray(override.segments) ? override.segments.map((s) => String(s)) : [body],
     promptSource: 'override',
+    // No cap ⇒ nothing to overflow, and assertOverrideFits therefore never fires.
+    overflowBytes: cap ? Math.max(0, utf8Bytes(prompt) - cap) : 0,
   };
+}
+
+/**
+ * Refuse a saved prompt edit this render can no longer fit — the enforcement half of the
+ * measurement above, and the reason `applyOverride` may leave an over-cap prompt in its result.
+ *
+ * Called by the render-facing shims (kling.js / seedance.js), which is where the money is: the
+ * preview keeps composing so the editor stays usable and its byte meter can SHOW the overrun, and
+ * nothing reaches a provider without passing through here first. Worded like the editor's own
+ * over-budget 400, because it is the same promise being kept a second time.
+ *
+ * @param {object} built  an `applyOverride` result
+ * @param {string} jobId  the job whose edit this is — the fix is per job, so the message names it
+ * @returns {object} `built`, so a shim can `return assertOverrideFits(…)`
+ */
+export function assertOverrideFits(built, jobId) {
+  const over = Number(built?.overflowBytes) || 0;
+  if (over <= 0) return built;
+  throw new Error(
+    `job ${jobId}: the saved prompt edit no longer fits — it is ${over} byte(s) over the room this render leaves for your words. `
+    + 'Either the BUDGET moved under it — this backend\'s prompt-length knob was set or lowered since (Seedance ships uncapped, so setting '
+    + 'SEEDANCE_PROMPT_MAX_BYTES does exactly that to every edit written before it) — or something the SYSTEM owns has grown: a re-render adds an '
+    + '"Alternate take"/"Director note" line the editor could not budget for, and a revise can lengthen the identity or voice clauses. '
+    + 'Nothing was sent — shorten the edit in the prompt editor, or discard it. '
+    + 'Trimming it here would drop the end of words you are paying to send, without showing you what went.',
+  );
 }
 
 // ── The byte meter's denominator ────────────────────────────────────────────────────────────────
@@ -442,10 +553,11 @@ export function pinBytesOf(backend, job, spec, settings, opts = {}) {
 // ── The staleness oracle behind the "this prompt was edited before X changed" banner ────────────
 
 /**
- * A stable hash of exactly the AUTHORED inputs one job's prompt is composed from. A saved prompt
- * override records the fingerprint it was written against; when a revise pass moves any of these,
- * the UI marks the override stale. Cosmetic churn (title, logline, QC report) must NOT: those never
- * reach the prompt, and staling an edit for them would train users to ignore the banner.
+ * A stable hash of exactly the AUTHORED inputs one job's prompt is composed from — its shots, its
+ * dialogue, its transitions and its cast. A saved prompt override records the fingerprint it was
+ * written against; when a revise pass moves any of these, the UI marks the override stale. Cosmetic
+ * churn (title, logline, QC report) must NOT: those never reach the prompt, and staling an edit for
+ * them would train users to ignore the banner.
  * @param {object} spec
  * @param {string} jobId
  * @returns {string} a short hex digest
@@ -468,7 +580,17 @@ export function promptFingerprint(spec, jobId) {
   const transitions = (spec?.assembly?.transitions ?? [])
     .filter((t) => ids.includes(t?.after_shot))
     .map((t) => [t.after_shot, t.type ?? null]);
-  const payload = JSON.stringify({ jobId, shots, lines, transitions, audio: spec?.kling?.generate_audio ?? null });
+  // The job's CAST, resolved the way characterGroups resolves it — an absent/empty `job.elements`
+  // inherits the WHOLE roster, so a Casting revise moves this job's prompt without touching a shot.
+  // The groups it builds are what the Seedance identity clause names and what Kling's `@ElementN`
+  // speaker tokens count from, so a re-cast roster changes the composed prompt with the shots
+  // untouched, and an override written before it is genuinely stale. Only the fields that reach the
+  // TEXT are hashed: swapping an element's image file changes which picture is uploaded, not a byte
+  // of the prompt, and staling an edit for that would train users to ignore the banner.
+  const roster = spec?.kling?.elements ?? [];
+  const cast = (job?.elements?.length ? job.elements : roster.map((e) => e?.id))
+    .map((id) => [id ?? null, roster.find((e) => e?.id === id)?.character ?? null]);
+  const payload = JSON.stringify({ jobId, shots, lines, transitions, cast, audio: spec?.kling?.generate_audio ?? null });
   return createHash('sha256').update(payload, 'utf8').digest('hex').slice(0, 16);
 }
 
@@ -476,6 +598,7 @@ export default {
   composeKlingStoryboard,
   composeSeedanceJobPrompt,
   applyOverride,
+  assertOverrideFits,
   chooseSeamMode,
   planSeamRefs,
   seamPinSentence,
@@ -486,6 +609,7 @@ export default {
   pinBytesOf,
   promptFingerprint,
   clampBytes,
+  promptCapOf,
   trimToBytes,
   utf8Bytes,
   lineForShot,

@@ -107,6 +107,24 @@ test('the sidecar records the provider receipt: backend id, request_id and the c
   } finally { cleanup(); }
 });
 
+// The receipt above arrives when the job COMPLETES, and rewriting the sidecar then moves its mtime
+// with it: on a twenty-minute render the file says the prompt was sent the moment it finished. The
+// submission time has to be its own recorded fact.
+test('the sidecar dates a take by its SUBMISSION, never by the moment the poll finished', async () => {
+  const { dir, cleanup } = mkTmp('sg-sent-at');
+  try {
+    sg.opts.processingHits = 1; // one PROCESSING poll, so acceptance and completion are seconds apart
+    await renderSpec(loadGoldenSpec(), { runDir: dir, probe: true });
+    const file = path.join(dir, 'K1', 'prompts.json');
+    const sidecar = JSON.parse(fs.readFileSync(file, 'utf8'));
+
+    assert.ok(sidecar.submitted_at, 'the acceptance is recorded — that is what "sent" means');
+    assert.equal(sidecar.schema, 3, 'and the schema says the sidecar is able to record it');
+    const gap = fs.statSync(file).mtimeMs - Date.parse(sidecar.submitted_at);
+    assert.ok(gap > 1000, `the mtime is the COMPLETION time (${Math.round(gap)}ms later) — it can never be "when this was sent"`);
+  } finally { sg.opts.processingHits = 0; cleanup(); }
+});
+
 test('seam frame — NATIVE first_frame_url with no cast refs, DEMOTED to a trailing ref with them', { skip: FF ? false : 'ffmpeg not installed' }, async () => {
   // (a) castless: the native anchor is free, so use it — it is a stronger conditioning signal.
   const bare = mkTmp('sg-seam-native');

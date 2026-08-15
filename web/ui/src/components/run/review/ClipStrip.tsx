@@ -71,13 +71,26 @@ function Connector({ kind, size }: { kind: ConnectorKind; size: TileSize }) {
   );
 }
 
-export function ClipStrip({ run, jobs, takeCountFor, promptStateFor, onSeek }: {
+export function ClipStrip({ run, jobs, takeCountFor, promptStateFor, isLatestCut, onSeek }: {
   run: RunDetail;
   jobs: JobView[];
   takeCountFor: (jobId: string) => number;
   /** Whether this segment's prompt carries an edit, and whether the plan has since moved under it
    *  (spec D8). Absent — a strip rendered without the prompt read — simply wears no pen. */
   promptStateFor?: (jobId: string) => { edited: boolean; stale: boolean };
+  /** Whether the cut switcher is showing the LATEST cut. Two things hang on it, and both come from
+   *  the same fact — everything this strip draws is the latest cut's. The clips are
+   *  `latestRender.jobs` and the verdicts are `run.continuity`, which the server aligns 1:1 with
+   *  that render and computes from the manifest's CURRENT clips; no older cut's composition is kept
+   *  anywhere to draw instead.
+   *  1. The paid re-render is withheld: `rerender-job` resolves both neighbours and the composition
+   *     it writes from those same current clips, so on an older cut it would rebuild a cut that is
+   *     not the master playing above.
+   *  2. The badges say whose joins they are, rather than letting the older master on the stage wear
+   *     another cut's verdicts (a joint re-rendered since could read the exact opposite).
+   *  Required, not defaulted: a caller that forgets it would sell a paid re-render of the wrong cut
+   *  and caption the wrong video. */
+  isLatestCut: boolean;
   onSeek: (index: number) => void;
 }) {
   // The shared explanation line mirrors whichever tile is hovered or focused (spec D9) — one line
@@ -100,11 +113,13 @@ export function ClipStrip({ run, jobs, takeCountFor, promptStateFor, onSeek }: {
   const entryFor = (job: JobView, i: number): ContinuityEntry | null =>
     (byJobId.size ? byJobId.get(job.jobId) ?? null : entries[i] ?? null);
 
-  // Mirrors JobCards: the first clip that is neither on disk nor failed is the one actually
-  // rendering — the ones behind it are queued, and a sweep on a queued clip would be a lie.
+  // Mirrors JobCards, verdict for verdict: DONE means the clip is really on disk, the first clip
+  // that is neither there nor failed is the one actually on the wire, and everything behind it is
+  // QUEUED. A cascade replaces several segments in one take, so "queued" is a state the strip really
+  // meets — and a queued tile that read as done wore the join of the very clip it is replacing.
   const activeIdx = run.status === 'rendering' ? jobs.findIndex((j) => !j.clipExists && !j.error) : -1;
   const states: SegmentClipState[] = jobs.map((job, i) =>
-    (job.error ? 'failed' : i === activeIdx ? 'rendering' : 'done'));
+    (job.error ? 'failed' : job.clipExists ? 'done' : i === activeIdx ? 'rendering' : 'queued'));
   const kinds = jobs.map((job, i) => (i === 0 ? null : jointKindOf(entryFor(job, i))));
 
   /** The sentence for one tile: how it joins backwards, and how the next clip joins to it. */
@@ -131,13 +146,33 @@ export function ClipStrip({ run, jobs, takeCountFor, promptStateFor, onSeek }: {
   };
 
   const selectedJob = selected == null ? null : jobs[selected] ?? null;
+  // Why the paid action is withheld, in the words the button wears — null when it is offered.
+  // The older-cut reason is a fact about the SERVER's contract, not a UI convenience: the endpoint
+  // takes a job id and nothing else, and resolves the neighbouring frames and the composition it
+  // writes from the manifest's current clips. Confirming it here would spend on rebuilding the
+  // latest cut while the reviewer watches an older master.
+  const rerenderBlock = run.status === 'rendering'
+    ? 'One render at a time — wait for the current one to finish.'
+    : !isLatestCut
+      ? 'You’re watching an older cut. A re-render always rebuilds the latest one, so switch back to it first.'
+      : null;
+
+  // Which cut these tiles are really about. Named, not hidden: blanking the badges under an older
+  // master would trade one wrong impression for another, and the joins of the latest cut are still
+  // worth reading — as long as the strip says that is what they are.
+  const latestCutId = run.manifest?.cuts?.at(-1)?.id ?? null;
 
   return (
     <div
       className="mt-5"
-      aria-label="Clips in this cut"
+      aria-label={isLatestCut ? 'Clips in this cut' : 'Clips in the latest cut'}
       onKeyDown={(e) => { if (e.key === 'Escape') setSelected(null); }}
     >
+      {!isLatestCut && (
+        <p className="mb-2 text-center text-caption text-ink-muted" data-testid="clip-strip-cut-scope">
+          These clips and joins describe the latest cut{latestCutId ? ` (${latestCutId})` : ''} — not the older master playing above.
+        </p>
+      )}
       <div className="well flex justify-center overflow-x-auto" data-testid="clip-strip">
         <div className="flex min-w-min items-start">
           {jobs.map((job, i) => (
@@ -180,11 +215,16 @@ export function ClipStrip({ run, jobs, takeCountFor, promptStateFor, onSeek }: {
           <span className="font-mono text-caption text-ink-secondary">{selectedJob.jobId}</span>
           <PromptButton target={selectedJob.jobId} ariaLabel={`Prompt for ${selectedJob.jobId}`} />
           {/* Opens the paid dialog; the price and the one-time confirm live on ITS PaidButton, so
-              nothing here spends and the strip stays free of money buttons it cannot price. */}
+              nothing here spends and the strip stays free of money buttons it cannot price.
+              Two states withhold it, and each says why on the button itself rather than going
+              quietly grey (U1): one render at a time, and — because a re-render can only ever build
+              on the latest cut — not while an older one is on the stage. */}
           <Button
             variant="ghost"
             size="sm"
             icon={<Film size={13} aria-hidden />}
+            disabled={Boolean(rerenderBlock)}
+            title={rerenderBlock ?? undefined}
             onClick={() => setRerendering(selectedJob.jobId)}
           >
             Re-render {selectedJob.jobId}

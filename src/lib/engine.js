@@ -12,9 +12,13 @@ import log from './logger.js';
 import { ensureDir, writeJson, slug } from './util.js';
 import { complete, extractJson } from './llm.js';
 import { validateSpec } from './spec-schema.js';
-import { RENDER_MODELS, capsFor, castLimitFor, normalizeBackend } from './render-models.js';
-import { buildInventory, inventoryText } from './elements.js';
-import { voicesInventoryText } from './voices.js';
+import { RENDER_MODELS, capsFor, castLimitFor, normalizeBackend, demotesOpeningFrame } from './render-models.js';
+import { knobsFor, seedanceResolution, seedancePromptSettings } from './prompt-settings.js';
+import { voiceRefDemand } from './seedance-args.js';
+import { buildInventory, inventoryText, characterRefs, knownCastSlugs } from './elements.js';
+import { refBelongsTo } from './cast-refs.js';
+import { getVoiceRefClip, voicesInventoryText } from './voices.js';
+import { jobSpeakers } from './cast-groups.js';
 import { SEEDANCE_TTV_GUIDANCE } from './seedance.js';
 
 const DIR = resolvePath('engine');
@@ -61,6 +65,26 @@ function familyOf(value) {
   try { return capsFor(value).family; } catch { return null; }
 }
 
+/**
+ * The effective render resolution for a backend's model — resolved by the SAME rule the render
+ * child applies (seedanceResolution), minus the spec: no spec exists yet when the planner is being
+ * briefed. A per-run pick outranks the knobs here exactly as it does at render time; it also
+ * arrives ON that knob (run-service injects `caps.resolutionEnv` alongside RENDER_RESOLUTION_PICK),
+ * so the planner's context and the render can never disagree on it.
+ */
+function configuredResolution(caps) {
+  if (caps.family === 'seedance') {
+    return seedanceResolution({
+      pick: config.render.resolutionPick,
+      own: knobsFor(caps, config)?.resolution,
+      shared: config.seedance.resolution,
+    });
+  }
+  // An empty ladder means the model has NO selectable resolution (Kling's endpoint renders its own
+  // fixed output) — a legacy KLING_RESOLUTION in .env is tolerated as the no-op it always was.
+  return caps.resolutions?.length ? config.kling.resolution : null;
+}
+
 /** A Seedance render with NO cast AND NO reference image available is guaranteed text-to-video (the
  *  Casting agent has nothing to attach) — the only case where injecting the text-to-video prompt style
  *  + identity override is safe. A no-cast render whose folder holds a relevant image becomes
@@ -77,23 +101,29 @@ export function contextBlock(ctx) {
   // only hold a backend name) gets them derived from the backend it names, so the Job Planner is
   // never told Kling's numbers for a Seedance plan.
   const caps = ctx.caps ?? capsFor(ctx.backend);
+  // The RENDERING MODEL's own knob (per-run picks ride it too) — quoting config.kling.resolution
+  // for a Seedance plan advertised a resolution that render was never going to use.
+  const resolution = ctx.resolution ?? configuredResolution(caps);
   return [
     '## Project context',
     `- Brief: ${ctx.brief}`,
-    `- Defaults: model=${k.model}, aspect_ratio=${ctx.aspectRatio ?? k.aspectRatio}, resolution=${k.resolution}, ` +
+    `- Defaults: model=${k.model}, aspect_ratio=${ctx.aspectRatio ?? k.aspectRatio}, resolution=${resolution ?? 'endpoint-native (not selectable)'}, ` +
       `multi_shot=${k.multiShot}, native_audio=${k.nativeAudio}, target_duration≈${ctx.durationTargetS}s`,
     `- Render backend: ${caps.id}`,
     // Every number here is the RENDERING MODEL's own (registry caps), with the shared fallbacks for
     // the caps a model leaves undeclared — the same pair spec-schema's validateJobs applies, so the
     // planner is never told a window the validator will then reject.
-    `- Hard caps: ≤${caps.maxSegments ?? 6} shots/job, ≤${caps.maxSeconds}s/job, ≤${caps.maxSegmentChars ?? 512} chars/segment, ≤${caps.maxImages} reference images/job`,
+    // The reference budget names every cap the CASTING arithmetic needs: the per-job image cap, a
+    // declared combined budget (fal 2.5 counts images+audio+video together), and the per-character
+    // ceiling on models whose elements slice extra views off at render (Kling's frontal + N refs).
+    `- Hard caps: ≤${caps.maxSegments ?? 6} shots/job, ≤${caps.maxSeconds}s/job, ≤${caps.maxSegmentChars ?? 512} chars/segment, ≤${caps.maxImages} reference images/job` +
+      (caps.maxCombinedRefs != null ? `, ≤${caps.maxCombinedRefs} references/job combined across images+audio+video` : '') +
+      (caps.maxRefsPerElement != null ? `, ≤${1 + caps.maxRefsPerElement} images per character (1 frontal + ${caps.maxRefsPerElement} references)` : ''),
     ...(caps.family === 'seedance'
       ? [`- Seedance packing rule: every job must total ${caps.minSeconds}–${caps.maxSeconds}s (a job under ${caps.minSeconds}s fails validation — merge short shots); the caps above are this model's own.`,
-         // The budget must mirror what validateJobs will enforce, which depends on seam chaining:
-         // with chaining off, only an authored first_frame consumes a slot.
-         config.kling.chainFrames
-           ? `- Reference budget: 1 of the ${caps.maxImages} image slots is reserved for the opening/seam frame on every job after the first (and on any job with an authored first_frame) — give those jobs at most ${caps.maxImages - 1} element refs.`
-           : `- Reference budget: a job with an authored first_frame gives 1 of its ${caps.maxImages} image slots to it — plan at most ${caps.maxImages - 1} element refs there (seam chaining is off; other jobs keep all ${caps.maxImages}).`]
+         // Mirrors the render-time policy (seam-rule.js SEAM_PRIORITY): pins yield to cast refs,
+         // so the planner may fill every slot with element refs — never under-fill to protect a seam.
+         `- Reference budget: element refs may use all ${caps.maxImages} image slots. The opening/seam frame${config.kling.chainFrames ? ' (chained jobs and any authored first_frame)' : ' (an authored first_frame)'} rides a slot only when one is FREE — when the budget is full the seam pin is dropped, not a cast reference, and that joint becomes a plain cut.`]
       : []),
     // Guaranteed text-to-video (Seedance, no cast, AND no reference image the Casting agent could
     // attach): steer the shot prose with the Seedance 2.0 guidelines from the start. Absent for
@@ -105,11 +135,13 @@ export function contextBlock(ctx) {
          SEEDANCE_TTV_GUIDANCE,
          '- IDENTITY: overriding the scene-director\'s usual "never describe the subject\'s appearance" rule — since no reference image pins identity here, DO describe each subject\'s look concretely (build, clothing, colours, distinctive features) and keep it consistent across every shot.']
       : []),
-    // aspect_ratio is the MODEL's list (identical to the historic three for both shipping models),
-    // so a model with wider ratios never has them talked out of the plan by a hardcoded enum.
+    // aspect_ratio and resolution are the MODEL's own lists — a hardcoded enum here once offered
+    // the planner "4k, 1080p, 720p" for Seedance 2.5, whose whole ladder is 480p/720p.
     '- Valid enums: shot_size ∈ {extreme_close_up, close_up, medium_close_up, medium, medium_wide, wide, extreme_wide}; ' +
       `aspect_ratio ∈ {${caps.aspects.join(', ')}}; kling.model_name ∈ {kling-v3-omni, kling-video-o1}; ` +
-      'kling.resolution ∈ {4k, 1080p, 720p}',
+      (caps.resolutions.length
+        ? `kling.resolution ∈ {${caps.resolutions.join(', ')}}`
+        : 'kling.resolution — OMIT this field (the endpoint renders its own fixed output; no tier is selectable)'),
     '',
     '## Available elements (the Casting agent must pick `image` paths from THIS list)',
     ctx.inventoryText,
@@ -294,20 +326,34 @@ export async function buildCtx({ brief, backend, aspectRatio, durationTargetS, c
     const over = cast.length - castLimit;
     throw new Error(`${caps.label} supports at most ${castLimit} starred character${castLimit === 1 ? '' : 's'} — you selected ${cast.length} (${cast.join(', ')}). Drop ${over === 1 ? 'one' : over}, or switch to a model with a higher cast limit.`);
   }
+  // Judge the EFFECTIVE resolution the same way as the ratio above: it comes off the model's own
+  // knob (a per-run pick rides that same env variable), and a tier the model does not render —
+  // SEEDANCE25_RESOLUTION=1080p, say — must cost nothing instead of a full planning pass.
+  const resolution = configuredResolution(caps);
+  if (caps.resolutions.length && !caps.resolutions.includes(resolution)) {
+    throw new Error(`Unknown resolution "${resolution}" (the ${caps.resolutionEnv} config default) — ${caps.label} renders: ${caps.resolutions.join(', ')}.`);
+  }
   const inv = buildInventory();
   // The environment carries NO reference image, so it is loaded AFTER (and independently of) the
   // text-to-video decision — enriching a t2v prompt must never flip the render mode. `environment`
   // is deliberately NOT a param of isTextToVideoPlan below.
   const environmentText = await loadEnvironment(environment);
+  // Every character on disk, scanned ONCE: who owns which reference image is decided against the
+  // whole roster (cast-refs.js), and the listing the Casting agent reads, the post-plan top-up and
+  // the cast page all have to decide it the same way.
+  const rosterSlugs = knownCastSlugs();
   return {
     brief,
     backend: be, // the CANONICAL `<model>@<provider>` id — what gets stamped onto the spec
     caps, // the rendering model's own caps: contextBlock's hard-caps lines read them
     aspectRatio, // undefined = config default (contextBlock falls back to config.kling.aspectRatio)
+    resolution, // the effective (validated) resolution — contextBlock advertises it, stampResolution pins it
     durationTargetS: durationTargetS ?? config.kling.defaultShotSeconds * 3,
     // Guaranteed text-to-video? (no cast AND no reference image to attach — see isTextToVideoPlan)
     textToVideo: isTextToVideoPlan({ backend: be, cast, refCount: inv.filter((e) => e.type === 'reference').length }),
-    inventoryText: inventoryText(inv),
+    inventoryText: inventoryText(inv, { castNames: cast?.length ? [...cast] : [], knownSlugs: rosterSlugs }),
+    inventory: inv, // the scanned entries themselves — topUpStarredElements re-reads them post-plan
+    knownCastSlugs: rosterSlugs, // the roster reference ownership is resolved against (cast-refs.js)
     voicesText: voicesInventoryText(),
     profilesText: await loadProfiles(cast),
     castNames: cast?.length ? [...cast] : null,
@@ -322,6 +368,277 @@ function stampAspect(spec, aspectRatio) {
   if (!aspectRatio) return;
   if (spec.project && typeof spec.project === 'object') spec.project.aspect_ratio = aspectRatio;
   if (spec.kling && typeof spec.kling === 'object') spec.kling.aspect_ratio = aspectRatio;
+}
+
+/**
+ * Stamp the effective resolution onto a KLING-family spec. The Kling renderer reads
+ * spec.kling.resolution FIRST (klingPromptSettings) and the planner only ever copies the config
+ * default into it — stamping makes the knob (and any per-run pick riding it as an env override)
+ * govern the render instead of depending on the LLM copying the context line faithfully. The
+ * Seedance family is deliberately untouched: its renderers ignore kling.resolution and read their
+ * own knob at render time, so the value stays live rather than frozen at plan time. Nor does a
+ * Seedance run need a stamp to make a pick govern — seedanceResolution already ranks the pick above
+ * every spec pin, and a stamp would only freeze one plan's tier into the spec.
+ */
+function stampResolution(spec, ctx) {
+  if (ctx.caps?.family !== 'kling' || !ctx.resolution) return;
+  if (spec.kling && typeof spec.kling === 'object') spec.kling.resolution = ctx.resolution;
+}
+
+/**
+ * Post-plan normalization — the STARRED-cast contract, enforced in code. A starred character exists
+ * precisely to pin identity, and the per-model cast caps were sized around each cast bringing its
+ * FULL reference set (seedance-2.5's 4-cast cap = 4 casts × 7 refs + seam slots = 30). 4-casting.md
+ * states the same rule to the LLM, but a paid render must not hang on prompt adherence: after the
+ * plan lands, any starred character carrying fewer element entries than its available reference
+ * images is topped up mechanically — no re-prompt — within the SAME budget validateJobs and the
+ * renderers enforce: per-model maxImages, tightened by a declared combined-refs cap (fal 2.5's 50)
+ * minus what that job's VOICE references will spend out of it, and capped at Kling's per-element
+ * ceiling (frontal + maxRefsPerElement — extra views are sliced off at render).
+ * The budget splits evenly across the starred cast; un-starred elements are never topped up, and
+ * only ever given back as the LAST resort of the trim below (see trimToBudget).
+ *
+ * The same budget is enforced in the other direction: a Casting agent that attached MORE references
+ * than the model will carry (50 images plus a voice clip is 51 combined on fal Seedance 2.5) writes
+ * a plan the schema accepts — it counts images against maxImages, and the combined cap is only
+ * checked by the renderer, right before a paid upload round — so an over-budget starred set is
+ * trimmed here rather than left to fail at submit.
+ *
+ * Those are two DIFFERENT jobs sharing one budget, and only the second is the cast's: trimming to
+ * what the model will accept runs unconditionally, allocating the cast's share of it does not.
+ */
+export function topUpStarredElements(spec, ctx) {
+  // Budget normalization is not gated on stardom. The combined cap belongs to the MODEL: a plan that
+  // starred nobody still carries a roster the Casting agent filled and voice clips spending the same
+  // 50, and the renderer counts images + audio for it exactly as it does for a starred plan. Bailing
+  // out on an empty cast skipped the ONLY layer that subtracts audio demand, so the final gate —
+  // which counts images against maxImages alone — passed a plan seedance-args refuses at submit.
+  // Everything below therefore runs for any plan; the CAST's half (the top-up, and the per-job fill)
+  // is what an empty cast makes a no-op, and says so where it is skipped.
+  const cast = ctx?.castNames ?? [];
+  const k = spec?.kling;
+  if (!k || typeof k !== 'object') return spec;
+  const caps = ctx.caps ?? capsFor(ctx.backend);
+  const inv = ctx.inventory ?? buildInventory();
+  // The voice registry is per-install (and holds proprietary cast), so it is injectable for the
+  // same reason `ctx.inventory` is: this deterministic layer is unit-tested over synthetic casts.
+  const voiceClipFor = ctx.voiceClipFor ?? getVoiceRefClip;
+  const els = Array.isArray(k.elements) ? k.elements : [];
+  const jobs = Array.isArray(k.jobs) ? k.jobs : [];
+  const imageCap = Number(caps.maxImages) || 0;
+  const combinedCap = Number.isFinite(Number(caps.maxCombinedRefs)) ? Number(caps.maxCombinedRefs) : Infinity;
+  // Voice references are NOT sacrificial. A seam pin is (SEAM_PRIORITY drops boundary pins before a
+  // cast reference ever goes, which is why no seam slot is reserved below), but nothing drops a
+  // voice clip: render-seedance's pre-upload combined check THROWS the moment images + audio pass
+  // the model's combined cap — that check exists precisely so a paid upload round never precedes a
+  // doomed submit. A roster topped up to all 50 slots plus one voiced line is therefore an
+  // engine-produced plan that cannot render, so each job's expected audio demand is reserved here.
+  // Counted exactly the way the renderer counts it (jobSpeakers ∩ a registered voice clip, capped
+  // by maxAudioRefs); a job with no voiced speaker reserves nothing.
+  //
+  // …and only where the clips are really going to ride, asked of the ONE gate the renderer and the
+  // prompt preview also ask (voiceRefsRide): with audio off, or SEEDANCE_VOICE_MODE=native, no
+  // @AudioN is attached at all and the written line is voiced by the model, so a reserved slot per
+  // speaker would starve a starred character of up to ten identity images for references nothing
+  // sends. Its conditioning half is settled here rather than asked per job: every job whose IMAGE
+  // budget this layer computes is carrying cast references, which is what makes it
+  // reference-to-video. Seam frames stay out of it for the same reason no seam slot is reserved.
+  const ride = combinedCap === Infinity ? null : {
+    castRefCount: 1,
+    audioOn: seedancePromptSettings(spec, caps, config.seedance).audioOn,
+    voiceMode: config.seedance.voiceMode,
+  };
+  // `ride === null` is a per-kind budget: a voice clip never takes an image slot, so nothing to reserve.
+  const audioDemand = (job) => (ride === null ? 0 : voiceRefDemand({
+    caps, speakers: Array.isArray(job?.shots) ? jobSpeakers(job, spec) : [], hasClip: voiceClipFor, ...ride,
+  }));
+  /** What ONE job may spend on images: the image cap, and whatever its voice clips leave over. */
+  const budgetFor = (job) => Math.max(0, Math.min(imageCap, combinedCap - audioDemand(job)));
+  // A job with an empty/absent `elements` inherits the WHOLE roster at render time, so the roster
+  // has to fit the tightest job that inherits it. When every job names its own subset the roster is
+  // never sent whole and the widest job budget is the honest ceiling for the shared pool.
+  const inheriting = jobs.filter((j) => !Array.isArray(j?.elements) || !j.elements.length);
+  const rosterBudget = inheriting.length ? Math.min(...inheriting.map(budgetFor))
+    : jobs.length ? Math.max(...jobs.map(budgetFor))
+    : Math.max(0, Math.min(imageCap, combinedCap));
+  const perElementCap = caps.maxRefsPerElement != null ? 1 + caps.maxRefsPerElement : Infinity;
+  // Who this install knows about, so a filename is read against the WHOLE roster rather than one
+  // name at a time: slugs prefix one another (ann / ann-marie) and only the longest match owns the
+  // file (cast-refs.js). The plan's own `character` spellings join the profiles on disk — an element
+  // may name a character no profile does. Injectable for the same reason `ctx.inventory` is: this
+  // deterministic layer is unit-tested over synthetic casts.
+  const roster = new Set([
+    ...(ctx.knownCastSlugs ?? knownCastSlugs()),
+    ...cast.map((name) => slug(name)),
+    ...els.map((e) => e?.character).filter(Boolean).map((c) => slug(c)),
+  ]);
+  // An element belongs to a character by its `character` field when set, else by the same filename
+  // convention the cast routes link with (id === slug, or "<slug>-…", resolved against the roster).
+  const ownedBy = (e, cslug) => (e?.character ? slug(e.character) === cslug : refBelongsTo(String(e?.id ?? ''), cslug, roster));
+  const castSlugs = cast.map((name) => slug(name));
+  // Split what the cast has LEFT, not the whole budget: un-starred props already sit in the roster
+  // and are never touched, so counting their slots into the split hands the first character seats
+  // the last one then finds taken — an allocation that depended on cast ORDER rather than on the
+  // budget (budget 9, three props, two stars: 4 and 2 instead of 3 each).
+  const nonCast = els.filter((e) => !castSlugs.some((cslug) => ownedBy(e, cslug))).length;
+  // No cast, no share: the top-up and the per-job fill below are the cast's half of this layer and
+  // have nobody to seat. Spelled out because dividing by an empty cast yields Infinity/NaN, which
+  // would silently travel into every jobShare — a share of zero is the honest answer.
+  const share = cast.length ? Math.min(Math.floor(Math.max(0, rosterBudget - nonCast) / cast.length), perElementCap) : 0;
+  /**
+   * Give back the references the budget cannot carry, before anything is topped up — the top-up's
+   * own `els.length >= budget` guard only stops it from making an over-budget set WORSE. Removed
+   * from the biggest starred set each time, so the trim lands where the crowding is, and never below
+   * one reference per character: WHICH characters ride is Casting's call, and this layer only sizes
+   * their reference sets. Once every starred set is down to that floor the excess is UN-STARRED, and
+   * that is where the list finally gives: a relevance pin is worth less than a plan no renderer will
+   * take. Stopping at the floor instead left the list OVER budget, and the final gate only counts
+   * images against maxImages — so the engine passed a plan seedance-args refuses at submit for its
+   * combined count, the exact class of failure this trim exists to end. The un-starred pin goes from
+   * the tail, the same end the cast trim takes. Below that floor there is nothing left to give, and
+   * nothing needs to be: every registered model budgets more images than its own castLimit.
+   * Run over a JOB's own subset (below), that same floor is what keeps the subset non-empty — `[]`
+   * is the one spelling no job that named a subset may be left with (see rewriteSubset).
+   * @returns {object[]} the elements removed, so a job naming one by id can be repaired
+   */
+  const trimToBudget = (list, budget, slugs, ownedIn = (l, cs) => l.filter((e) => ownedBy(e, cs))) => {
+    const cut = [];
+    for (let over = list.length - budget; over > 0; over--) {
+      const biggest = slugs.map((cs) => ownedIn(list, cs)).reduce((a, b) => (b.length > a.length ? b : a), []);
+      let victim = biggest.length > 1 ? biggest.at(-1) : undefined;
+      if (victim === undefined) {
+        const starred = new Set(slugs.flatMap((cs) => ownedIn(list, cs)));
+        victim = list.findLast((x) => !starred.has(x));
+      }
+      if (victim === undefined) break;
+      const [gone] = list.splice(list.indexOf(victim), 1);
+      cut.push(gone);
+    }
+    return cut;
+  };
+  const trimmed = trimToBudget(els, rosterBudget, castSlugs);
+  if (trimmed.length) {
+    const gone = new Map(trimmed.map((e) => [e.id, e]));
+    const rosterById = new Map(els.map((e) => [e.id, e]));
+    // What a subset rides on when the trim took every id it named: the roster's least-committed
+    // survivor — an un-starred pin ahead of any starred character's reference, because which
+    // characters a shot contains is the Job Planner's call and this layer casts nobody into one.
+    const standIn = () => (els.findLast((e) => !castSlugs.some((cs) => ownedBy(e, cs))) ?? els.at(-1))?.id;
+    /**
+     * The ONE place a trimmed subset is written back — and `[]` is not a value it may store. An
+     * empty `job.elements` is how a plan says "this job names NO subset", and characterGroups()
+     * answers that by expanding it to the WHOLE roster, so an emptied subset would not read as
+     * "nothing left to send"; it would read as "send all 49 survivors", one paid upload each, for a
+     * job the planner wrote for a single prop. The spec has no third spelling of that difference, so
+     * a subset the trim emptied keeps a ONE-reference floor instead — and says so, because a
+     * stand-in is not the reference the planner asked for.
+     */
+    const rewriteSubset = (job, ids) => {
+      job.elements = ids.length ? ids : [standIn()].filter(Boolean);
+      if (ids.length || !job.elements.length) return;
+      log.warn(`[${job.job_id}] every reference this job named was trimmed to fit the budget — it renders with "${job.elements[0]}" standing in (an empty subset would send the whole ${els.length}-reference roster).`);
+    };
+    for (const job of jobs) {
+      if (!Array.isArray(job?.elements) || !job.elements.length) continue;
+      const kept = job.elements.filter((id) => !gone.has(id));
+      // A trim must never UNCAST a character the subset named. The subset renders exactly what it
+      // lists (characterGroups) and the fill below only widens seats that ALREADY ride, so the
+      // character whose one listed reference was the one trimmed drops out of the paid job —
+      // silently, because a surviving co-star keeps `kept` non-empty. Every character the subset
+      // cast is re-seated on a surviving roster reference instead, and the fill then widens that
+      // seat to the job's own share. An emptied subset is the same repair, not a separate one:
+      // leaving it empty would mean "inherit the whole roster", casting every character in the plan
+      // into a job the planner wrote for one (see rewriteSubset).
+      // Every character the subset cast, not only the STARRED ones — the trim reads un-starred
+      // elements off the tail, so the id it takes can be the only reference a subset gave a
+      // character who has more sitting in the roster. Read off the element's own `character` where
+      // the starred list does not know the name.
+      const owners = [...new Set(castSlugs.concat(job.elements.map((id) => gone.get(id)?.character).filter(Boolean).map(slug)))];
+      const uncast = owners.filter((cs) => job.elements.some((id) => ownedBy(gone.get(id), cs))
+        && !kept.some((id) => ownedBy(rosterById.get(id), cs)));
+      rewriteSubset(job, kept.concat(uncast.map((cs) => els.find((e) => ownedBy(e, cs))?.id).filter(Boolean)));
+    }
+  }
+  const added = [];
+  for (const name of cast) {
+    const cslug = slug(name);
+    const owns = (e) => ownedBy(e, cslug);
+    // Only the images the ROSTER awards to THIS character: a file a longer slug owns (keeper-jr-01
+    // while Keeper is the one starred) stays out, even though its name starts with this one's. Where
+    // the convention leaves ownership unclear the top-up errs toward attaching NOTHING — a character
+    // short of references renders less pinned, but a stranger's face is a PAID render of the wrong
+    // person, cited in the prompt under this character's name, with nothing on screen to say so.
+    const avail = characterRefs(inv, name, roster);
+    const mine = els.filter(owns);
+    const target = Math.min(avail.length, share);
+    if (mine.length >= target) continue;
+    const usedIds = new Set(els.map((e) => e.id));
+    const usedImages = new Set(els.map((e) => e.image));
+    // Keep the plan's own spelling when it named the character — characterGroups groups by the
+    // EXACT string, and a second spelling would split one cast member into two element groups.
+    const charName = mine.find((e) => e.character)?.character ?? name;
+    const fresh = avail.filter((r) => !usedIds.has(r.id) && !usedImages.has(r.file)).slice(0, target - mine.length);
+    for (const r of fresh) {
+      if (els.length >= rosterBudget) break;
+      els.push({ id: r.id, role: 'subject', image: r.file, character: charName });
+      added.push(r.id);
+    }
+  }
+  if (added.length && !Array.isArray(k.elements)) k.elements = els;
+
+  // A job naming an explicit `elements` subset renders EXACTLY that subset (characterGroups), so a
+  // starred character riding in one has to ride with the same references the roster carries — and
+  // that holds even when the roster needed nothing added, which is the case the loop above walks
+  // straight past: the Casting agent already placed the full set, only the Job Planner's subset
+  // sampled a single id, and the job still submits one image. Filled per character in equal shares
+  // of the JOB's own budget (its own voice refs, not the roster's worst case), so a tight job cannot
+  // let the first character eat the last one's slots — and only where the character ALREADY rides,
+  // because which characters a shot contains is the Job Planner's call, not this layer's.
+  const byId = new Map(els.map((e) => [e.id, e]));
+  let filled = 0;
+  let cutFromJobs = 0;
+  for (const job of jobs) {
+    if (!Array.isArray(job?.elements) || !job.elements.length) continue; // inherits the whole roster
+    const ownedInJob = (cslug) => job.elements.filter((id) => { const e = byId.get(id); return e && ownedBy(e, cslug); });
+    const riding = castSlugs.filter((cslug) => ownedInJob(cslug).length);
+    const budget = budgetFor(job);
+    // …and a subset can be over its OWN budget for the same reason the roster can — the planner
+    // named more references than this job's voice clips leave room for. Trimmed against the job's
+    // budget, which is the number the renderer will count — and trimmed whatever `riding` says,
+    // for the same reason the roster trim above does not wait for a cast: the cap is the MODEL's.
+    // A subset of nothing but un-starred pins rides beside this job's voice clips exactly like a
+    // starred one, and skipping it here let a mixed plan carry 49 pins plus two clips (51 combined)
+    // in a job the final gate waves through on its image count alone. `riding` governs only WHO the
+    // trim protects and the allocation below, never whether the trim runs.
+    // Never down to `[]` though: an empty subset is how a plan says "inherit the whole roster"
+    // (see rewriteSubset), so the same one-reference floor holds here — a starred subset gets it
+    // from the per-character floor inside trimToBudget, an un-starred one needs it spelled out.
+    cutFromJobs += trimToBudget(job.elements, Math.max(budget, 1), riding, (ids, cs) => ids.filter((id) => ownedBy(byId.get(id), cs))).length;
+    if (!riding.length) continue; // nobody starred to widen — this job's share of the budget is settled
+    const others = job.elements.filter((id) => { const e = byId.get(id); return !e || !riding.some((cslug) => ownedBy(e, cslug)); }).length;
+    const jobShare = Math.min(share, Math.floor(Math.max(0, budget - others) / riding.length));
+    for (const cslug of riding) {
+      const have = new Set(ownedInJob(cslug));
+      for (const e of els) {
+        if (have.size >= jobShare || job.elements.length >= budget) break;
+        if (!ownedBy(e, cslug) || have.has(e.id)) continue;
+        job.elements.push(e.id);
+        have.add(e.id);
+        filled += 1;
+      }
+    }
+  }
+
+  if (added.length) {
+    log.info(`Casting top-up: starred cast pins its full reference set — added ${added.length} element(s) [${added.join(', ')}] (${share}/character across ${cast.length} starred, budget ${rosterBudget}).`);
+  }
+  if (filled) {
+    log.info(`Casting top-up: filled ${filled} reference slot(s) in explicit job subsets, so a job that names its own elements sends the same set as the roster.`);
+  }
+  if (trimmed.length || cutFromJobs) {
+    log.info(`Casting top-up: trimmed ${trimmed.length} roster reference(s)${trimmed.length ? ` [${trimmed.map((e) => e.id).join(', ')}]` : ''} and ${cutFromJobs} job-subset slot(s) — the plan carried more references than this model sends alongside its voice clips (budget ${rosterBudget}).`);
+  }
+  return spec;
 }
 
 /**
@@ -357,7 +674,11 @@ export async function runEngine({ brief, runDir, durationTargetS, backend, aspec
   // 7 QC gate + targeted re-runs.
   spec = await qcLoop(spec, ctx, { runDir, maxFix, maxQc });
 
+  // Deterministic layer of the starred-cast contract — after the QC gate, before the final gate.
+  spec = topUpStarredElements(spec, ctx);
+
   stampAspect(spec, ctx.aspectRatio);
+  stampResolution(spec, ctx);
   spec.render_backend = ctx.backend; // the CANONICAL id this spec was planned FOR — renders must not silently fall back to the config default
   if (ctx.castNames) spec.cast = ctx.castNames; // revisions re-inject the same starred profiles
   if (ctx.environmentSlug) spec.environment = ctx.environmentSlug; // revisions re-inject the same world bible
@@ -529,7 +850,16 @@ export async function reviseSpec({ spec, runDir, feedback, scope, owners, brief,
   }
   cur = await qcLoop(cur, ctx, { runDir, maxFix, maxQc, filePrefix: 'spec-r07-qc', seedNote: note });
 
+  // A revision re-runs Casting on backend/cast switches — the starred-cast contract holds here too.
+  cur = topUpStarredElements(cur, ctx);
+
   stampAspect(cur, ctx.aspectRatio);
+  // Same precedence as the aspect above: a revision keeps the resolution the spec was PLANNED with
+  // (for a web run that is the per-run pick, re-injected into this child's env) — re-stamping the
+  // bare config default would drift a CLI-planned spec whose .env moved since. Only a value the
+  // TARGET model cannot render (a backend switch) falls back to the validated effective one.
+  const plannedRes = cur.kling?.resolution;
+  stampResolution(cur, { ...ctx, resolution: ctx.caps.resolutions.includes(plannedRes) ? plannedRes : ctx.resolution });
   // A revision keeps (or deliberately changes) the planned backend — never loses it — and re-stamps
   // it canonically, so revising a spec written before compound ids existed upgrades it in place.
   cur.render_backend = ctx.backend;
@@ -542,4 +872,4 @@ export async function reviseSpec({ spec, runDir, feedback, scope, owners, brief,
   return { spec: cur, passed, owners: ownerList };
 }
 
-export default { runEngine, reviseSpec, ownersForScope, parseRouterTags, scopeShots };
+export default { runEngine, reviseSpec, ownersForScope, parseRouterTags, scopeShots, topUpStarredElements };

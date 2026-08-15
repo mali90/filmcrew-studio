@@ -23,7 +23,8 @@ them back together in order (with a faded audio seam and last-frame continuity) 
 - at most **9 reference images** (one slot is reserved for the seam frame on chained jobs)
 - at most **3 voice-ref clips**, combined ≤ 15s (they're auto-trimmed to fit)
 - at most **2 starred cast members**
-- no per-shot character squeeze — the whole job is one rich prompt (byte-clamped at ~5000)
+- no per-shot character squeeze — the whole job is one rich prompt, sent uncapped (no provider
+  documents a prompt-length limit; `SEEDANCE_PROMPT_MAX_BYTES` clamps it only if you set one)
 
 ## Seedance 2.5's hard limits (per single generation — a "job")
 
@@ -112,7 +113,18 @@ differ by under 3%.
 
 - **Segmind's Topaz upscale** — **$0.125 per second, flat**, billed on the **input** video's duration.
   Segmind publishes this one rate and no per-target breakdown, so `UPSCALE_TARGET_RESOLUTION` changes
-  what you get, not what you pay. (fal's Topaz is ≈ $0.12/s — the one place the two are near-level.)
+  what you get, not what you pay. (fal's Topaz is tiered instead — see below — and lands at $0.08/s
+  for this app's default 9:16 shape, so it is the cheaper of the two there.)
+
+- **fal's Topaz upscale** — **tiered by the OUTPUT frame**: $0.01/s up to 720p, $0.02/s for
+  720p–1080p, **$0.08/s above 1080p**. The default 9:16 shape lands in that top tier: lifting a 480p
+  vertical clip to a 1080 short side delivers a **1080×1920** frame, and fal bills the 1920 (a real
+  invoice for a 15s clip came to ≈ $1.28). A **landscape** clip lifted the same way is 1920×1080 and
+  bills at $0.02/s — the same upscale, a quarter of the money, because the frame is not as tall.
+  Where the estimate cannot measure the source it quotes the top tier deliberately: a cautious quote
+  costs less trust than a surprise bill. The tier boundary for portrait output is **inferred from
+  that invoice, not documented by fal** — `web/server/lib/prices.json` records the reasoning so a
+  future invoice can correct it.
 
 Comparing like for like, Segmind is about half fal's price for the same model (fal 2.0: $0.135/$0.3024;
 fal 2.5: $0.2205/$0.4730). That gap is real, not a typo — it is worth re-checking on the model's own
@@ -133,7 +145,27 @@ reports its actual cost and your remaining credit balance, which are logged and 
   `SEEDANCE_RESOLUTION` above 480p, drop it back for a genuinely cheap single-job test render.
 - If a probe gave you a take you like, finish it for **free** with
   `npm run assemble -- --from runs/<run-id>` (no re-render). A probe clip is low-res, so add `--upscale`
-  for higher quality, or do a full `npm run render` to regenerate at full resolution.
+  for higher quality, or do a full `npm run render` to regenerate at full resolution. One caveat, and
+  it is the expensive one: `UPSCALE_ENABLED=true` in your `.env` means "as if `--upscale` had been
+  typed", and that covers everything you finish from a terminal — the stitch as much as the render —
+  so that free finish is no longer free. Topaz runs on every clip in the take that is still under
+  1080p, and a probe's clips usually are. How far under depends on the backend, and the two answer
+  differently:
+  - **Seedance** probes ride the cheap 480p tier (`SEEDANCE_PROBE_RESOLUTION` /
+    `SEEDANCE25_PROBE_RESOLUTION`, both `480p` by default), so every clip is a paid Topaz job.
+  - **Kling** — the default backend — has no resolution knob that reaches the endpoint: fal's Kling o3
+    endpoint takes no resolution parameter, so whatever `KLING_RESOLUTION` says is never sent, and a
+    probe comes out at whatever the endpoint renders natively (~720p on the default `o3/standard`,
+    1080p on `o3/pro`). Those knobs above do nothing here, so on a standard Kling probe every clip is
+    a paid Topaz job too, and only `o3/pro` escapes it.
+
+  Either way the test is the clip against the target, not the knob: anything that already clears the
+  target is skipped without an upload or a charge. The target is 1080p unless you set
+  `UPSCALE_TARGET_RESOLUTION`, which only Segmind's Topaz reads — at `4k` a 1080p clip no longer
+  clears it, so it is uploaded and billed. (The web app is unaffected: it pins the flag off for every
+  child that could act on it — every job it queues, plus the one it spawns directly — bar two that
+  cannot spend on an upscale at all, the doctor button and `mint-voice`; it upscales at approve,
+  where it is priced first.)
 - **The cheap Seedance path**: set `SEEDANCE_RESOLUTION=480p` (or `SEEDANCE25_RESOLUTION=480p` for
   2.5, which otherwise renders 720p) and render with `--upscale` — Topaz lifts each sub-1080p clip to
   ~1080p before the stitch. Compare the combined cost against a native 1080p render for your clip

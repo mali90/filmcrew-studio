@@ -5,29 +5,55 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import clsx from 'clsx';
 import { Mountain } from 'lucide-react';
-import type { Aspect, Backend } from '../../../../shared/api-types';
+import type { Aspect, Backend, Resolution } from '../../../../shared/api-types';
 import {
   ALL_BACKENDS, MODEL_IDS, aspectsFor, backendIdFor, canonicalBackendFor, castLimitFor,
-  modelIdFor, modelLabelFor, modelSegmentLabelFor, providerIdFor, providerLabelFor, providersFor,
+  defaultResolutionFor, modelIdFor, modelLabelFor, modelSegmentLabelFor, providerIdFor,
+  providerLabelFor, providersFor, resolutionsFor,
 } from '../../../../shared/render-models';
+import { perSecondUsdFor } from '../../../../shared/render-rates';
 import { api, ApiClientError } from '../../api/client';
+import { usd } from '../../lib/format';
 import { Button } from '../ui/Button';
 import { SegmentedControl } from '../ui/SegmentedControl';
 
-// One hint per canonical `<model>@<provider>` id — the price is a property of the PAIR, not of the
-// model: the same Seedance renders on two bills, and Segmind's is about half of fal's. Copy only;
-// every number below is a rate the vendor publishes. A pair with no hint quotes nothing rather than
-// borrowing its sibling's figure or pretending the render is free.
-const BACKEND_HINT: Record<string, string> = {
-  'kling-o3@fal': 'Kling renders the richest motion at roughly $0.11 per second (~720p — approving can upscale the final to 1080p).',
-  'seedance-2.0@fal': 'Seedance lip-syncs to your voice clips and renders at 480p for roughly $0.14 per second — approving can upscale the final to 1080p.',
-  'seedance-2.5@fal': 'Seedance 2.5 takes up to four starring characters and renders 720p at roughly $0.47 per second (roughly $0.22 at 480p).',
-  'seedance-2.0@segmind': 'Seedance lip-syncs to your voice clips and renders at 480p for roughly $0.07 per second on Segmind — about half fal’s rate for the same model. Approving can upscale the final to 1080p.',
-  'seedance-2.5@segmind': 'Seedance 2.5 takes up to four starring characters and renders 720p at roughly $0.24 per second on Segmind (roughly $0.11 at 480p) — about half fal’s rate for the same model.',
+// What each MODEL is, in plain words — and NOT a single figure, because none of them is a property
+// of the model alone. The price belongs to the (model, provider) pair AND to the tier: the same
+// Seedance renders on two bills, and Seedance is billed by pixel-seconds, so fal's 4k costs eleven
+// times its 480p. So the money sentence is composed below, from the estimate's own rate table, at
+// the tier this run will be pinned to.
+const MODEL_NOTE: Record<string, string> = {
+  'kling-o3': 'Kling gives the richest motion, at the endpoint’s own ~720p output',
+  'seedance-2.0': 'Seedance lip-syncs to your voice clips',
+  'seedance-2.5': 'Seedance 2.5 takes up to four starring characters',
 };
-const hintFor = (backend: Backend) =>
-  BACKEND_HINT[canonicalBackendFor(backend)]
-  ?? `${modelLabelFor(backend)} — you’ll see its render price on the run page, before anything spends.`;
+
+// The short side each tier renders. Used for the hint's other tier-dependent claim, which is just
+// as wrong at 4k as a stale rate would be: approving offers a Topaz lift toward 1080p, and there is
+// nothing to offer a cut that already reaches it. A tier this build does not recognise claims
+// nothing rather than guessing.
+const SHORT_SIDE: Record<string, number> = { '480p': 480, '720p': 720, '1080p': 1080, '4k': 2160 };
+const upscaleOffered = (backend: Backend, resolution: Resolution | null): boolean =>
+  (resolution
+    ? (SHORT_SIDE[resolution] ?? 1080) < 1080
+    // A ladder-less model renders whatever its endpoint returns; only Kling's is on record (~720p).
+    : modelIdFor(backend) === 'kling-o3');
+
+/**
+ * The hint beside the controls, at the tier the run will actually be pinned to — never the model's
+ * default. The figure is read from the estimator's table (web/shared/render-rates.ts →
+ * web/server/lib/prices.json), so this line and the run page's estimate cannot quote different
+ * money for the same pick, and a vendor price change lands on both at once. A pair the table does
+ * not price says exactly that: the render still costs money, and no figure is invented for it.
+ */
+const hintFor = (backend: Backend, resolution: Resolution | null): string => {
+  const note = MODEL_NOTE[modelIdFor(backend)] ?? `${modelLabelFor(backend)} renders on ${providerLabelFor(backend)}`;
+  const rate = perSecondUsdFor(backend, resolution);
+  const money = rate === null
+    ? `${providerLabelFor(backend)} publishes no per-second rate for this ${resolution ? 'tier' : 'model'}, so the price is not on file yet — the render still costs money, and the run page will say so rather than guess a figure.`
+    : `Renders${resolution ? ` at ${resolution}` : ''} for roughly ${usd(rate)} per second on ${providerLabelFor(backend)}.`;
+  return `${note}. ${money}${upscaleOffered(backend, resolution) ? ' Approving can upscale the final to 1080p.' : ''}`;
+};
 
 // The models on offer, straight from the registry and in its order: a model with no provider entry
 // cannot render, so it is not offered at all. Adding a model or a provider is a registry edit.
@@ -64,6 +90,19 @@ export const trimAspect = (aspect: string, backend: string): Aspect => {
   const offered = aspectsForBackend(backend);
   return offered.includes(aspect as Aspect) ? (aspect as Aspect) : offered[0]!;
 };
+/** The render tiers this backend's model offers, lowest first. */
+export const resolutionsForBackend = (backend: string): Resolution[] => resolutionsFor(backend);
+/** Keeps a tier the model renders; an invalid pick trims to `fallback` (the saved default for that
+ *  model, when the defaults query has answered) or the model's own registry default — never to a
+ *  tier the POST would 400 on. */
+export const trimResolution = (resolution: string | null, backend: string, fallback?: string): Resolution | null => {
+  const offered = resolutionsForBackend(backend);
+  // An empty ladder is a model with NO selectable tier (Kling renders the endpoint's own output) —
+  // null, and the control hides rather than offering a pick the POST would refuse.
+  if (!offered.length) return null;
+  if (offered.includes(resolution as Resolution)) return resolution as Resolution;
+  return offered.includes(fallback as Resolution) ? (fallback as Resolution) : defaultResolutionFor(backend) ?? null;
+};
 
 const initials = (name: string) =>
   name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join('');
@@ -80,6 +119,7 @@ export function CreateHero({ idea, onIdeaChange, ideaRef }: {
   // views of it, and it is what the POST carries, so nothing downstream ever sees a pair.
   const [backend, setBackend] = useState<Backend>(DEFAULT_BACKEND);
   const [aspect, setAspect] = useState<Aspect>('9:16');
+  const [resolution, setResolution] = useState<Resolution | null>(defaultResolutionFor(DEFAULT_BACKEND) ?? null);
   const [durationMode, setDurationMode] = useState<'auto' | 'custom'>('auto');
   const [customS, setCustomS] = useState(12);
   const [trimNote, setTrimNote] = useState<string | null>(null); // what a model switch had to drop
@@ -89,14 +129,19 @@ export function CreateHero({ idea, onIdeaChange, ideaRef }: {
   const castCap = castCapFor(backend);
   const modelLabel = modelLabelFor(backend);
   const offeredAspects = aspectsForBackend(backend);
+  const offeredResolutions = resolutionsForBackend(backend);
   const model = modelIdFor(backend);
   const provider = providerIdFor(backend);
   const providerOptions = providersFor(model);
 
-  // Server-side defaults seed the controls once — never overriding a choice already made. Both values
+  // Server-side defaults seed the controls once — never overriding a choice already made. All values
   // are validated against the registry rather than a hardcoded list, so a default of 'seedance-2.0@fal'
   // or (once a model offers it) '4:3' hydrates, and a ratio that model cannot render is trimmed.
   const defaults = useQuery({ queryKey: ['defaults'], queryFn: api.defaults });
+  // The saved default tier for a backend's MODEL (its own .env knob, per GET /settings/defaults),
+  // trimmed to the ladder; before the query answers it is the model's registry default.
+  const savedResolutionFor = (b: string): Resolution | null =>
+    trimResolution(defaults.data?.resolutions?.[modelIdFor(b)] ?? '', b);
   useEffect(() => {
     const d = defaults.data;
     if (!d || hydrated.current || touched.current) return;
@@ -107,8 +152,10 @@ export function CreateHero({ idea, onIdeaChange, ideaRef }: {
     const nextAspect = aspectsForBackend(nextBackend).includes(d.aspect as Aspect)
       ? (d.aspect as Aspect)
       : trimAspect(aspect, nextBackend);
+    const nextResolution = savedResolutionFor(nextBackend);
     if (nextBackend !== backend) setBackend(nextBackend);
     if (nextAspect !== aspect) setAspect(nextAspect);
+    if (nextResolution !== resolution) setResolution(nextResolution);
   }, [defaults.data]);
 
   // Cast picker — starring is free (no cost tags). Zero profiles renders nothing at all. Every model
@@ -139,6 +186,10 @@ export function CreateHero({ idea, onIdeaChange, ideaRef }: {
     const keptCast = trimCast(castSlugs, next);
     const dropped = castSlugs.slice(keptCast.length);
     const nextAspect = trimAspect(aspect, next);
+    // An off-ladder tier trims to the new MODEL's default (its saved one when known) rather than a
+    // neighbouring tier: 4k on a 2.5 switch means "the model's own default", not "720p because it
+    // is adjacent" — the same predictability rule as the cast trim above.
+    const nextResolution = trimResolution(resolution, next, defaults.data?.resolutions?.[modelIdFor(next)]);
     // Name the PAIR when the model runs in more than one place — "Seedance 2.0 does not render 21:9"
     // would be a lie about the model; it is this provider's endpoint that cannot.
     const label = providersFor(next).length > 1
@@ -150,9 +201,16 @@ export function CreateHero({ idea, onIdeaChange, ideaRef }: {
         ? `${label} stars up to ${cap} character${cap > 1 ? 's' : ''} — unstarred ${dropped.map(nameOf).join(' & ')}.`
         : '',
       nextAspect !== aspect ? `${label} does not render ${aspect} — switched the aspect to ${nextAspect}.` : '',
+      // Three honest shapes: tier→tier (a trim), tier→none (the model has no tiers), none→tier
+      // (seeded silently — nothing was lost, so nothing to announce).
+      nextResolution !== resolution && nextResolution && resolution
+        ? `${label} does not render ${resolution} — switched the resolution to ${nextResolution}.`
+        : '',
+      nextResolution === null && resolution ? `${label} renders at the endpoint's own output — the ${resolution} pick no longer applies.` : '',
     ].filter(Boolean);
     if (dropped.length) setCastSlugs(keptCast);
     if (nextAspect !== aspect) setAspect(nextAspect);
+    if (nextResolution !== resolution) setResolution(nextResolution);
     setTrimNote(notes.join(' ') || null);
   };
   // Keep the provider across a model switch when the new model runs there too; backendIdFor falls
@@ -189,6 +247,10 @@ export function CreateHero({ idea, onIdeaChange, ideaRef }: {
       idea: trimmed,
       backend,
       aspect,
+      // sent whenever the control shows a tier: pinning it on the run keeps the render (and its
+      // price) at what the user SAW even if the .env default moves later. A no-ladder model (Kling)
+      // sends none — there is nothing to pin.
+      ...(resolution ? { resolution } : {}),
       durationS: durationMode === 'custom' && Number.isFinite(customS) ? clampDuration(customS) : null,
       ...(castSlugs.length ? { cast: castSlugs } : {}),
       // derived from the LIVE list, not raw envSlug state — an environment deleted while Home is
@@ -318,7 +380,9 @@ export function CreateHero({ idea, onIdeaChange, ideaRef }: {
               onChange={chooseModel}
               segments={MODEL_SEGMENTS}
             />
-            <span data-testid="backend-hint" className="tnum max-w-[260px] text-caption text-ink-muted">{hintFor(backend)}</span>
+            {/* The tier is passed in, not looked up: this line quotes the money the RUN will be
+                billed, and the Resolution control below is what decides it. */}
+            <span data-testid="backend-hint" className="tnum max-w-[260px] text-caption text-ink-muted">{hintFor(backend, resolution)}</span>
             {trimNote && (
               <span role="status" className="max-w-[260px] text-caption text-status-warn">{trimNote}</span>
             )}
@@ -374,6 +438,18 @@ export function CreateHero({ idea, onIdeaChange, ideaRef }: {
               })}
             </div>
           </div>
+
+          {offeredResolutions.length > 0 && (
+            <div className="flex flex-col gap-1.5">
+              <span className="text-caption font-medium text-ink-muted">Resolution</span>
+              <SegmentedControl
+                label="Resolution"
+                value={resolution ?? offeredResolutions[0]!}
+                onChange={(r) => { touched.current = true; setTrimNote(null); setResolution(r); }}
+                segments={offeredResolutions.map((r) => ({ value: r, label: r }))}
+              />
+            </div>
+          )}
 
           <div className="flex flex-col gap-1.5">
             <span className="text-caption font-medium text-ink-muted">Duration</span>

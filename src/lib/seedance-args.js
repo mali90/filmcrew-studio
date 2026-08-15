@@ -74,6 +74,57 @@ export function fitAudioRef(durationS, caps, { refCount = 1 } = {}) {
   return 'keep';
 }
 
+/**
+ * Do this job's `@AudioN` voice clips ride at all? The reference endpoints take audio only
+ * alongside something the model is conditioned on, so a genuine text-to-video job attaches no clip
+ * and is voiced natively; `voiceMode: 'native'` and audio-off are the two deliberate ways to ask
+ * for the same thing.
+ *
+ * A CLOSING frame counts exactly like an opening one. Both reach the model as an image — a native
+ * first/last-frame anchor where the model has one, otherwise a trailing image reference — so a
+ * cast-less segment pinned only at its END is a reference-to-video job, and dropping its registered
+ * voices there fell back to model-native dialogue for no reason the user could see.
+ *
+ * Lives here, beside the budget checks, because the renderer (src/lib/render-seedance.js) and the
+ * prompt PREVIEW (web/server/lib/prompt-service.js) must answer it identically: the preview's whole
+ * claim is that it shows what the wire will carry, and two copies of this rule is how that claim
+ * quietly stops being true.
+ * @param {{castRefCount?:number, hasSeamIn?:boolean, hasSeamOut?:boolean, audioOn?:boolean, voiceMode?:string}} job
+ */
+export function voiceRefsRide({ castRefCount = 0, hasSeamIn = false, hasSeamOut = false, audioOn = false, voiceMode = 'native' } = {}) {
+  const conditioned = castRefCount > 0 || Boolean(hasSeamIn) || Boolean(hasSeamOut);
+  return conditioned && Boolean(audioOn) && voiceMode !== 'native';
+}
+
+/**
+ * WHICH of a job's speakers ride: the gate above, then the ones with a registered voice clip.
+ * Deliberately NOT sliced to the model's @Audio cap — what an over-cap job does is the caller's
+ * rule, and the callers disagree on purpose (the renderer and the preview refuse such a job; the
+ * budget layers only count what will ride).
+ * @param {{speakers?:string[], hasClip?:(speaker:string)=>unknown}} p  plus voiceRefsRide's own args
+ * @returns {string[]}
+ */
+export function voiceRefSpeakers({ speakers = [], hasClip = () => true, ...ride } = {}) {
+  return voiceRefsRide(ride) ? speakers.filter((sp) => Boolean(hasClip(sp))) : [];
+}
+
+/**
+ * How many references those clips spend out of a COMBINED budget (fal 2.5 counts images + audio +
+ * video against one cap), capped by the model's own @Audio slots — `planSeamRefs`' `otherRefCount`
+ * for a Seedance job.
+ *
+ * Nothing ever drops a voice clip: the pre-upload check THROWS the moment images + audio pass the
+ * combined cap. A soft boundary pin, by contrast, is given up (SEAM_PRIORITY) — so every surface
+ * that promises a pin before the user pays has to subtract this first, or it sells continuity the
+ * renderer deterministically drops. Counted here, once, for the engine's roster budget
+ * (topUpStarredElements), the re-render reply and the dialog that starts it.
+ * @param {{caps?:object}} p  plus voiceRefSpeakers' own args
+ * @returns {number}
+ */
+export function voiceRefDemand({ caps, ...p } = {}) {
+  return Math.min(voiceRefSpeakers(p).length, Number(caps?.maxAudioRefs) || 0);
+}
+
 /** Reject an unlisted enum value loudly, naming the model's legal set (no cap ⇒ no opinion). */
 function oneOf(caps, kind, value, allowed) {
   if (!allowed?.length || allowed.includes(value)) return value;
@@ -83,6 +134,32 @@ function oneOf(caps, kind, value, allowed) {
 /** A hard model limit, surfaced here rather than as a provider-side 422 round trip. */
 function capped(caps, kind, n, max) {
   if (max != null && n > max) throw new Error(`${nameOf(caps)} accepts at most ${max} ${kind} — ${n} supplied.`);
+}
+
+/**
+ * The two reference limits a job has to clear BEFORE anything is uploaded — the renderer runs them
+ * ahead of its first paid round trip (an upload round that precedes a doomed submit is money spent
+ * for nothing), and the prompt PREVIEW runs the same two so it can never advertise a prompt the
+ * renderer will refuse to send. Both throw, because refusing is what the renderer really does:
+ * quietly slicing the list to fit would show a job as ready when it is deterministically invalid.
+ *
+ * Split in two because the renderer learns the numbers at two different moments: the voiced-speaker
+ * count before it fits any clip, the combined total once the surviving clips are known.
+ */
+
+/** More voiced speakers than the model has @Audio slots. Named per JOB — the fix is editorial
+ *  (split the dialogue), so the message has to say which job to split. */
+export function cappedAudioRefs(caps, jobId, n) {
+  if (caps?.maxAudioRefs != null && n > caps.maxAudioRefs) {
+    throw new Error(`job ${jobId}: ${n} voiced speakers exceeds ${nameOf(caps)}'s ${caps.maxAudioRefs}-audio-ref cap — split the dialogue across jobs.`);
+  }
+}
+
+/** Individually legal image/audio counts whose SUM overruns a declared combined budget (fal
+ *  Seedance 2.5's 50). Worded by the same `capped` the argument builder uses, so the pre-upload
+ *  refusal, the builder's own late check and the preview all read identically. */
+export function cappedCombinedRefs(caps, { images = 0, audio = 0, video = 0 } = {}) {
+  capped(caps, 'references in total (images + audio + video)', images + audio + video, caps?.maxCombinedRefs);
 }
 
 /**
@@ -168,4 +245,4 @@ export function buildSeedanceArgs(intent, caps) {
   return args;
 }
 
-export default { buildSeedanceArgs, firstFrameIsRef, fitAudioRef, audioWindowFor };
+export default { buildSeedanceArgs, firstFrameIsRef, fitAudioRef, audioWindowFor, voiceRefsRide, voiceRefSpeakers, voiceRefDemand, cappedAudioRefs, cappedCombinedRefs };

@@ -30,6 +30,52 @@ export function getEnvValue(entries, key) {
 }
 
 /**
+ * The values DOTENV would load from this text — the only honest reading for anything that has to
+ * agree with a process configured by `import 'dotenv/config'` (the render child, and the web
+ * server's prompt preview, which exists to promise "this is exactly what we send").
+ *
+ * Deliberately not parseEnv: that one is the wizard's line editor and answers a different question
+ * — what does line N say, so a rewrite can leave every other byte alone — which is why it keeps a
+ * trailing `# comment` inside the value, ignores an `export ` prefix, and reports the FIRST
+ * assignment. dotenv strips the comment, accepts the prefix, and lets the LAST assignment win, so
+ * an ordinary .env read through the editor's eyes disagrees with the render it is describing.
+ * The line grammar and the quote/escape handling below are dotenv@16's own (lib/main.js) — copied
+ * rather than approximated, because "close enough" is the same bug in a smaller font.
+ */
+export function dotenvValues(text) {
+  // Null-prototype: a dotenv key is `[\w.-]+`, which spells `__proto__` just fine.
+  const out = Object.create(null);
+  const lines = String(text ?? '').replace(/\r\n?/mg, '\n');
+  const LINE = /(?:^|^)\s*(?:export\s+)?([\w.-]+)(?:\s*=\s*?|:\s+?)(\s*'(?:\\'|[^'])*'|\s*"(?:\\"|[^"])*"|\s*`(?:\\`|[^`])*`|[^#\r\n]+)?\s*(?:#.*)?(?:$|$)/mg;
+  for (let m = LINE.exec(lines); m !== null; m = LINE.exec(lines)) {
+    let value = (m[2] || '').trim();
+    const quote = value[0];
+    value = value.replace(/^(['"`])([\s\S]*)\1$/mg, '$2');
+    if (quote === '"') value = value.replace(/\\n/g, '\n').replace(/\\r/g, '\r');
+    out[m[1]] = value; // a repeated key overwrites, exactly as dotenv's own object write does
+  }
+  return out;
+}
+
+/**
+ * How a boolean knob is read out of an environment — config.js's `boolEnv` rule, in the ONE place
+ * every mirror of it shares (config.js itself, and the web server's preview/budget mirrors, which
+ * may not import config.js).
+ *
+ * The trim is the whole point, and it belongs next to dotenvValues: reading the .env the same WAY
+ * is not enough if the two sides then COERCE the value differently. dotenv keeps padding INSIDE a
+ * quoted value, so a dotenv-valid `KLING_CHAIN_FRAMES=" true "` reaches the render child as
+ * ` true ` and config.js trims it to ON — while an untrimmed regex reads it OFF, and the preview
+ * describes a render nobody is going to pay for. Unset (`undefined`) and empty both mean "not set"
+ * and take the caller's default; a string knob is NOT trimmed anywhere, because there the padding
+ * is part of the value the child was handed.
+ * @param {string|undefined} value  the raw value, as dotenv would have loaded it
+ * @param {boolean} dflt            what an unset knob means
+ */
+export const envBool = (value, dflt) =>
+  (value === undefined || value === '' ? dflt : /^(1|true|yes|on)$/i.test(String(value).trim()));
+
+/**
  * Upsert `updates` (a {KEY: value} map) into `entries`: replace an existing active KEY= in place,
  * else append a new `KEY=value` line at the end. Values are written raw (no quotes, no spaces around
  * `=`); a newline in a value is rejected. Returns {entries, changed[]} (changed = keys whose value
@@ -75,4 +121,4 @@ export function readEnvFileOrExample(root) {
   return { path: envPath, text: '', source: 'none' };
 }
 
-export default { parseEnv, getEnvValue, upsertEnv, serializeEnv, writeEnv, readEnvFileOrExample };
+export default { parseEnv, getEnvValue, dotenvValues, envBool, upsertEnv, serializeEnv, writeEnv, readEnvFileOrExample };

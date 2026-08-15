@@ -154,6 +154,19 @@ describe('reduceRunEvents', () => {
     expect(s.agents[4].startedAt).not.toBeNull();
   });
 
+  it('run-refresh: an explicit null render CLEARS the finished take — a queued one shows no completed clips', () => {
+    // The server nulls `latestRender` deliberately when a full or probe render is launched after a
+    // completed take: there is no new render yet, and the previous take's clips are not this one's.
+    // Restoring them left the page showing finished, green clips for work that is only queued.
+    let s = fold([{ type: 'snapshot', run: makeRun('review') }]);
+    expect(s.run?.latestRender?.jobs).toHaveLength(2);
+    s = reduceRunEvents(s, { type: 'run-refresh', run: makeRun('rendering', { latestRender: null }) }, 5000);
+    expect(s.run?.latestRender).toBeNull();
+    // …and the next job tick rebuilds the list from the PLAN, so only the job that really finished is done
+    s = reduceRunEvents(s, { type: 'job', jobId: 'K1', state: 'done', clip: '/x/K1.mp4' }, 6000);
+    expect(s.run?.latestRender?.jobs.map((j) => j.clipExists)).toEqual([true, false]);
+  });
+
   it('a prompt-override event is inert here: another tab\'s edit must not disturb live render texture', () => {
     // Saving a prompt edit is free and local — a fact about the run's stored TEXT, not about the
     // work in flight. The prompt sheet subscribes to the event and refetches; this reducer owns

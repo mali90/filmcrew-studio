@@ -60,7 +60,11 @@ export function validatePromptOverrides(raw, where = 'prompt overrides') {
       throw new Error(`${where}: jobs.${jobId} carries neither "prompt" nor "segments" — remove it or write one`);
     }
   }
-  return { schema: OVERRIDES_SCHEMA, jobs };
+  // Handed back with NO prototype: callers look an arbitrary (validated) job id up in this map, and
+  // on a plain object `jobs['toString']` answers with an inherited function — an "edit" the renderer
+  // would then act on for a job that has none. JSON.parse defines even `__proto__` as an ordinary
+  // own key, so a sidecar that really names one is copied across unharmed.
+  return { schema: OVERRIDES_SCHEMA, jobs: Object.assign(Object.create(null), jobs) };
 }
 
 /**

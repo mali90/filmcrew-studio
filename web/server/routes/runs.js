@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { isRunId, safeChild } from '../lib/paths.js';
-import { estimateRender, estimateUpscale, jobSeconds, readProbeResolution, readRenderResolution, readUpscaleProvider, readUpscaleTargetShortSide } from '../lib/estimator.js';
+import { estimateRender, estimateUpscale, jobSeconds, readProbeResolution, readRenderResolution, readUpscaleKnobs, readUpscaleMaxFactor, readUpscaleModel, readUpscaleProvider, readUpscaleTargetShortSide, takeUpscaleClips } from '../lib/estimator.js';
 // The registry is the ONE static import this server takes from the host src/ tree. It is safe
 // precisely because it has zero imports and reads no env (test/unit/render-models.test.js pins
 // that), so it cannot drag config.js — and a developer's real .env — into web/server's static
@@ -95,6 +95,32 @@ function continuityOf(run) {
 // of surfacing mid-plan with a half-written run.
 const toSlug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 
+/**
+ * One recorded seam for the wire. The renderer writes a seam as instructions to the STITCHER —
+ * `frame` is the still on disk the clip opens on, `from`/`to.clip` the neighbour clip it was grabbed
+ * off — and the manifest keeps all of it. The browser has use for none of it: the take/job ids are
+ * the whole vocabulary the run page speaks, exactly as `serializeContinuity` decided for the sibling
+ * feature. An ALLOWLIST for the same reason that one is: a field added to the seam record later
+ * cannot leak a host path by accident.
+ */
+const seamIds = (s) => {
+  if (!s || typeof s !== 'object') return s ?? null;
+  const end = (e) => (e && typeof e === 'object' ? { take: e.take ?? null, job: e.job ?? null } : null);
+  const wire = { mode: s.mode ?? null };
+  // Present only on the outgoing seam, and a token ('provider' | 'ffmpeg'), never a path.
+  if ('frameSource' in s) wire.frameSource = s.frameSource ?? null;
+  if ('from' in s) wire.from = end(s.from);
+  if ('to' in s) wire.to = end(s.to);
+  return wire;
+};
+
+/** `clipLineage` for the wire: which take each job's newest clip came from, and its seams as ids. */
+const lineageIds = (lineage) => (lineage && typeof lineage === 'object'
+  ? Object.fromEntries(Object.entries(lineage).map(([jobId, l]) => [jobId, l && typeof l === 'object'
+    ? { take: l.take ?? null, seamIn: seamIds(l.seamIn), seamOut: seamIds(l.seamOut) }
+    : l]))
+  : lineage);
+
 const dirSize = (dir) => {
   let bytes = 0;
   const walk = (d) => {
@@ -124,15 +150,18 @@ export function registerRunRoutes(app) {
    * The manifest, minus the host paths the browser has no use for. `approved.final` keeps its
    * absolute path (that is the explicit "Reveal in Finder / Copy path" contract, mirrored by
    * `finalFsPath`); the P6 delivery HISTORY does not — the UI only ever takes `basename()` of those
-   * entries, so shipping the host's directory layout for every past final is pure leak. Same
-   * contract `serializeContinuity` keeps for the sibling feature: ids and names, never fs paths.
+   * entries, so shipping the host's directory layout for every past final is pure leak. `clipLineage`
+   * does not either: its seams carry the frame and neighbour-clip paths the stitcher reads off disk,
+   * and every list tick would hand the run tree's layout to the browser for nothing. Same contract
+   * `serializeContinuity` keeps for the sibling feature: ids and names, never fs paths.
    */
   const redactManifest = (m) => {
     if (!m || typeof m !== 'object') return m;
     const name = (p) => (p ? path.basename(String(p)) : p);
     const finals = Array.isArray(m.finals) ? m.finals.map((f) => (f?.final ? { ...f, final: name(f.final) } : f)) : m.finals;
     const history = Array.isArray(m.history) ? m.history.map((h) => (h?.final ? { ...h, final: name(h.final) } : h)) : m.history;
-    return { ...m, ...(finals ? { finals } : {}), ...(history ? { history } : {}) };
+    const clipLineage = lineageIds(m.clipLineage);
+    return { ...m, ...(finals ? { finals } : {}), ...(history ? { history } : {}), ...(clipLineage ? { clipLineage } : {}) };
   };
 
   const serializeRender = (lr) => lr && {
@@ -170,7 +199,7 @@ export function registerRunRoutes(app) {
   app.get('/api/runs', async () => ({ runs: svc.list().map((r) => serializeRun(r)) }));
 
   app.post('/api/runs', async (req, reply) => {
-    const { idea, backend = 'kling', aspect = '9:16', durationS = null, cast = [], environment = null } = req.body ?? {};
+    const { idea, backend = 'kling', aspect = '9:16', resolution = null, durationS = null, cast = [], environment = null } = req.body ?? {};
     if (!idea || !String(idea).trim()) throw Object.assign(new Error('idea is required'), { statusCode: 400, hint: 'one line is enough — the engine does the rest' });
     // Backend, aspect and cast are all model-derived and all rejected HERE — synchronously, before
     // svc.createRun spawns the engine child — so a bad request leaves no run directory behind.
@@ -192,6 +221,16 @@ export function registerRunRoutes(app) {
     if (!caps.aspects.includes(aspect)) {
       throw Object.assign(new Error(`unknown aspect "${aspect}" for ${caps.label}`), {
         statusCode: 400, hint: `${caps.label} renders ${caps.aspects.join(', ')}`,
+      });
+    }
+    // resolutions are per-model too (2.5 tops out at 720p; Kling starts there) — a tier the model
+    // cannot render is refused before any spawn; null means the model's configured default.
+    if (resolution !== null && !(typeof resolution === 'string' && caps.resolutions.includes(resolution))) {
+      throw Object.assign(new Error(`unknown resolution "${resolution}" for ${caps.label}`), {
+        statusCode: 400,
+        hint: caps.resolutions.length
+          ? `${caps.label} renders ${caps.resolutions.join(', ')}`
+          : `${caps.label} has no selectable resolution — the endpoint renders its own fixed output; omit the field`,
       });
     }
     if (durationS !== null && (!Number.isInteger(durationS) || durationS < 3 || durationS > 120)) {
@@ -233,7 +272,7 @@ export function registerRunRoutes(app) {
         throw Object.assign(new Error(`unknown environment "${environment}"`), { statusCode: 400, hint: 'create the environment on the Cast page first' });
       }
     }
-    const r = svc.createRun({ idea: String(idea).trim(), backend: storedBackend, aspect, durationS, cast: cast.map((c) => c.trim()), environment: environmentSlug });
+    const r = svc.createRun({ idea: String(idea).trim(), backend: storedBackend, aspect, resolution, durationS, cast: cast.map((c) => c.trim()), environment: environmentSlug });
     return reply.code(201).send(r);
   });
 
@@ -301,10 +340,20 @@ export function registerRunRoutes(app) {
     return { runId: run.id, backend, jobs, prompts, orphaned };
   });
 
+  // WHICH job's prompt — from the query on a read, from the body on an edit, and VERBATIM either
+  // way. A job id is whatever the plan called it: the schema asks only that it is non-blank, and the
+  // renderer writes that job's take in a directory of exactly that name, whitespace included.
+  // Trimming it here looked like normalisation but was a rename — the read missed the job, or
+  // answered for whichever job happened to be spelled like the trimmed form, while a save stored the
+  // user's words under a key no render would ever look up. The only question asked of it here is
+  // whether a job was named at all; whether the name is safe to join onto a path is the take scan's
+  // question (isSafeSegment, in prompt-service), and its answer is a plain miss.
+  const jobOf = (req) => String(req.body?.job ?? req.body?.jobId ?? req.query?.job ?? '');
+
   app.get('/api/runs/:id/prompt', async (req, reply) => {
     const run = plannedRunOr409(req.params.id, reply);
     if (!run) return reply;
-    const jobId = String(req.query.job ?? '').trim();
+    const jobId = jobOf(req);
     const jobIds = (run.spec.kling?.jobs ?? []).map((j) => j?.job_id).filter(Boolean);
     if (!jobId) throw Object.assign(new Error('job required'), { statusCode: 400, hint: `?job=<id> — this plan has: ${jobIds.join(', ')}` });
     const take = req.query.take ? String(req.query.take) : null;
@@ -325,7 +374,6 @@ export function registerRunRoutes(app) {
   // Saving an edit is genuinely free: one local file write, nothing submitted, nothing billed. The
   // words are stored VERBATIM in <runDir>/prompt-overrides.json — never the system pins, which are
   // re-composed at render time because they name reference labels this render has not laid out yet.
-  const jobOf = (req) => String(req.body?.job ?? req.body?.jobId ?? req.query?.job ?? '').trim();
 
   app.put('/api/runs/:id/prompt', async (req, reply) => {
     const run = plannedRunOr409(req.params.id, reply);
@@ -366,37 +414,67 @@ export function registerRunRoutes(app) {
     if (mode === 'upscale') {
       const cut = req.query.cut;
       // Topaz runs on either provider now — price the one this run's approve would actually bill,
-      // and say what short side it will DELIVER (the UI's "already HD" gate rides on it).
-      const upscaleOpts = { provider: readUpscaleProvider(app.ctx.envRoot, run.backend, app.ctx.childEnv) };
-      const targetShortSide = readUpscaleTargetShortSide(app.ctx.envRoot, run.backend, app.ctx.childEnv);
-      // no cut ⇒ the latest render (approve's default): price every job in the current spec
+      // and say what short side it will DELIVER (the UI's "already HD" gate rides on it). An
+      // explicit ?provider= (the ApproveBar's pick) overrides the env derivation for BOTH answers:
+      // quote and gate must follow the same vendor, or the button prices one target and promises
+      // another. Junk is a 400 — silently deriving would re-quote the default under the pick's name.
+      const picked = req.query.provider != null ? String(req.query.provider) : null;
+      if (picked !== null && picked !== 'fal' && picked !== 'segmind') {
+        throw Object.assign(new Error(`"${picked}" is not an upscale provider`), { statusCode: 400, hint: 'provider is fal or segmind' });
+      }
+      const provider = picked ?? readUpscaleProvider(app.ctx.envRoot, run.backend, app.ctx.childEnv);
+      // Priced through the very knobs approve would PIN into the finalize child, never a second
+      // reading of the .env beside them: the pin is what decides the bytes the child consumes (a
+      // dotenv-quoted `" 720p "` arrives trimmed), so quoting the raw file here would put a target
+      // on the button that the run neither bills nor delivers.
+      const pricedEnv = { ...app.ctx.childEnv, ...readUpscaleKnobs(app.ctx.envRoot, provider, app.ctx.childEnv) };
+      const targetShortSide = readUpscaleTargetShortSide(app.ctx.envRoot, run.backend, pricedEnv, provider);
+      // fal tiers Topaz by the OUTPUT frame and halves the rate for Gaia 2 output, so the target,
+      // the model knob and the factor CAP (which decides how far a small clip is lifted, and so
+      // which tier it lands in) are part of the quote, not decoration around it.
+      const upscaleOpts = {
+        provider, targetShortSide,
+        model: readUpscaleModel(app.ctx.envRoot, pricedEnv),
+        maxFactor: readUpscaleMaxFactor(app.ctx.envRoot, pricedEnv),
+      };
+      // A take is upscaled clip by clip, so its price is what THAT take actually holds — its own
+      // spec, its own clips, each measured off the clip FILE Topaz would be handed (never off the
+      // master, which an earlier upscale of this same take rewrote to the HD size it delivered).
+      // approve's ledger line reads the take the same way (estimator.takeUpscaleClips), so the
+      // quote and the ledger row are one number.
+      const clipsOfTake = (takeDir) => takeUpscaleClips(takeDir, { spec: run.spec });
+      // no cut ⇒ the LATEST RENDER take — the one approve's default upscales (approve reads it the
+      // same way). A probe take holds a single clip, so quoting every job in the spec named a charge
+      // bigger than the bill; over-quoting a paid button is the same lie as under-quoting it. Only
+      // when there is no finished take to read (nothing rendered yet, or the current one is still
+      // rendering — approve answers 409 in both) does the answer fall back to the plan, where the
+      // honest reading is "what upscaling a complete render would cost". Those plan rows carry no
+      // dimensions — nothing has been rendered to measure — so they price at the DEAREST tier, which
+      // is also the one this app's 9:16 default actually buys.
       if (!cut) {
-        const clips = (run.spec.kling?.jobs ?? []).map((j) => ({ jobId: j.job_id, seconds: jobSeconds(run.spec, j.job_id) }));
+        const takeDir = run.latestRender?.inProgress ? null : run.latestRender?.dir;
+        const clips = takeDir
+          ? clipsOfTake(takeDir)
+          : (run.spec.kling?.jobs ?? []).map((j) => ({ jobId: j.job_id, seconds: jobSeconds(run.spec, j.job_id) }));
         return { ...estimateUpscale(clips, upscaleOpts), targetShortSide };
       }
-      // a specific cut upscales exactly the clips in ITS take dir, priced by THAT take's own saved
-      // spec (a pre-revision cut may rename jobs or change durations) and only jobs that actually
-      // produced a clip (finishRender skips clipless/failed jobs) — so the price matches Topaz's work.
+      // a specific cut upscales exactly the clips in ITS take dir
       if (!/^c\d{1,4}$/.test(String(cut))) throw Object.assign(new Error(`"${cut}" is not a cut id`), { statusCode: 400, hint: 'cut ids look like c1, c2, …' });
       const chosen = (run.manifest?.cuts ?? []).find((c) => c.id === cut);
       if (!chosen) throw Object.assign(new Error(`cut "${cut}" not found`), { statusCode: 400, hint: 'pick a cut shown in review' });
-      const readTakeJson = (name) => {
-        const p = safeChild(runsDir, req.params.id, 'renders', String(chosen.take), name);
-        return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf8')) : null;
-      };
-      const takeSpec = readTakeJson('spec.json') ?? run.spec; // the spec the take was rendered from
-      const clips = ((readTakeJson('render.json')?.jobs) ?? [])
-        .filter((j) => j.clip) // only jobs Topaz will actually process
-        .map((j) => { const jobId = j.jobId ?? j.job; return { jobId, seconds: jobSeconds(takeSpec, jobId) }; });
-      return { ...estimateUpscale(clips, upscaleOpts), targetShortSide };
+      return { ...estimateUpscale(clipsOfTake(safeChild(runsDir, req.params.id, 'renders', String(chosen.take))), upscaleOpts), targetShortSide };
     }
     return estimateRender(run.spec, {
       backend: run.backend ?? 'kling',
       mode,
       jobId: req.query.jobId,
       cascade: req.query.cascade === '1' || req.query.cascade === 'true',
-      // Seedance is billed by pixel-seconds — price the resolution the render child will use, and
-      // that knob is per model (2.5 reads SEEDANCE25_RESOLUTION and defaults to 720p, not 480p)
+      // Seedance is billed by pixel-seconds — price the resolution the render child will use. The
+      // run's own pick (made at create time; run-service pins it onto every child spawn) travels as
+      // `pick`, NOT folded into `resolution`, because the estimator ranks the two differently: a
+      // pick outranks a spec.seedance.resolution pin, the .env knob does not. `resolution` is that
+      // knob, per model — 2.5 reads SEEDANCE25_RESOLUTION and defaults to 720p, not 480p.
+      pick: run.manifest?.resolution || null,
       resolution: readRenderResolution(app.ctx.envRoot, run.backend, app.ctx.childEnv),
       probeResolution: readProbeResolution(app.ctx.envRoot, run.backend, app.ctx.childEnv),
     });

@@ -1,9 +1,9 @@
 // Typed same-origin API client. Every non-2xx response throws ApiClientError carrying the
 // server's {error, hint} body — surfaces verbatim in the UI's error states.
 import type {
-  CharactersResponse, CliStatus, CreateRunBody, DoctorReport, EnvironmentsResponse, Estimate, InstallCliEvent, ModelsResponse,
-  PromptView, PromptsResponse, ReferencesList, RerenderJobBody, RerenderJobResult, RunDetail, RunSummary,
-  SetPromptBody, SetupStatus, VoicesList,
+  ApproveBody, CharactersResponse, CliStatus, CreateRunBody, DoctorReport, EnvironmentsResponse, Estimate, EstimateParams,
+  InstallCliEvent, ModelsResponse, PromptView, PromptsResponse, ReferencesList, RerenderJobBody, RerenderJobResult,
+  RunDetail, RunSummary, SetPromptBody, SetupStatus, UpscaleProvider, VoicesList,
 } from '../../../shared/api-types';
 
 const BASE = '/api';
@@ -45,7 +45,10 @@ export const api = {
   envRead: () => get<{ source: string; rows: { key: string; value: string; secret: boolean; set: boolean }[] }>('/settings/env'),
   envPreview: (updates: Record<string, string>) => post<{ rows: { key: string; from: string; to: string }[]; overwritingReal: boolean }>('/settings/env/preview', { updates }),
   envWrite: (updates: Record<string, string>) => post<{ written: string[] }>('/settings/env', { updates }),
-  defaults: () => get<{ backend: string; aspect: string; resolution: string; seedanceResolution: string }>('/settings/defaults'),
+  // `resolution` is the DEFAULT backend's effective tier (read off the knob that backend's model
+  // actually uses); `resolutions` carries every model's, keyed by model id, for per-model pickers.
+  defaults: () => get<{ backend: string; aspect: string; resolution: string; resolutions: Record<string, string>; seedanceResolution: string }>('/settings/defaults'),
+  /** `resolution` is written to the knob of `d.backend`'s model (or the saved default backend's). */
   saveDefaults: (d: { backend?: string; aspect?: string; resolution?: string; seedanceResolution?: string }) => post<{ written: string[] }>('/settings/defaults', d),
   doctor: () => post<DoctorReport>('/doctor'),
   storage: () => get<{ runs: { bytes: number; count: number }; out: { bytes: number; count: number } }>('/storage'),
@@ -102,8 +105,8 @@ export const api = {
   /** Discard one job's edit and go back to the agents' text. Also free, and also local. */
   deletePrompt: (id: string, job: string) =>
     del<PromptView>(`/runs/${id}/prompt?job=${encodeURIComponent(job)}`),
-  estimate: (id: string, q: { mode: string; jobId?: string; cascade?: boolean; cut?: string }) =>
-    get<Estimate>(`/runs/${id}/estimate?mode=${q.mode}${q.jobId ? `&jobId=${q.jobId}` : ''}${q.cascade ? '&cascade=1' : ''}${q.cut ? `&cut=${q.cut}` : ''}`),
+  estimate: (id: string, q: EstimateParams) =>
+    get<Estimate>(`/runs/${id}/estimate?mode=${q.mode}${q.jobId ? `&jobId=${q.jobId}` : ''}${q.cascade ? '&cascade=1' : ''}${q.cut ? `&cut=${q.cut}` : ''}${q.provider ? `&provider=${q.provider}` : ''}`),
 
   render: (id: string, mode: 'probe' | 'full') => post<{ takeId: string; estUsd: number | null }>(`/runs/${id}/render`, { mode }),
   revise: (id: string, body: { feedback: string; scope?: string }) => post<{ revisionId: string }>(`/runs/${id}/revise`, body),
@@ -111,8 +114,9 @@ export const api = {
   rerenderJob: (id: string, body: RerenderJobBody) =>
     post<RerenderJobResult>(`/runs/${id}/rerender-job`, body),
   assemble: (id: string, composition?: Record<string, string>) => post<unknown>(`/runs/${id}/assemble`, { composition }),
-  approve: (id: string, upscale: boolean, cut?: string) =>
-    post<{ final: string | null }>(`/runs/${id}/approve`, { upscale, ...(cut ? { cut } : {}) }),
+  /** `provider` names who runs the paid Topaz tail (ApproveBar's pick) — only sent with upscale. */
+  approve: (id: string, upscale: boolean, cut?: string, provider?: UpscaleProvider) =>
+    post<{ final: string | null }>(`/runs/${id}/approve`, { upscale, ...(cut ? { cut } : {}), ...(provider ? { provider } : {}) } satisfies ApproveBody),
   /** Reopen a delivered run so it can be changed again. Free, and nothing is lost: it moves one
    *  timestamp in the manifest — the delivered file stays on disk and stays downloadable. */
   reopen: (id: string) => post<{ reopenedAt: string; final: string }>(`/runs/${id}/reopen`),

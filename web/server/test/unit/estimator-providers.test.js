@@ -20,9 +20,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { estimateRender, estimateUpscale, jobSeconds } from '../../lib/estimator.js';
+import { estimateRender, estimateUpscale, jobSeconds, takeUpscaleClips } from '../../lib/estimator.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
 const PRICES = JSON.parse(fs.readFileSync(path.join(ROOT, 'web/server/lib/prices.json'), 'utf8'));
@@ -158,17 +159,209 @@ test('seedance-2.5@fal prices per second, per resolution, exactly like the other
 
 test('the Topaz upscale is priced on BOTH providers, each at its own rate', () => {
   const clips = [{ jobId: 'K1', seconds: 5 }, { jobId: 'K2', seconds: 4 }];   // 9s of INPUT video
+  // Dimensionless rows: fal's tier cannot be measured, so the quote rounds UP to its dearest one
+  // (was a flat $0.12/s ballpark that matched no tier fal publishes — see the row's _source).
   const onFal = estimateUpscale(clips, { provider: 'fal' });
-  assert.equal(onFal.totalUsd, billed(0.12, [5, 4]));
+  assert.equal(onFal.totalUsd, billed(0.08, [5, 4]));
+  assert.equal(onFal.tier, 'above1080p', 'the quote names the tier it rode');
   assert.ok(!onFal.unknownPrice);
   assert.deepEqual(estimateUpscale(clips), onFal, 'fal stays the default — today\'s callers are unchanged');
 
   const onSegmind = estimateUpscale(clips, { provider: 'segmind' });
   assert.equal(onSegmind.totalUsd, billed(0.125, [5, 4]), 'flat $0.125 per INPUT second');
   assert.ok(!onSegmind.unknownPrice, 'Segmind Topaz has a published rate — it is no longer a known unknown');
+  assert.equal(onSegmind.tier, undefined, 'a flat vendor has no tier to name');
   assert.deepEqual(onSegmind.perJob.map((j) => j.seconds), [5, 4]);
-  assert.ok(onSegmind.totalUsd > onFal.totalUsd, 'Segmind Topaz is the dearer of the two, slightly');
+  assert.ok(onSegmind.totalUsd > onFal.totalUsd, 'Segmind Topaz stays the dearer of the two');
   assert.equal(estimateUpscale([], { provider: 'segmind' }).totalUsd, 0, 'nothing to upscale, nothing to pay');
+});
+
+// ── fal's Topaz TIERS, and the invoice that pinned them ─────────────────────
+// fal does not bill Topaz per second flat. It publishes three per-second tiers by OUTPUT
+// resolution (up to 720p $0.01, 720p–1080p $0.02, above 1080p $0.08) and does NOT document how the
+// tier is measured. A real charge does: ~$1.28 for a 15s 480p 9:16 clip, which is the $0.08 tier —
+// this app lifts the SHORT side to 1080, so a portrait source comes back 1080×1920 and fal bills
+// the 1920. Everything below is anchored to that one invoice, and the row's _source says so.
+const portrait480 = { width: 480, height: 854 };   // 9:16 480p, the app's default shape
+const landscape480 = { width: 854, height: 480 };  // 16:9 480p, the same source turned sideways
+
+test('the user\'s real case: 15s of 480p 9:16 quotes fal\'s above-1080p tier, not a flat ballpark', () => {
+  const e = estimateUpscale([{ jobId: 'K1', seconds: 15, ...portrait480 }], { provider: 'fal' });
+  assert.equal(e.totalUsd, 1.2, '15s × $0.08 — the tier the ~$1.28 invoice was billed at');
+  assert.equal(e.tier, 'above1080p');
+  assert.notEqual(e.totalUsd, 1.8, 'the old flat $0.12/s ballpark over-quoted this by 50%');
+  assert.notEqual(e.totalUsd, 0.3, '…and the naive "480p → 1080p, so the 1080p tier" reading under-quotes it 4×');
+});
+
+test('the tier follows the OUTPUT frame: landscape 480p lands in the documented 1080p tier', () => {
+  // 854×480 lifts to 1922×1080 — a frame 1080 pixels tall, which is exactly what fal's middle tier
+  // is named after. Only the portrait case exceeds 1080; pricing both at the top tier would invent
+  // a charge fal's own tier names contradict.
+  const e = estimateUpscale([{ jobId: 'K1', seconds: 15, ...landscape480 }], { provider: 'fal' });
+  assert.equal(e.totalUsd, 0.3, '15s × $0.02');
+  assert.equal(e.tier, '1080p');
+
+  // …and a source small enough that the plan's 4× cap leaves the output under 720 stays in the
+  // cheapest tier — the ladder is read off the row, not assumed.
+  const tiny = estimateUpscale([{ jobId: 'K1', seconds: 10, width: 256, height: 144 }], { provider: 'fal' });
+  assert.equal(tiny.tier, '720p', '144 × 4 = 576 — still under 720');
+  assert.equal(tiny.totalUsd, 0.1, '10s × $0.01');
+});
+
+test('a clip already at the target costs nothing — the upscaler skips it, so the quote must too', () => {
+  const at1080 = estimateUpscale([{ jobId: 'K1', seconds: 15, width: 1080, height: 1920 }], { provider: 'fal' });
+  assert.equal(at1080.totalUsd, 0, 'upscaleVideoFal returns this input untouched — there is no job to bill');
+  assert.equal(at1080.tier, undefined, 'nothing was priced, so no tier explains anything');
+  // Segmind honours UPSCALE_TARGET_RESOLUTION, so the same clip is a real job when the target is 4k
+  assert.equal(estimateUpscale([{ jobId: 'K1', seconds: 8, width: 1080, height: 1920 }], { provider: 'segmind' }).totalUsd, 0);
+  assert.equal(estimateUpscale([{ jobId: 'K1', seconds: 8, width: 1080, height: 1920 }], { provider: 'segmind', targetShortSide: 2160 }).totalUsd, 1);
+});
+
+test('an unmeasurable clip rounds UP, never down — a surprise bill costs more than a cautious quote', () => {
+  const seconds = 15;
+  const unknown = estimateUpscale([{ jobId: 'K1', seconds }], { provider: 'fal' });
+  const known = estimateUpscale([{ jobId: 'K1', seconds, ...portrait480 }], { provider: 'fal' });
+  assert.equal(unknown.totalUsd, known.totalUsd, 'no dimensions ⇒ the tier this app\'s 9:16 default actually buys');
+  assert.equal(unknown.tier, 'above1080p');
+  // …and specifically NOT the no-op branch: "we cannot measure it" must never read as "it is free"
+  assert.ok(unknown.totalUsd > 0, 'unknown size is not a free upscale');
+  for (const half of [{ width: 480, height: 0 }, { width: 0, height: 854 }, {}]) {
+    assert.equal(estimateUpscale([{ jobId: 'K1', seconds, ...half }], { provider: 'fal' }).totalUsd, 1.2);
+  }
+});
+
+test('fal\'s Gaia 2 half-rate applies only to an unambiguous pick — a bare "Gaia" pays full', () => {
+  const clips = [{ jobId: 'K1', seconds: 15, ...portrait480 }];
+  const full = estimateUpscale(clips, { provider: 'fal' }).totalUsd;
+  for (const model of ['Gaia 2', 'gaia-2', 'gaia2']) {
+    assert.equal(estimateUpscale(clips, { provider: 'fal', model }).totalUsd, 0.6, `${model} is half price`);
+  }
+  // Under-quoting is the error this row refuses to make, so anything short of certain pays full.
+  for (const model of ['Gaia', 'Proteus', '', null, 'Gaia 3']) {
+    assert.equal(estimateUpscale(clips, { provider: 'fal', model }).totalUsd, full, `${model} is not Gaia 2`);
+  }
+  // Segmind's Topaz has NO model parameter (src/lib/upscale.js warns and drops one), so the knob
+  // must not move its bill.
+  assert.equal(
+    estimateUpscale(clips, { provider: 'segmind', model: 'Gaia 2' }).totalUsd,
+    estimateUpscale(clips, { provider: 'segmind' }).totalUsd,
+  );
+});
+
+test('prices.json states the Topaz tiers, the invoice they came from, and that guesses round up', () => {
+  const row = PRICES.topaz;
+  assert.deepEqual(row.perSecondUsd, { '720p': 0.01, '1080p': 0.02, above1080p: 0.08 }, 'fal\'s three published tiers');
+  assert.deepEqual(row.tierMaxOutputHeight, { '720p': 720, '1080p': 1080 }, 'the ladder is DATA — a future invoice corrects it here');
+  assert.equal(row.defaultResolution, 'above1080p', 'the fallback tier is the dearest one, on purpose');
+  assert.equal(row.gaia2Multiplier, 0.5);
+  assert.match(row._source, /fal\.ai/, 'cites the page it came from');
+  assert.match(row._source, /2026-08-13/, 'says WHEN it was checked — a rate with no date rots silently');
+  assert.match(row._source, /1\.28/, 'names the real charge the tier was inferred from');
+  assert.match(row._source, /1080×1920|1080x1920/, 'names the frame that inference is about');
+  assert.match(row._source, /INFERENCE|inferred/, 'and admits the portrait rule is not documented');
+  assert.match(row._source, /ROUND UP|round up/i, 'the deliberate over-quote is written down, not folklore');
+  assert.match(row._source, /60fps/, 'says why the documented 60fps doubling is not modelled');
+
+  // Segmind's Topaz is a genuinely flat per-INPUT-second rate and shares nothing with fal's ladder.
+  assert.equal(PRICES['topaz@segmind'].perSecondUsd, 0.125);
+  assert.ok(!PRICES['topaz@segmind'].tierMaxOutputHeight, 'no tiers to model — Segmind publishes one number');
+  assert.ok(!PRICES['topaz@segmind'].gaia2Multiplier, 'no model parameter either');
+});
+
+// ── the take a quote is read FROM ───────────────────────────────────────────
+// takeUpscaleClips feeds BOTH the estimate endpoint and approve's ledger row, so what it measures
+// decides whether a paid button tells the truth. It measures the CLIPS — the files Topaz is really
+// handed, one job at a time — because the MASTER cannot answer for them: an approve-time upscale
+// lifts the clips, stitches them, and rewrites the take's render.json with the HD master it just
+// delivered, while `jobs[].clip` still names the original SD clips. Priced off that master, a
+// second upscale of the same take reads "already at target" and quotes $0 for work fal bills in
+// full — the one direction this estimator refuses to err in.
+function takeWith(jobs, extra = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-take-'));
+  fs.writeFileSync(path.join(dir, 'spec.json'), JSON.stringify(threeJobs()));
+  fs.writeFileSync(path.join(dir, 'render.json'), JSON.stringify({ master: '/out/v.mp4', jobs, ...extra }));
+  return dir;
+}
+// `measured` is what finishRender probed off the clip FILE before any upscale — width/height and
+// duration, each absent when it could not be read.
+const clipRec = (jobId, measured) => ({ jobId, job: jobId, clip: `/r/t1/${jobId}/clip.mp4`, error: null, ...measured });
+
+test('a re-upscale is quoted from the CLIPS, never from the HD master an earlier upscale left behind', () => {
+  const dir = takeWith(
+    [clipRec('K1', { width: 480, height: 854 }), clipRec('K2', { width: 480, height: 854 }), { jobId: 'K3', job: 'K3', clip: null, error: 'content policy' }],
+    { masterShortSide: 1080 }, // exactly what finishRender writes back after Topaz lifted those clips
+  );
+  try {
+    assert.deepEqual(takeUpscaleClips(dir), [
+      { jobId: 'K1', seconds: 5, width: 480, height: 854 },
+      { jobId: 'K2', seconds: 4, width: 480, height: 854 },
+    ], 'each clip carries its OWN recorded frame; a job with no clip is no Topaz job');
+
+    const e = estimateUpscale(takeUpscaleClips(dir), { provider: 'fal' });
+    assert.ok(e.totalUsd > 0, 'these SD clips go to Topaz again — a $0 quote would be a lie about a real charge');
+    assert.equal(e.totalUsd, billed(0.08, [5, 4]), '480×854 lifts to 1080×1920 — fal\'s above-1080p tier');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a clip measured AT the target still quotes nothing — the skip is per clip, off its own record', () => {
+  const dir = takeWith([clipRec('K1', { width: 1080, height: 1920 })]);
+  try {
+    assert.equal(estimateUpscale(takeUpscaleClips(dir), { provider: 'fal' }).totalUsd, 0,
+      'upscaleVideoFal returns this input untouched — there is no job to bill');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a take whose clips were never measured rounds UP — including when its master claims to be HD', () => {
+  // Every take rendered before the per-clip record existed reads like this. "We cannot measure it"
+  // must price like the dearest tier, never like the free one, whatever the master says it is.
+  const dir = takeWith([clipRec('K1'), clipRec('K2')], { masterShortSide: 1080 });
+  try {
+    assert.deepEqual(takeUpscaleClips(dir), [{ jobId: 'K1', seconds: 5 }, { jobId: 'K2', seconds: 4 }]);
+    const e = estimateUpscale(takeUpscaleClips(dir), { provider: 'fal' });
+    assert.equal(e.totalUsd, billed(0.08, [5, 4]));
+    assert.equal(e.tier, 'above1080p');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// The DURATION half of the same object. A composed cut keeps clips rendered from OLDER plans, so
+// the take's spec is not evidence about them: a revision that re-times a shot leaves the current
+// plan calling a 10-second file 5 seconds, while Topaz processes — and bills — all 10. Segmind's
+// flat per-INPUT-second row makes the seconds readable straight off the total.
+test('a clip kept from before a duration-changing revision is priced by its FILE, not by the plan that moved on', () => {
+  // K1's shot now reads 5s in this take's spec; the clip the cut still holds is the 10-second one it
+  // was rendered as. K2 was re-rendered under the new plan, and measures what the plan says.
+  const dir = takeWith([
+    clipRec('K1', { width: 480, height: 854, duration: 10 }),
+    clipRec('K2', { width: 480, height: 854, duration: 4 }),
+  ], { composed: true });
+  try {
+    assert.deepEqual(takeUpscaleClips(dir), [
+      { jobId: 'K1', seconds: 10, width: 480, height: 854 },
+      { jobId: 'K2', seconds: 4, width: 480, height: 854 },
+    ], 'each clip carries its OWN recorded duration — the spec answers for neither');
+
+    const e = estimateUpscale(takeUpscaleClips(dir), { provider: 'segmind' });
+    assert.equal(e.totalUsd, billed(0.125, [10, 4]), 'Topaz is handed 14 seconds of video and bills for 14');
+    assert.ok(e.totalUsd > billed(0.125, [5, 4]), 'the plan-derived figure is the under-quote this record exists to end');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a measured duration rounds UP to the whole second, and an unmeasured clip falls back to the plan', () => {
+  // Part second, whole charge: fal's own invoices carry at least a second of billing granularity on
+  // top of the input length, so the ceiling is the floor of what gets billed. And a clip with no
+  // recorded duration — every take rendered before the record existed — reads as "not measured",
+  // never as a free zero.
+  const dir = takeWith([clipRec('K1', { duration: 6.2 }), clipRec('K2', { duration: 0 }), clipRec('K3')]);
+  try {
+    assert.deepEqual(takeUpscaleClips(dir), [
+      { jobId: 'K1', seconds: 7 }, // 6.2s of video is 7 seconds of bill, never 6 — and never the plan's 5
+      { jobId: 'K2', seconds: 4 }, // 0 is not a measurement — K2's shot is 4s in the plan
+      { jobId: 'K3', seconds: 4 },
+    ]);
+    const e = estimateUpscale(takeUpscaleClips(dir), { provider: 'segmind' });
+    assert.equal(e.totalUsd, billed(0.125, [7, 4, 4]));
+    assert.ok(e.perJob.every((j) => j.seconds >= 1 && j.usd > 0), 'no route through this take quotes a clip as free');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 // ── the path for a vendor that publishes nothing ────────────────────────────

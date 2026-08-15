@@ -52,7 +52,33 @@ web/
   (lineage, costs, approval). No database; restart-safe by construction.
 - **Stitch precedes review.** A full render ends assembled; probes and job re-renders are
   auto-assembled (free) the moment clips land — the review player always has a current master.
-  Approve only finalizes (and optionally Topaz-upscales below 1080p).
+  Approve only finalizes (and optionally Topaz-upscales below 1080p), and it is the app's **only**
+  upscale path: `UPSCALE_ENABLED`, the CLI flag meaning "upscale every sub-1080p clip of anything you
+  finish from a terminal" (a render, or a bare `npm run assemble`), is pinned off in
+  `run-service`'s `env(runId)` — the one environment every job the service enqueues is built from
+  (plan, revise, render, probe, job re-render, assemble, and the approve-time upscale itself), which
+  is every child that can reach a render. So the flag can never turn the free lane — or a render
+  priced as a render — into an unquoted Topaz bill. The upscale you pay for is the one you asked for.
+  Exactly two of the repo's own CLIs start outside that env, both deliberately: `POST /api/doctor` spawns
+  `src/cli/doctor.js` on the **box's own** environment, because doctor's job is to report what *this
+  machine's* `.env` says — pinned, it would tell you the flag is off while `npm run doctor` in a
+  terminal on the same box read the same file and told you it is on — and `mint-voice`, which mints a
+  voice and renders no clip, so it has no upscale to suppress.
+  `server/test/integration/upscale-flag-pin.test.js` reads **`web/server`'s** source as text and
+  fails, naming the file *and* what it starts, on anything there that starts a child and is neither
+  built from `env(runId)` nor licensed by name — so a second, different child added inside either of
+  those two files fails too, because each licence covers one file-and-child pair and nothing else.
+  The net is deliberately coarser than "repo CLIs", so its licence list is longer than two: it also
+  names the children that were never candidates for the pin — the browser opener, `open -R`, the
+  provider installer, `ffmpeg`, and the server restarting itself. Being a text scanner it can be
+  written around by a path computed at runtime; it is here to catch the ordinary mistake, not an
+  adversary.
+  It is a coarse net, and deliberately so: it trips on every `enqueue`/`spawn`/`execFile`/`fork` it
+  can see, whatever they name, and asks each one to prove itself. A false positive costs one line in
+  its `EXEMPT` map; a false negative costs somebody money. What it cannot do is worth knowing before
+  you lean on it — it is a text scanner, not a parser, so a callee computed at runtime, a spawn
+  inside a dependency, or work handed to a shell all walk past it. It is there to catch the ordinary
+  mistake, not a determined author.
 - **Finalized means finalized, on the server.** Once a run is approved, `render`, `revise`,
   `rerender-job`, `assemble` and `plan` refuse it with a 409 — the guard lives in `run-service`, not
   in the buttons, so a stale tab cannot spend against a delivered film. `POST /reopen` is the way

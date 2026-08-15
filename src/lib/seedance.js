@@ -7,9 +7,10 @@
 // variation ships as an "Alternate take N" prompt directive, guards as prompt clauses).
 //
 // Unlike Kling (per-shot storyboard segments hard-capped at 512 chars each, so scene prose gets
-// starved), nothing is truncated per shot here — only the WHOLE assembled prompt is byte-clamped,
-// and the front matter (style, identity, guards, first-frame pin, lip-sync notes, opening hook)
-// sits ahead of the shot bodies so it survives the clamp.
+// starved), nothing is truncated per shot here — and by default nothing is truncated at all: the
+// whole-prompt clamp ships OFF (SEEDANCE_PROMPT_MAX_BYTES; unset/empty/0 = uncapped). Where a cap IS
+// set, only the WHOLE assembled prompt is clamped, and the front matter (style, identity, guards,
+// first-frame pin, lip-sync notes, opening hook) sits ahead of the shot bodies so it survives it.
 //
 // The prompt text itself is composed by src/lib/prompt-compose.js and the effective settings by
 // src/lib/prompt-settings.js — both pure and config-free (unit-tested in
@@ -18,7 +19,7 @@
 // server's static graph. THIS module is the config-bound shim; call sites are unchanged.
 import config from '../../config.js';
 import { seedancePromptSettings, knobsFor } from './prompt-settings.js';
-import { applyOverride, composeSeedanceJobPrompt, clampBytes, HOOK_PREFIX, TRANSITION_WORDS } from './prompt-compose.js';
+import { applyOverride, assertOverrideFits, composeSeedanceJobPrompt, clampBytes, HOOK_PREFIX, TRANSITION_WORDS } from './prompt-compose.js';
 
 export { clampBytes, HOOK_PREFIX, TRANSITION_WORDS };
 
@@ -34,18 +35,24 @@ export { SEEDANCE_TTV_GUIDANCE } from './seedance-guidance.js';
  */
 export const modelKnobs = (caps) => knobsFor(caps, config);
 
-/** The effective Seedance prompt/render settings for a spec on one model, config as the defaults. */
+/** The effective Seedance prompt/render settings for a spec on one model, config as the defaults.
+ *  `resolutionPick` is the tier this RUN was created at (empty for a CLI run): it outranks a spec
+ *  pin, which the knobs below never do — see seedanceResolution in prompt-settings.js. */
 export const seedanceSettingsFor = (spec, caps) =>
-  seedancePromptSettings(spec, caps, { ...config.seedance, aspectRatio: config.kling.aspectRatio, defaultShotSeconds: config.kling.defaultShotSeconds, knobs: config });
+  seedancePromptSettings(spec, caps, { ...config.seedance, aspectRatio: config.kling.aspectRatio, defaultShotSeconds: config.kling.defaultShotSeconds, knobs: config, resolutionPick: config.render.resolutionPick });
 
 /**
  * Compose ONE job's Seedance prompt from its shots' `kling` blocks + the spec's voice lines.
- * The clause/budget knobs (`style`, `avoidClause`, `textClause`, `maxBytes`) may still be passed as
- * opts — the renderer overrides them per model — and are folded into the pure composer's settings.
+ * Pass `opts.caps` (the renderer does) and the clause/budget knobs resolve by the model-block-wins
+ * rule — the SAME merge the web preview runs, so neither half can honour a model block the other
+ * ignores. The knobs (`style`, `avoidClause`, `textClause`, `maxBytes`) can still be passed as opts
+ * for a caller composing outside the configured ones, and are folded into the composer's settings.
  * @param {object} job   spec.kling.jobs[i]
  * @param {object} spec  the full Production Spec
  * `opts.override` (optional): this job's saved prompt-override entry — the user's own words, with
- * the front matter, the seam pins and the byte clamp re-composed on top (applyOverride).
+ * the front matter and the seam pins re-composed on top (applyOverride). An edit that front matter
+ * has outgrown since it was saved is REFUSED, not clamped: this is the renderer's path, so the
+ * bytes that would go are bytes the user is paying to send (assertOverrideFits).
  * @param {object} [opts]  see composeSeedanceJobPrompt(); plus style/avoidClause/textClause/maxBytes
  * @returns {{ prompt:string, shotPrompts:string[], totalDuration:number, speakers:string[] }}
  */
@@ -55,9 +62,14 @@ export function buildSeedanceJobPrompt(job, spec, opts = {}) {
     ...(opts.style !== undefined ? { style: opts.style } : {}),
     ...(opts.avoidClause !== undefined ? { avoid: opts.avoidClause } : {}),
     ...(opts.textClause !== undefined ? { textRule: opts.textClause } : {}),
-    ...(Number(opts.maxBytes) ? { promptMaxBytes: Number(opts.maxBytes) } : {}),
+    // `!= null`, never truthiness: 0 is the uncapped sentinel and has to travel, while undefined/
+    // null still mean "the caller supplied none" and leave the configured knob alone.
+    ...(opts.maxBytes != null ? { promptMaxBytes: Number(opts.maxBytes) } : {}),
   };
-  return applyOverride(composeSeedanceJobPrompt(job, spec, settings, opts), opts.override ?? null, settings);
+  return assertOverrideFits(
+    applyOverride(composeSeedanceJobPrompt(job, spec, settings, opts), opts.override ?? null, settings),
+    job?.job_id,
+  );
 }
 
 /**

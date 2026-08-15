@@ -124,7 +124,7 @@ that was not sent.
 
 | Step | fal | Segmind |
 |---|---|---|
-| **Topaz upscale** (`--upscale`, `UPSCALE_ENABLED`) | `fal-ai/topaz/upscale/video` — takes an `upscale_factor` (1–`FAL_TOPAZ_MAX_FACTOR`, default 4) derived from the clip's short side, plus a `model` (`FAL_TOPAZ_MODEL`, default `Proteus`) | `topaz-video-upscale` slug — takes `target_resolution` (`720p`/`1080p`/`4k`, from `UPSCALE_TARGET_RESOLUTION`, default `1080p`) and `target_fps`; no factor, no model |
+| **Topaz upscale** (`--upscale`, or `UPSCALE_ENABLED` on anything you finish from a terminal; the web app upscales at approve) | `fal-ai/topaz/upscale/video` — takes an `upscale_factor` (1–`FAL_TOPAZ_MAX_FACTOR`, default 4) derived from the clip's short side, plus a `model` (`FAL_TOPAZ_MODEL`, default `Proteus`) | `topaz-video-upscale` slug — takes `target_resolution` (`720p`/`1080p`/`4k`, from `UPSCALE_TARGET_RESOLUTION`, default `1080p`) and `target_fps`; no factor, no model |
 | **Voice minting** (`npm run mint-voice`) | `fal-ai/kling-video/create-voice` — a persistent `voice_id` per character | **not implemented** — see the gap note below |
 
 Which provider upscales is `UPSCALE_PROVIDER=auto|fal|segmind` (default `auto`). `auto` upscales
@@ -325,7 +325,7 @@ Uncomment (remove the leading `#`) and set any of these to change a default:
 | Setting | Default | What it does |
 |---|---|---|
 | `KLING_MODEL` | `kling-v3-omni` | `kling-v3-omni` or `kling-video-o1`. |
-| `KLING_RESOLUTION` | `1080p` | `720p`, `1080p`, or `4k` (higher = more cost). |
+| `KLING_RESOLUTION` | — | **Ignored.** fal's Kling o3 endpoint takes no resolution parameter — output size is the endpoint's own, and the delivered master's measured size is what the UI reports. The variable is tolerated in old `.env` files as the no-op it always was. |
 | `KLING_ASPECT` | `9:16` | The default aspect ratio for a run. Six numeric ratios exist — `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `21:9` — but a run may only use one the chosen backend renders (see the matrix above; `kling-o3@fal` and `seedance-2.0@fal` render three, the rest render all six). `adaptive`/`auto` are deliberately not offered: the stitcher needs a deterministic ratio. |
 | `KLING_MULTI_SHOT` | `true` | one generation holds up to 6 shots vs one shot per generation. |
 | `KLING_GENERATE_AUDIO` | `true` | Kling's native synced sound (dialogue/SFX/ambience). |
@@ -335,7 +335,7 @@ Uncomment (remove the leading `#`) and set any of these to change a default:
 | `SEGMIND_UPLOAD_MODE` | follows your keys | `data-uri` (inline; needs no fal account) or `fal-storage` (fal CDN links; needs `FAL_KEY`). Defaults to `fal-storage` when a fal key exists, else `data-uri`. |
 | `SEGMIND_MAX_RETRIES` | `3` | **submit** attempts, and only before Segmind accepts the job — once it has, nothing re-POSTs (that would buy a second render). Polls retry on their own. |
 | `SEGMIND_SEEDANCE25_SLUG` / `SEGMIND_SEEDANCE20_SLUG` / `SEGMIND_TOPAZ_SLUG` | `seedance-2.5` / `seedance-2.0` / `topaz-video-upscale` | model slugs — copy each verbatim from the model's page on segmind.com. |
-| `UPSCALE_ENABLED` | `false` | upscale **every** render with Topaz (extra cost). |
+| `UPSCALE_ENABLED` | `false` | upscale **every sub-1080p clip of anything you finish from a terminal** with Topaz (extra cost) — every CLI render, and every `npm run assemble` too, as if `--upscale` were typed each time. Clips already at or above the target are skipped without an upload or a charge. **The web app ignores it**: it pins the flag off in the environment of every job it enqueues (plan, revise, render, probe, job re-render, assemble and the approve-time upscale — everything that can reach a render) and upscales only at approve, where you pick it, see the price first and get a cost-ledger row for it. Two of the app's children are deliberately left outside that pin, and neither can spend on an upscale: the `npm run doctor` button, whose job is to report what *your* `.env` says, so it answers about your box rather than about the app; and `mint-voice`, which mints a voice and renders no clip. |
 | `UPSCALE_PROVIDER` | `auto` | `auto` \| `fal` \| `segmind` — which Topaz runs it. `auto` = wherever the run rendered, falling back to whichever provider has a key. |
 | `UPSCALE_TARGET_RESOLUTION` | `1080p` | `720p`, `1080p` or `4k` — **Segmind Topaz only** (fal's takes a factor derived from the clip). `4k` is 4× the pixels and 4× the bill, so it only happens if you set it here. |
 | `FAL_TOPAZ_MODEL` | `Proteus` | fal Topaz upscale model (Segmind's Topaz has no model parameter). |

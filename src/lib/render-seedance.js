@@ -9,7 +9,8 @@
 //     NOT caps — they stay config-sourced here, exactly as they were.
 //   - `adapter` carries the provider TRANSPORT: `assetUrl(absPath, mode, {cache})` turns a local
 //     file into something the provider can fetch, and `generate(args, {endpoint, destDir,
-//     timeoutMs, onMeta})` runs the job and returns downloaded output paths, optionally reporting a
+//     timeoutMs, onSubmit, onMeta})` runs the job and returns downloaded output paths, calling
+//     `onSubmit` the instant the provider ACCEPTS the request and optionally reporting a completion
 //     receipt (request id, cost, credits left) through `onMeta`. Adapters are DEFINED BY THE
 //     PROVIDER BINDING, not here — fal's lives in fal-seedance.js, Segmind's in
 //     segmind-seedance.js — so this file imports no transport and `import('./render-seedance.js')`
@@ -31,7 +32,7 @@ import fs from 'node:fs';
 import config from '../../config.js';
 import log from './logger.js';
 import { refLabel } from './render-models.js';
-import { buildSeedanceArgs, fitAudioRef, audioWindowFor, nameOf } from './seedance-args.js';
+import { buildSeedanceArgs, cappedAudioRefs, cappedCombinedRefs, fitAudioRef, audioWindowFor, voiceRefsRide, nameOf } from './seedance-args.js';
 import { appliedSeamModes, chooseSeamMode, planSeamRefs } from './prompt-compose.js';
 import { readJobOverride } from './prompt-overrides.js';
 import { buildSeedanceJobPrompt, seedanceConfigFor, modelKnobs } from './seedance.js';
@@ -39,9 +40,8 @@ import { characterGroups, jobSpeakers } from './cast-groups.js';
 import { resolveImage } from './elements.js';
 import { getVoiceRefClip } from './voices.js';
 import { probeClip, extractAudio } from './assemble.js';
+import { paidClipOf, LAST_FRAME_FILE } from './queue-transport.js';
 import { slug } from './util.js';
-
-const oneMp4 = (outs) => outs.find((p) => /\.(mp4|mov|webm)$/i.test(p)) ?? outs[0];
 
 /**
  * Resolve one of the caps' route KEY NAMES against the provider's config block. The registry stores
@@ -77,9 +77,7 @@ async function audioRefsFor(job, spec, dir, caps) {
     if (clip) refs.push({ speaker: sp, clip });
     else log.warn(`[${job.job_id}] no voice ref clip for "${sp}" — ${caps.label} voices the line natively (mint one with: npm run mint-voice -- "${sp}" <clip>)`);
   }
-  if (refs.length > caps.maxAudioRefs) {
-    throw new Error(`job ${job.job_id}: ${refs.length} voiced speakers exceeds ${nameOf(caps)}'s ${caps.maxAudioRefs}-audio-ref cap — split the dialogue across jobs.`);
-  }
+  cappedAudioRefs(caps, job.job_id, refs.length);
   // The model's per-clip window, sized for how many refs share the combined budget. `maxS` is
   // today's budget/N for a model with no declared window; `minS` is 0 unless the model states one
   // (Segmind's Seedance 2.5 422s on a clip under 2s — a dropped ref costs a voice, a rejected
@@ -130,7 +128,10 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
   const knobs = config.seedance; // user-tunable settings, never model caps
   // …with the model's own block winning where it declares one (Seedance 2.5 renders 480p/720p only
   // and defaults to 720p, so it cannot share 2.0's resolution settings). Everything the model does
-  // not redeclare — style, avoid, textRule, voiceMode, uploadMode, promptMaxBytes — stays shared.
+  // not redeclare — voiceMode, uploadMode, probe resolution — stays shared. The PROMPT-shaped knobs
+  // (style, avoid, textRule, promptMaxBytes) run the same rule one layer down, inside
+  // buildSeedanceJobPrompt, which is handed `caps` for exactly that: the preview resolves them
+  // through the same function, and a model block only one half honoured is preview ≠ wire.
   const probeResolution = modelKnobs(caps)?.probeResolution ?? knobs.probeResolution;
   const mode = knobs.uploadMode;
 
@@ -161,21 +162,18 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
   // Counted exactly as the builder will see it — kept image refs, the demoted opening frame, and
   // the fitted voice clips (video refs are never authored today). audioRefsFor is hoisted here for
   // that count: it is local ffmpeg work (fit/transcode into the take dir), no upload — and the gate
-  // mirrors section 2's (planned refs or an opening frame, audio on, non-native voiceMode).
+  // is `voiceRefsRide`, the one the prompt preview asks too (see section 2).
   const plannedImages = Math.min(groups.reduce((n, g) => n + g.els.length, 0), caps.maxImages);
   const seam = chooseSeamMode({
     caps, castRefCount: plannedImages, hasSeamIn: !!startFrameSrc, hasSeamOut: !!endFrameSrc,
   });
-  const voiceRefs = ((plannedImages > 0 || startFrameSrc) && sdCfg.generateAudio && knobs.voiceMode !== 'native')
-    ? await audioRefsFor(job, spec, dir, caps) : [];
-  if (caps.maxCombinedRefs != null) {
-    // Only the CAST is checked here: a soft-pinned boundary frame is droppable (planSeamRefs drops
-    // it below), so counting it would fail a render that would have succeeded without its seam.
-    const combined = plannedImages + voiceRefs.length;
-    if (combined > caps.maxCombinedRefs) {
-      throw new Error(`${nameOf(caps)} accepts at most ${caps.maxCombinedRefs} references in total (images + audio + video) — ${combined} supplied.`);
-    }
-  }
+  const voiceRefs = voiceRefsRide({
+    castRefCount: plannedImages, hasSeamIn: !!startFrameSrc, hasSeamOut: !!endFrameSrc,
+    audioOn: sdCfg.generateAudio, voiceMode: knobs.voiceMode,
+  }) ? await audioRefsFor(job, spec, dir, caps) : [];
+  // Only the CAST is counted here: a soft-pinned boundary frame is droppable (planSeamRefs drops it
+  // below), so counting it would fail a render that would have succeeded without its seam.
+  cappedCombinedRefs(caps, { images: plannedImages, audio: voiceRefs.length });
 
   const castUrls = [];
   const castMeta = [];
@@ -240,9 +238,10 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
 
   // 2. Voice refs (@AudioN), only when audio is on AND voiceMode keeps the clip. In 'native' mode we
   //    attach NO clip and let the model voice the written line natively (see config.seedance.voiceMode).
-  //    A text-to-video job (no image refs) also voices natively: the endpoint requires audio refs to
-  //    ride ≥1 image/video ref, so with no images we attach no clip. The refs themselves were fitted
-  //    up top (pre-upload combined-budget check) — only the uploads happen here.
+  //    A text-to-video job also voices natively: the endpoint requires audio refs to ride ≥1
+  //    image/video ref, so with nothing to condition on we attach no clip — and a boundary frame at
+  //    EITHER end is such a thing (voiceRefsRide). The refs themselves were fitted up top (pre-upload
+  //    combined-budget check) — only the uploads happen here.
   const audioUrls = [];
   const audioIdx = new Map();
   for (const r of voiceRefs) {
@@ -256,22 +255,22 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
 
   // 3. ONE multi-shot prompt for the whole job (pure, unit-tested). A prompt override — the user's
   //    own words, snapshotted into THIS take dir before anything was submitted — replaces the shot
-  //    bodies only: the front matter, the seam pins laid out just above and the byte clamp are all
-  //    re-composed over it (applyOverride), so an edit can never cost the contract.
+  //    bodies only: the front matter, the seam pins laid out just above and (where a cap is set) the
+  //    byte clamp are all re-composed over it (applyOverride), so an edit can never cost the
+  //    contract. The clause/budget knobs are NOT passed here: `caps` is, and the settings merge
+  //    behind it reads this model's own block then the shared `seedance` one — the same call the
+  //    preview makes, so the two cannot resolve a knob differently.
   const override = readJobOverride(runDir, job.job_id);
   const { prompt, shotPrompts, totalDuration, promptSource } = buildSeedanceJobPrompt(job, spec, {
     override,
+    caps,
     refGroups,
     audioRefFor,
     startFrameRef,
     endFrameRef,
-    style: knobs.style,
-    avoidClause: knobs.avoid,
-    textClause: knobs.textRule,
     feedback, // per-take director note ("Director note: …" in the prompt front matter)
     nonce,
     shotSyntax: caps.shotSyntax, // how THIS model wants its shots joined (undefined ⇒ connectors)
-    maxBytes: knobs.promptMaxBytes,
   });
 
   const args = buildSeedanceArgs({
@@ -307,10 +306,15 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
   const sidecarPath = path.join(dir, 'prompts.json');
   const sidecar = {
     job_id: job.job_id,
-    // schema:2 adds the seam lineage below. Continuity has to be a RECORDED FACT: knowing that a
+    // schema:2 added the seam lineage below. Continuity has to be a RECORDED FACT: knowing that a
     // seam frame was used says nothing about WHICH CLIP it came from, and a cut that mixes take 2's
     // K1 with take 1's K2 looks exactly like an intact chain without it.
-    schema: 2,
+    // schema:3 adds `submitted_at` — see below.
+    schema: 3,
+    // Stamped only when the provider ACCEPTS the request, and never rewritten. Its absence on a
+    // schema-3 sidecar is the record that this take was composed but never sent (a missing key, a
+    // rejected payload), which is what keeps "sent" out of the prompt sheet for a take nobody sent.
+    submitted_at: null,
     backend: caps.id, // the canonical `<model>@<provider>` — same vocabulary as spec.render_backend
     // and render.json, so the sidecar answers "which MODEL produced this clip?" once two Seedance
     // models ship (the family token could not).
@@ -351,6 +355,13 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
   };
   writeSidecar();
 
+  // `onSubmit` is the provider ACCEPTING the request — the only moment at which this take can
+  // honestly be called sent. It is stamped ONCE and never moved: on Segmind the receipt below
+  // arrives when the job COMPLETES, so writing the time there would date a twenty-minute render to
+  // its finish; a resubmit after a transient failure is this take's second attempt, not a new
+  // sending. Its absence is meaningful too — that is how the prompt sheet tells a take that reached
+  // the provider from one that died on a missing key with its prompt already on disk.
+  //
   // `onMeta` is the provider's receipt for a PAID job — Segmind returns a request id plus the
   // cost/credits ledger, which lands in the sidecar as soon as the job completes (before the output
   // download, so a failed download still leaves the record of what was bought). fal issues no
@@ -359,6 +370,12 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
     endpoint,
     destDir: dir,
     timeoutMs: 1200000,
+    onSubmit: (meta) => {
+      // The id follows the attempt that is actually running; the TIME does not move.
+      sidecar.request_id = meta?.requestId ?? null;
+      if (!sidecar.submitted_at) sidecar.submitted_at = new Date().toISOString();
+      writeSidecar();
+    },
     onMeta: (meta) => {
       if (!meta) return;
       sidecar.request_id = meta.requestId ?? null;
@@ -367,11 +384,13 @@ export async function renderSeedanceJob({ job, spec, runDir, seed, lowRes = fals
       writeSidecar();
     },
   });
-  const clip = oneMp4(outs);
+  // By ROLE, not by suffix: a provider is free to serve the video from an extensionless CDN url, and
+  // reading the courtesy still as the clip would stitch a PNG into the cut.
+  const clip = paidClipOf(outs);
   // The provider's own closing still, if we asked for one and it came back. The transport saves it
   // AS last_frame.png (queue-transport's `saveAs`), never under the CDN's own content-hashed name —
   // that is what makes this match hold against a real provider and not just against the mocks.
-  const providerLastFrame = outs.find((p) => path.basename(p) === 'last_frame.png') ?? null;
+  const providerLastFrame = outs.find((p) => path.basename(p) === LAST_FRAME_FILE) ?? null;
   log.info(`[${job.job_id}] clip -> ${clip}`);
   return {
     jobId: job.job_id, clip, totalDuration, segments: shotPrompts.length,

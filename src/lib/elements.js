@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import config, { ROOT, resolvePath } from '../../config.js';
 import { slug } from './util.js';
+import { refBelongsTo } from './cast-refs.js';
 
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp']);
 
@@ -46,15 +47,61 @@ export function buildInventory() {
   return out;
 }
 
-/** A human-readable inventory listing for injection into an agent prompt. */
-export function inventoryText(inv = buildInventory()) {
+/** Every character slug this install knows about (profiles/<slug>.md, the same files the cast page
+ *  lists). It is the ROSTER reference ownership is resolved against: slugs prefix one another, and
+ *  only the longest match owns a file (cast-refs.js). No readable profiles dir = no roster, which is
+ *  the pre-profiles reading — each name owns its own prefix and nothing else claims it. */
+export function knownCastSlugs() {
+  try {
+    return fs.readdirSync(resolvePath(config.engine.profilesDir))
+      .filter((f) => f.endsWith('.md'))
+      .map((f) => slug(path.basename(f, '.md')))
+      .filter(Boolean);
+  } catch { return []; }
+}
+
+/** Every reference-type inventory entry linked to `name` (inventory order = sorted filenames).
+ *  `knownSlugs` is the roster ownership is resolved against — the profiles on disk by default, and
+ *  the caller's own where it knows more (the engine adds the starred cast and the plan's own
+ *  characters). Never one name at a time: that is what let "ann-marie-01" answer for "ann". */
+export function characterRefs(inv, name, knownSlugs = knownCastSlugs()) {
+  const c = slug(String(name ?? ''));
+  if (!c) return [];
+  return inv.filter((e) => e.type === 'reference' && refBelongsTo(e.id, c, knownSlugs));
+}
+
+/**
+ * A human-readable inventory listing for injection into an agent prompt. `castNames` (the starred
+ * cast) groups the reference section per character, with a count — the Casting agent's STARRED-cast
+ * rule needs to SEE the full set to attach the full set (a flat list undersells a character whose
+ * seven views sit between other files).
+ *
+ * `knownSlugs` is the roster that decides who owns which file (see characterRefs) — the grouping the
+ * agent reads has to name the same owner the top-up and the renderer will.
+ */
+export function inventoryText(inv = buildInventory(), { castNames = [], knownSlugs = knownCastSlugs() } = {}) {
   if (!inv.length) return '(no element images found — add files under elements/references, elements/first-frame, elements/last-frame)';
   const byType = { reference: [], first_frame: [], last_frame: [] };
   for (const e of inv) byType[e.type]?.push(e);
-  const section = (label, list) =>
-    !list.length ? '' : `\n${label}:\n` + list.map((e) => `  - id: ${e.id}  file: ${e.file}${e.description ? `  — ${e.description}` : ''}`).join('\n');
+  const line = (e) => `  - id: ${e.id}  file: ${e.file}${e.description ? `  — ${e.description}` : ''}`;
+  const section = (label, list) => (!list.length ? '' : `\n${label}:\n` + list.map(line).join('\n'));
+  const REF_LABEL = 'REFERENCE IMAGES (Elements — pin subject/object/style; the per-job cap is the Hard caps line above)';
+  let refSection = section(REF_LABEL, byType.reference);
+  if (castNames?.length && byType.reference.length) {
+    const claimed = new Set();
+    const parts = [];
+    for (const name of castNames) {
+      const refs = characterRefs(inv, name, knownSlugs);
+      for (const r of refs) claimed.add(r.id);
+      parts.push(`  ${name} — STARRED cast, ${refs.length} reference image${refs.length === 1 ? '' : 's'}:` +
+        (refs.length ? `\n${refs.map(line).join('\n')}` : ' (none on disk)'));
+    }
+    const rest = byType.reference.filter((e) => !claimed.has(e.id));
+    if (rest.length) parts.push(`  Other references (attach by relevance only):\n${rest.map(line).join('\n')}`);
+    refSection = `\n${REF_LABEL}:\n${parts.join('\n')}`;
+  }
   return [
-    section('REFERENCE IMAGES (Elements — pin subject/object/style; the per-job cap is the Hard caps line above)', byType.reference),
+    refSection,
     section('FIRST-FRAME seeds (optional opening frame)', byType.first_frame),
     section('LAST-FRAME seeds (optional closing frame — requires a first frame)', byType.last_frame),
   ].filter(Boolean).join('\n');
@@ -68,4 +115,4 @@ export function resolveImage(image) {
   return abs;
 }
 
-export default { buildInventory, inventoryText, resolveImage };
+export default { buildInventory, inventoryText, resolveImage, knownCastSlugs, characterRefs };

@@ -10,7 +10,7 @@ import { newManifest, writeManifest, readManifest, updateManifest } from './web-
 import { scanRun, listRuns, defaultIsAlive, finalizedFinal } from './run-scan.js';
 import { createRingLog } from './ring-log.js';
 import { watchRun } from './artifact-watch.js';
-import { estimateRender, estimateUpscale, readProbeResolution, readRenderResolution, readUpscaleProvider } from './estimator.js';
+import { estimateRender, estimateUpscale, readEnvVar, readProbeResolution, readRenderResolution, readUpscaleKnobs, readUpscaleMaxFactor, readUpscaleModel, readUpscaleProvider, readUpscaleTargetShortSide, takeUpscaleClips } from './estimator.js';
 import { safeChild } from './paths.js';
 // Both config-free by construction (the runs-caps canary walks this graph): the continuity rule is a
 // pure function over a run record, and the model registry imports nothing at all.
@@ -19,6 +19,16 @@ import { capsFor, normalizeBackend } from '../../../src/lib/render-models.js';
 // The cast count the seam rule reads, from the module that owns the rule — a job with no elements
 // of its own inherits the WHOLE roster, and that subtlety is worth deriving in exactly one place.
 import { castRefCountFor } from '../../../src/lib/seam-rule.js';
+// …and the OTHER half of that budget on a model that spends ONE pool on every kind of reference:
+// the voice clips a job will attach. All three are config-free (spec reading, slugging, and a
+// voices dir read as data), so the canary still holds.
+import { jobSpeakers } from '../../../src/lib/cast-groups.js';
+import { slug } from '../../../src/lib/util.js';
+// The CLI's OWN sidecar validator — the module render.js/render-job.js re-read prompt-overrides.json
+// with. Imported rather than re-stated so the pre-flight below and the child cannot disagree about
+// what "malformed" means; config-free like the rest of this graph (node:fs + node:path, nothing else).
+import { validatePromptOverrides } from '../../../src/lib/prompt-overrides.js';
+import { voiceRefCountsFor } from './voice-refs.js';
 // config-FREE import: run-service is loaded eagerly by app.js, and the demo/e2e server sets FAL_BASE_URL
 // only AFTER its static import chain — importing anything that pulls config.js here would snapshot the
 // wrong (real) fal endpoint and make the validators/renders miss the mock.
@@ -45,13 +55,33 @@ const ledgerLine = (est) => ({
   ...(est?.unknownPrice ? { unpriced: true } : {}),
 });
 
-export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr, bus, isAlive = defaultIsAlive, now = () => new Date() }) {
+export function createRunService({ root, runsDir, outDir, envRoot, voicesFile, childEnv, mgr, bus, isAlive = defaultIsAlive, now = () => new Date() }) {
   // Seedance price scales with resolution, and the knob is per model (2.5 has its own) — so the
-  // ledger records what THIS run's backend will actually be billed for.
-  const estOpts = (backend) => ({
+  // ledger records what THIS run's backend will actually be billed for. The per-run pick travels as
+  // its own field rather than pre-collapsed into `resolution`: the estimator ranks it the way the
+  // render child does (above a spec pin, which only outranks the .env value) and the two cannot
+  // disagree because they run the ONE function. Probes ride the separate probe knob either way.
+  //
+  // `resolution`/`probeResolution` are the CONFIGURED defaults, and they are deliberately left for
+  // the child to read again at spawn — the one value here that is not pinned into the render child.
+  // That is the recorded contract, not an oversight: a run that made no per-run pick recorded the
+  // intent "render at whatever this box is configured for", and the .env is where that lives. The
+  // per-run PICK is the decision, and it IS pinned (resolutionOverride, on every spawn), so it can
+  // never be out-resolved. The probe knob has no per-run pick at all and so is always the .env's.
+  const estOpts = (backend, pick) => ({
+    pick: pick || null,
     resolution: readRenderResolution(envRoot ?? root, backend, childEnv),
     probeResolution: readProbeResolution(envRoot ?? root, backend, childEnv),
   });
+  // The voices dir this server SERVES (same default as app.js). It is only the FALLBACK for the
+  // budget below: what the render child really reads is VOICES_DIR out of the run's environment, so
+  // voice-refs.js ranks the two in the child's order (childEnv, then the .env, then this). An
+  // isolated voicesFile still wins — app.js mirrors it into childEnv.VOICES_DIR, so it arrives
+  // through the reader the child itself obeys.
+  const servedVoicesDir = path.dirname(voicesFile ?? path.join(root, 'voices', 'voices.json'));
+  // One reader over the run's environment, as DATA (never sourced) — childEnv beats <envRoot>/.env,
+  // exactly as dotenv leaves an already-set variable alone in the spawned child.
+  const envGet = (key) => readEnvVar(envRoot ?? root, key, childEnv);
   const ringLogs = new Map();   // runId → ring log
   const watchers = new Map();   // runId → watcher
   const announced = new Map();  // runId → Set<artifact rel> already sent to clients — persists across watcher restarts so a spec block is never lost to a startup race nor re-announced
@@ -73,7 +103,113 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     return ringLogs.get(runId);
   };
   const dirFor = (runId) => safeChild(runsDir, runId);
-  const env = () => ({ ...childEnv, RUNS_DIR: runsDir, OUT_DIR: outDir });
+  /**
+   * The environment every job this service enqueues runs in — the one choke point where a decision
+   * the app already made is put beyond a child's reach. Every mgr.enqueue below builds its `env`
+   * from this call and nothing else, which covers plan, revise, render, probe, job re-render,
+   * assemble and the approve-time upscale: every child that can reach a render, and so every child
+   * that can spend on one. The pins come LAST on purpose: a host or a test may hand us a childEnv,
+   * and a per-run pick may ride in resolutionOverride, but neither may out-resolve a value the app
+   * is answerable for.
+   *
+   * Two children the SERVER spawns are outside this function, and both are meant to be. POST
+   * /api/doctor (routes/setup.js) runs src/cli/doctor.js on the box's own environment on purpose:
+   * doctor's entire job is to report what THIS machine's `.env` says, so a doctor handed the app's
+   * pin would tell you the flag is off while `npm run doctor` in a terminal on the same box, reading
+   * the same file, told you it is on — the report would be about us instead of about you. And
+   * routes/cast.js enqueues src/cli/mint-voice.js, which mints a voice and never renders a clip, so
+   * there is no upscale in it to suppress. Those two are licensed BY CHILD, not by file, in
+   * web/server/test/integration/upscale-flag-pin.test.js: setup.js may spawn doctor.js and cast.js
+   * may enqueue mint-voice.js, and each licence clears that one pair and nothing else, so a second,
+   * different child added inside either of those same two files turns that suite red and names both
+   * the file and what it starts.
+   *
+   * Worth being exact about what that canary is, because three rounds of it were exact about the
+   * wrong thing. It does not try to RECOGNISE a paid spawn — that is a losing game, since the ways to
+   * spell a path are not a finite set, and each version that tried was beaten by one more spelling.
+   * It casts a coarse text net instead: any enqueue/spawn/execFile/fork under web/server, plus any
+   * repo-CLI path in any spelling it can cheaply detect, and every single catch must then be either
+   * provably built from this function or named in its EXEMPT map with the reason it cannot spend.
+   * False positives are the cheap direction and it leans that way on purpose. What it still cannot
+   * hold is worth saying plainly, since a scanner over source text is all it is: a callee computed at
+   * runtime, a spawn reached through a dependency, work handed to a shell, or a helper in a file it
+   * does not read all walk straight past it. Its job is the ordinary mistake — the next lane that
+   * copies the wrong neighbour's `env:` — not an adversary. The adversary's job belongs to review.
+   *
+   * UPSCALE_ENABLED is pinned OFF because it is a CLI convenience with no honest meaning in here:
+   * it means "act as if `--upscale` had been typed on every run", which is a fine thing to want from
+   * a terminal, where the person typing the command is the person choosing to spend. This app never
+   * offers that bargain. Its upscale is the one at approve — explicitly asked for, priced before the
+   * button is pressed, billed to the vendor approve resolved, and written into the run's cost ledger
+   * (see enqueueAssemble below). Without this pin a spawned child re-reads `.env` for itself at
+   * startup and finds the flag we never passed it, and paid Topaz then runs in two places the money
+   * was never accounted for: on the auto-assemble the app labelled lane 'free' and shows as "Finish
+   * free", which writes no ledger row at all, and on top of every full render, whose estimate and
+   * whose ledger row priced the render ALONE. Unpriced, unrecorded and mislabelled, three ways of
+   * saying the same thing — the user is charged for something nobody quoted them.
+   *
+   * The pin BEATS that `.env` because `dotenv/config` (config.js:7) loads with override:false, so a
+   * variable already present in the child's process.env is left exactly as it was handed over.
+   * Nothing here re-reads `.env` to compare — the whole guarantee is that dotenv declines to
+   * overwrite us. Swap that entrypoint for one that overrides (dotenvx, or an explicit
+   * dotenv.config({ override: true })) and every pin in this object silently stops meaning anything,
+   * which is why web/server/test/integration/upscale-flag-pin.test.js spawns a REAL child against a
+   * REAL .env that says true and asserts the child's own config still answers false.
+   *
+   * That default is the first of THREE switches on the same decision, and the other two are live
+   * wires worth naming, because neither is visible at the call site here. `dotenv/config` merges its
+   * options from lib/env-options.js, which reads DOTENV_CONFIG_OVERRIDE straight out of the child's
+   * environment, and from lib/cli-options.js, which regex-matches every bare element of the child's
+   * process.argv against ^dotenv_config_(encoding|path|quiet|debug|override|DOTENV_KEY)=(.+)$ (that
+   * is dotenv 16.6.1's own pattern, `quiet` included). Either one flips override to true and the
+   * `.env` wins over everything below.
+   *
+   * Both are unreachable, and structurally rather than carefully — which is the only reason it is
+   * safe to leave them unguarded. The variable has no channel: server.js builds childEnv as a strict
+   * allowlist (PATH/HOME/USER/LOGNAME/TERM/TMPDIR), so there is nothing for a DOTENV_CONFIG_OVERRIDE
+   * to ride in on. The argv element has no author: on the lanes whose child can actually reach
+   * finishRender — render.js and assemble.js — every argument is a path we built or an --out-name
+   * from outNameFor, which runs through slugify and turns '=' into '-'. Free text does reach argv on
+   * other lanes (a --brief, a --feedback), but engine.js is only ever asked to plan here and neither
+   * render-job.js nor revise.js calls finishRender, so none of them has a clip to upscale. Add a
+   * free-text argument to render.js or assemble.js, or a --render to the plan lane, and that second
+   * reason evaporates — which is what the "three switches" test in the file above is for. It asks
+   * that question of the SHAPE of every argument those lanes build (a flag from a closed list, a path
+   * inside the run, or a slug) rather than of the text a fixture happened to drive, because the
+   * earlier payload-matching version of it let exactly such an argument through.
+   *
+   * Approve is untouched by this. That path passes `--upscale` in argv, and the child's own test is
+   * `if (upscale || config.upscale.enabled)` (src/lib/pipeline.js) — the flag is never even read
+   * when the argument is there. The pin removes the SILENT upscale and only that one.
+   *
+   * 'false' rather than '': both read as off (envBool maps '' to the default, and the default here
+   * is false), but the literal says what it means at a glance and survives a platform that drops
+   * empty-valued variables.
+   */
+  const env = (runId) => ({
+    ...childEnv, ...resolutionOverride(runId),
+    RUNS_DIR: runsDir, OUT_DIR: outDir, UPSCALE_ENABLED: 'false',
+  });
+
+  /**
+   * The per-run resolution pick, as the .env knob THIS run's model actually reads
+   * (caps.resolutionEnv — KLING_RESOLUTION / SEEDANCE_RESOLUTION / SEEDANCE25_RESOLUTION). Applied
+   * to EVERY child spawn: dotenv never overwrites an existing variable, so the pick governs the
+   * plan context, the render, every revise and every re-render without touching the user's .env.
+   * Empty when the run never picked one — the configured default governs, exactly as before.
+   *
+   * RENDER_RESOLUTION_PICK carries the SAME value a second time, and the two are written here in
+   * one place so they can never disagree. It is what marks the tier as a deliberate per-run CHOICE:
+   * on the knob alone a pick is indistinguishable from a .env default, and a spec.seedance.resolution
+   * pin outranked .env defaults — so a plan that carried a pin rendered and billed at the pinned
+   * tier instead of the picked one. The child ranks the pick first (seedanceResolution).
+   */
+  function resolutionOverride(runId) {
+    const m = readManifest(dirFor(runId));
+    if (!m?.resolution) return {};
+    const key = capsOf(m.backend)?.resolutionEnv;
+    return key ? { [key]: m.resolution, RENDER_RESOLUTION_PICK: m.resolution } : {};
+  }
 
   /** Queued/active manager jobs for one run — memory truth the disk scan can't see. */
   const liveJobsFor = (runId) => {
@@ -257,7 +393,12 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
       const chosenCut = pendingApprove.get(runId) ?? null; // the cut approve() upscaled (null ⇒ latest, the default)
       pendingApprove.delete(runId);
       updateManifest(dir, (m) => recordFinal(m, {
-        cut: chosenCut ?? m.cuts.at(-1)?.id ?? null, final: result.master ?? null, upscaled: true, ...stitchFields(result), at: now().toISOString(),
+        cut: chosenCut ?? m.cuts.at(-1)?.id ?? null, final: result.master ?? null, upscaled: true,
+        // The DELIVERED size, measured off the file that was written (finishRender probes the master
+        // after Topaz ran), not the source cut's — a 480p cut upscaled to 1080p is a 1080p delivery,
+        // and the cut it came from keeps saying 480p forever.
+        shortSide: result.masterShortSide ?? null,
+        ...stitchFields(result), at: now().toISOString(),
       }));
       return;
     }
@@ -274,9 +415,18 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     return { stitcher: s.stitcher, joints: s.joints ?? 0, matched: s.matched ?? 0 };
   }
 
+  /**
+   * A map keyed by JOB ID, with NO prototype. A job id is whatever the plan called it, and on a
+   * plain `{}` the assignment `map['__proto__'] = clip` hits Object.prototype's setter: no own key
+   * appears, so the clip is silently dropped from every cut. (Object spread would put the prototype
+   * back, so a copy goes through here too. JSON.parse defines `__proto__` as an ordinary own key,
+   * which is why a manifest read off disk copies across intact.)
+   */
+  const jobMap = (from) => Object.assign(Object.create(null), from);
+
   /** Track the newest clip per job id — the composition source for mixed cuts. */
   function mergeJobClips(m, jobs) {
-    m.jobClips = m.jobClips ?? {};
+    m.jobClips = jobMap(m.jobClips);
     for (const j of jobs ?? []) {
       const id = j.jobId ?? j.job;
       if (id && j.clip) m.jobClips[id] = j.clip;
@@ -297,7 +447,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
    * per-joint verdict is computed from them by lib/lineage.js, never stored.
    */
   function mergeLineage(m, jobs) {
-    m.clipLineage = m.clipLineage ?? {};
+    m.clipLineage = jobMap(m.clipLineage);
     for (const j of jobs ?? []) {
       const id = j.jobId ?? j.job;
       if (!id || !j.clip) continue; // a failed job replaces nothing — its predecessor's lineage stands
@@ -333,17 +483,35 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
   /** The model registry's caps for a backend, or null when the run names one we no longer know. */
   const capsOf = (backend) => { try { return capsFor(normalizeBackend(backend).id); } catch { return null; } };
 
+  /**
+   * Per job, the references its voice clips will spend out of a COMBINED reference budget — `null`
+   * on every model that publishes per-kind caps instead. The seam rule has to subtract it before it
+   * promises a boundary pin (a voice clip is never dropped, a soft pin always is), and the browser
+   * cannot read the voices dir, so this same map also rides the run payload for the dialog.
+   */
+  const voiceRefsFor = (spec, backend) => voiceRefCountsFor(spec, {
+    caps: capsOf(backend),
+    speakersOf: (job) => (Array.isArray(job?.shots) ? jobSpeakers(job, spec) : []),
+    voicesDir: servedVoicesDir,
+    root,
+    slug,
+    get: envGet,
+  });
+
   /** Write a full-composition render.json into takeDir: every spec job's newest clip, in order. */
   function composeCut(runId, takeDir) {
     const dir = dirFor(runId);
     const spec = readJson(path.join(dir, 'spec.json'));
     const m = readManifest(dir);
     if (!spec || !m?.jobClips) return;
-    // Each clip carries its OWN seams into the composition, read from the take it was rendered in
-    // (cached per take dir — a composition of N jobs usually spans one or two takes). Dropping them
-    // here is what made every mixed cut indistinguishable from an intact chain.
+    // Each clip carries its OWN seams — and its own measured frame and duration — into the
+    // composition, read from the take it was rendered in (cached per take dir — a composition of N
+    // jobs usually spans one or two takes). Dropping the seams here is what made every mixed cut
+    // indistinguishable from an intact chain; dropping the measurements would leave this cut's
+    // upscale quote reading the CURRENT plan for clips rendered from older ones, which is precisely
+    // what a composition mixes, until the assemble child re-probes and rewrites the record.
     const takeJobs = new Map();
-    const seamsFor = (jobId, clip) => {
+    const carriedFor = (jobId, clip) => {
       const takeId = takeOfClip(clip);
       const takeDirOf = clip ? path.dirname(path.dirname(String(clip))) : null;
       if (takeDirOf && !takeJobs.has(takeDirOf)) {
@@ -354,15 +522,23 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
       // The manifest's own record is the fallback for a take whose render.json is gone or predates
       // the composition (the CLI writes it before the web layer ever sees the take).
       const fb = m.clipLineage?.[jobId];
+      // The frame and the duration are facts about the clip FILE, so they travel with the clip
+      // whatever take it came from — the composed take's spec is the CURRENT plan, and a revision
+      // that re-timed a shot makes it a liar about every clip the cut kept. Nothing derives either,
+      // and an unmeasured clip stays unmeasured (which prices UP: dearest tier, plan seconds).
+      const [width, height] = [Number(rec?.width) || 0, Number(rec?.height) || 0];
+      const duration = Number(rec?.duration) || 0;
       return {
         take: takeId ?? fb?.take ?? null,
         seamIn: rec?.seamIn ?? (fb?.take === takeId ? fb?.seamIn : null) ?? null,
         seamOut: rec?.seamOut ?? (fb?.take === takeId ? fb?.seamOut : null) ?? null,
+        ...(width && height ? { width, height } : {}),
+        ...(duration > 0 ? { duration } : {}),
       };
     };
     const jobs = (spec.kling?.jobs ?? []).map((j) => {
       const clip = m.jobClips[j.job_id] ?? null;
-      return { jobId: j.job_id, clip, ...seamsFor(j.job_id, clip) };
+      return { jobId: j.job_id, clip, ...carriedFor(j.job_id, clip) };
     });
     const existing = readJson(path.join(takeDir, 'render.json')) ?? {};
     // Composition BREAKS the run-wide seam lineage: these clips come from different takes, so a
@@ -372,6 +548,17 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     // cleared, not spread. The per-JOINT truth now lives in each job's seamIn/seamOut above —
     // `chained` stays only so readers written before those fields keep behaving exactly as they did.
     fs.writeFileSync(path.join(takeDir, 'render.json'), JSON.stringify({ ...existing, project: spec.project?.title, composed: true, chained: false, jobs }, null, 2) + '\n');
+    // The manifest mirror follows the SELECTED clips too: `boundaries:'auto'` on a later re-render
+    // mirrors m.clipLineage, and a manual cut reaching back to an older take would otherwise leave
+    // it describing the NEWEST take's seams — auto would then pin the wrong boundary against the
+    // wrong neighbour. Same shape as mergeLineage writes; a jobless clip replaces nothing.
+    updateManifest(dir, (mm) => {
+      mm.clipLineage = jobMap(mm.clipLineage); // never `{}`: a job named `__proto__` writes to the setter
+      for (const rec of jobs) {
+        if (!rec.clip) continue;
+        mm.clipLineage[rec.jobId] = { take: rec.take, seamIn: rec.seamIn ?? null, seamOut: rec.seamOut ?? null };
+      }
+    });
   }
 
   // Take numbers are NEVER reused: lowest-free once resurrected a deleted t2 AFTER t3 existed,
@@ -397,35 +584,60 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     return `${slugify(spec?.project?.title)}-${short}${suffix ? `-${suffix}` : ''}`;
   }
 
-  function enqueueAssemble(runId, fromDir, { upscale = false, suffix } = {}) {
+  /** The .env knobs the finalize child must NOT re-derive — approve PRICES the ledger row from
+   *  these exact values, so the child has to SPEND on them. Which knobs, why an unset one is pinned
+   *  as '' and why the pin normalizes the value it carries all live with the reader that builds the
+   *  map (estimator.readUpscaleKnobs), because the estimate endpoint prices through the same one. */
+  const upscaleKnobsFor = (provider) => readUpscaleKnobs(envRoot ?? root, provider, childEnv);
+
+  function enqueueAssemble(runId, fromDir, { upscale = false, suffix, upscaleProvider = null, upscaleKnobs = null } = {}) {
     const dir = dirFor(runId);
     const spec = readJson(path.join(dir, 'spec.json'));
     return mgr.enqueue({
       runId, lane: upscale ? 'spend' : 'free', kind: upscale ? 'upscale' : 'assemble',
       script: CLI(root, 'assemble.js'),
       args: ['--from', fromDir, '--out-name', outNameFor(runId, spec, suffix ?? (upscale ? 'final' : null)), ...(upscale ? ['--upscale'] : [])],
-      env: env(), cwd: root,
+      // The vendor APPROVE ALREADY RESOLVED rides as UPSCALE_PROVIDER for THIS child only — an env
+      // var already present is never overwritten by the child's dotenv, so it cannot be out-resolved
+      // by .env or 'auto'. Callers pass the resolved value, never the raw request field: the child
+      // must bill whoever the key check validated, the estimate quoted and the ledger row recorded,
+      // and a second derivation down here could answer differently (an .env edited between approve
+      // and spawn, or a typo'd UPSCALE_PROVIDER that only throws once the money row is written).
+      // `upscaleKnobs` rides for exactly the same reason and from exactly the same resolution: the
+      // vendor alone was never the whole decision — the target, the model and the factor cap PRICE
+      // the row too (see upscaleKnobsFor).
+      env: { ...env(runId), ...(upscale && upscaleProvider ? { UPSCALE_PROVIDER: upscaleProvider, ...upscaleKnobs } : {}) }, cwd: root,
     });
   }
 
   function enqueueRenderJob(runId, { jobId, takeDir, seamFrom, firstFrameFrom, lastFrameFrom, feedback, take, promptOverrides }) {
-    const dir = dirFor(runId);
     return mgr.enqueue({
       runId, lane: 'spend', kind: 'render-job',
       script: CLI(root, 'render-job.js'),
       args: [
-        '--spec', path.join(dir, 'spec.json'), '--job', jobId, '--out', takeDir,
+        // The take's OWN plan — snapshotted by snapshotSpec before this take cost anything — never
+        // the run's live spec.json, which a revision landing on the plan lane can replace while this
+        // job is still queued. A cascade job enqueued later reads the same frozen copy, so every
+        // segment of one chain renders one plan.
+        '--spec', path.join(takeDir, 'spec.json'), '--job', jobId, '--out', takeDir,
         // --seam-from names the take the opening frame came off (that is what makes the joint
         // readable afterwards); --first-frame-from names the frame itself, so the boundary the user
         // chose is honoured however the chaining default is configured.
         ...(seamFrom ? ['--seam-from', seamFrom] : []),
-        ...(firstFrameFrom ? ['--first-frame-from', firstFrameFrom] : []),
-        ...(lastFrameFrom ? ['--last-frame-from', lastFrameFrom] : []),
+        // EVERY end of a paid re-render is decided here, out loud: pinned to a named frame, or
+        // CLEARED. An omitted --first-frame-from/--last-frame-from reads as "preserve" in the
+        // renderers, which is right for a FULL render (an authored job.first_frame/last_frame is the
+        // documented way to seed a job) and wrong here — the user was shown, per boundary and before
+        // paying, what each end would do, and a spec-authored frame would silently condition a join
+        // the dialog just called a scene cut. This is also what lets a cascade rebuild its chain
+        // across a job the spec seeded: the cleared opening falls through to --seam-from.
+        ...(firstFrameFrom ? ['--first-frame-from', firstFrameFrom] : ['--no-first-frame']),
+        ...(lastFrameFrom ? ['--last-frame-from', lastFrameFrom] : ['--no-last-frame']),
         ...(feedback ? ['--feedback', feedback] : []),
         ...(take ? ['--take', String(take)] : []),
         ...(promptOverrides ? ['--prompt-overrides', promptOverrides] : []),
       ],
-      env: env(), cwd: root,
+      env: env(runId), cwd: root,
     });
   }
 
@@ -464,20 +676,51 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     }
   }
 
+  /**
+   * Freeze the plan this take is PAID to render into the take dir, and hand back the path the child
+   * will read.
+   *
+   * The estimate, the take's `estUsd`, the cost-ledger row, `promptSource` and the recorded
+   * `revision` are all computed from the spec read HERE, at enqueue — while the child re-read the
+   * run's live spec.json at spawn. Those are not the same document: a revise runs on the PLAN lane,
+   * which drains beside the spend lane, so a revision landing while a render waits its turn promotes
+   * a new spec.json under a take that was quoted, recorded and labelled against the old one. The
+   * child then renders jobs nobody priced, for a figure nobody was shown, in a take whose record
+   * names the revision it did NOT render.
+   *
+   * The take is immutable, so it gets its own copy — exactly as its prompt overrides do, at the same
+   * moment and for the same reason. (Both render children write this same file themselves when they
+   * finish; writing it here just makes it true from the moment the money is committed, which is also
+   * what lets an interrupted take still say what it was going to render.)
+   */
+  function snapshotSpec(takeDir, spec) {
+    const file = path.join(takeDir, 'spec.json');
+    fs.writeFileSync(file, JSON.stringify(spec, null, 2) + '\n');
+    return file;
+  }
+
   function snapshotPromptOverrides(dir, takeDir, jobIds) {
     const src = path.join(dir, OVERRIDES_FILE);
     if (!fs.existsSync(src)) return { args: [], promptSource: 'plan' };
     const unusable = (why) => Object.assign(new Error(`this run's saved prompt edits are unusable (${why})`), {
       statusCode: 409, hint: 'discard the edited prompt (or fix prompt-overrides.json) — rendering the plan instead would spend money on words you replaced',
     });
+    let raw;
+    try { raw = JSON.parse(fs.readFileSync(src, 'utf8')); } catch { throw unusable(`${OVERRIDES_FILE} is not readable JSON`); }
+    // The ENTRIES, not just the container: `{"prompt":123}` or a non-string segment parses fine and
+    // holds a jobs object, but the child re-reads this same file through readPromptOverrides and
+    // refuses it. Checked only for shape here, a take was reserved, a cost-ledger row written and a
+    // PAID child queued to die on the same bytes — a 409 the caller could act on became a failed
+    // render and a bogus take in the run's history. One validator, so the two cannot disagree.
     let jobs;
-    try { jobs = JSON.parse(fs.readFileSync(src, 'utf8'))?.jobs; } catch { throw unusable(`${OVERRIDES_FILE} is not readable JSON`); }
-    if (!jobs || typeof jobs !== 'object' || Array.isArray(jobs)) throw unusable(`${OVERRIDES_FILE} has no jobs object`);
+    try { jobs = validatePromptOverrides(raw, OVERRIDES_FILE).jobs; } catch (e) { throw unusable(String(e?.message ?? e)); }
     const dest = path.join(takeDir, OVERRIDES_FILE);
     try { fs.copyFileSync(src, dest); } catch (e) { throw unusable(`it could not be snapshotted into the take — ${String(e?.message ?? e).slice(0, 80)}`); }
     // 'override' only when an edit really reaches one of the jobs being rendered — a sidecar that
-    // only holds K1's edit must not label a K2-only re-render as edited.
-    return { args: ['--prompt-overrides', dest], promptSource: jobIds.some((id) => jobs[id]) ? 'override' : 'plan' };
+    // only holds K1's edit must not label a K2-only re-render as edited. `Object.hasOwn`, never a
+    // bracket read: the validated map has no prototype, but a job the plan called `hasOwnProperty`
+    // would still shadow the lookup on any map that did — the own-key question is the one being asked.
+    return { args: ['--prompt-overrides', dest], promptSource: jobIds.some((id) => Object.hasOwn(jobs, id)) ? 'override' : 'plan' };
   }
 
   /**
@@ -514,12 +757,14 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
 
   // ── Public API (what the routes call) ────────────────────────────────────
 
-  function createRun({ idea, backend, aspect, durationS, cast = [], environment = null }) {
+  function createRun({ idea, backend, aspect, resolution = null, durationS, cast = [], environment = null }) {
     const stamp = now().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
     const runId = `web-${stamp}-${Math.random().toString(36).slice(2, 6)}`;
     const dir = dirFor(runId);
     fs.mkdirSync(dir, { recursive: true });
-    writeManifest(dir, newManifest({ idea, backend, aspect, durationS, cast, environment }, now().toISOString()));
+    // `resolution` (a per-run pick, or null = the configured default) is persisted BEFORE the
+    // enqueue below: env(runId) reads it back off the manifest to build the plan child's knob.
+    writeManifest(dir, newManifest({ idea, backend, aspect, resolution, durationS, cast, environment }, now().toISOString()));
     const queued = mgr.enqueue({
       runId, lane: 'plan', kind: 'plan',
       script: CLI(root, 'engine.js'),
@@ -527,7 +772,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
         ...(durationS ? ['--duration', String(durationS)] : []),
         ...(cast.length ? ['--cast', cast.join(',')] : []),
         ...(environment ? ['--environment', environment] : [])],
-      env: env(), cwd: root,
+      env: env(runId), cwd: root,
     });
     return { runId, queued };
   }
@@ -553,7 +798,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
         ...(m.durationS ? ['--duration', String(m.durationS)] : []),
         ...(m.cast?.length ? ['--cast', m.cast.join(',')] : []),
         ...(m.environment ? ['--environment', m.environment] : [])],
-      env: env(), cwd: root,
+      env: env(runId), cwd: root,
     });
     emitStatus(runId);
     return { queued };
@@ -630,7 +875,14 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
    */
   function recordFinal(m, approved) {
     m.finals = Array.isArray(m.finals) ? m.finals : [];
-    const entry = (rec) => ({ id: `final-${m.finals.length + 1}`, cut: rec.cut ?? null, final: rec.final, upscaled: !!rec.upscaled, at: rec.at ?? null });
+    // `shortSide` is the delivered file's own measured short side. It travels with each entry
+    // because nothing else can answer for it: the approved CUT records the pre-upscale size, and
+    // the latest render is whatever was assembled last, which after a second delivery is not this
+    // file. Absent (backfilled history, older manifests) means "not recorded", never 0.
+    const entry = (rec) => ({
+      id: `final-${m.finals.length + 1}`, cut: rec.cut ?? null, final: rec.final, upscaled: !!rec.upscaled,
+      ...(rec.shortSide != null ? { shortSide: rec.shortSide } : {}), at: rec.at ?? null,
+    });
     const prev = m.approved;
     if (prev?.final && !m.finals.some((f) => f.final === prev.final && f.at === prev.at)) m.finals.push(entry(prev));
     // A delivery with no file is a broken approval, not a delivery — it replaces nothing and is not
@@ -643,6 +895,34 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     }
     m.approved = approved;
     return m;
+  }
+
+  /** Every record this run holds of ONE delivered file. `approved` is included, so a run delivered
+   *  before `finals` existed answers as well as one delivered after. */
+  const deliveriesOf = (m, file) => [...(m?.finals ?? []), ...(m?.approved ? [m.approved] : [])].filter((f) => f?.final === file);
+
+  /** Has this exact file already gone out as a final? */
+  const alreadyDelivered = (m, file) => deliveriesOf(m, file).length > 0;
+
+  /** Did this file come out of an upscale? That is a fact about the FILE and never changes, so any
+   *  record of the path answers it — and only the run's own history can, because the artifact does
+   *  not say so and re-deriving it from a size would guess. */
+  const deliveredUpscaled = (m, file) => deliveriesOf(m, file).some((f) => f.upscaled);
+
+  /**
+   * A second delivery of a file the run already delivered: `<name>-final.mp4`, then `-final-2`, …
+   * in out/, never overwriting anything (the same rule pipeline.js gives a master — not imported
+   * from there, because that module reads config.js and this one is on the config-free import graph).
+   * out/ and not beside the source, because the browser reaches a delivery by basename alone.
+   */
+  function copyOfDelivery(master) {
+    const ext = path.extname(master) || '.mp4';
+    const base = path.basename(master, ext);
+    fs.mkdirSync(outDir, { recursive: true }); // a CLI-made run can have its master anywhere
+    for (let n = 1; ; n++) {
+      const p = path.join(outDir, `${base}-final${n === 1 ? '' : `-${n}`}${ext}`);
+      if (!fs.existsSync(p)) { fs.copyFileSync(master, p); return p; }
+    }
   }
 
   function render(runId, { mode }) {
@@ -659,11 +939,15 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     const takeDir = nextTakeDir(dir);
     const takeId = path.basename(takeDir);
     fs.mkdirSync(takeDir, { recursive: true }); // reserve the tN NOW — a queued sibling must not resolve to the same take
-    const backend = readManifest(dir)?.backend ?? 'kling';
-    const est = estimateRender(spec, { backend, mode, ...estOpts(backend) });
+    const m0 = readManifest(dir);
+    const backend = m0?.backend ?? 'kling';
+    const est = estimateRender(spec, { backend, mode, ...estOpts(backend, m0?.resolution) });
     const specJobs = (spec.kling?.jobs ?? []).map((j) => j.job_id);
     // a probe renders only the FIRST job, so only its edit can be in play
     const overrides = reserved(takeDir, () => snapshotPromptOverrides(dir, takeDir, mode === 'probe' ? specJobs.slice(0, 1) : specJobs));
+    // …and the PLAN those words belong to is frozen beside them (see snapshotSpec): `est` above
+    // priced this exact document, so this exact document is what the child must render.
+    const specFile = reserved(takeDir, () => snapshotSpec(takeDir, spec));
     updateManifest(dir, (m) => {
       m.takes.push({ id: takeId, mode, revision: m.revisions.at(-1)?.id ?? null, createdAt: now().toISOString(), estUsd: est.totalUsd, promptSource: overrides.promptSource });
       m.costLedger.push({ ts: now().toISOString(), action: mode, ...ledgerLine(est) });
@@ -673,9 +957,9 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     const queued = mgr.enqueue({
       runId, lane: 'spend', kind: mode === 'probe' ? 'probe' : 'render',
       script: CLI(root, 'render.js'),
-      args: ['--spec', path.join(dir, 'spec.json'), '--out', takeDir, '--out-name', outNameFor(runId, spec, takeId),
+      args: ['--spec', specFile, '--out', takeDir, '--out-name', outNameFor(runId, spec, takeId),
         ...(mode === 'probe' ? ['--probe'] : []), ...overrides.args],
-      env: env(), cwd: root,
+      env: env(runId), cwd: root,
     });
     emitStatus(runId); // the page flips to 'rendering' NOW — queued work must never look like nothing happened
     return { takeId, queued, estUsd: est.totalUsd };
@@ -695,7 +979,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
       runId, lane: 'plan', kind: 'revise',
       script: CLI(root, 'revise.js'),
       args: ['--from', dir, '--feedback', feedback, '--out', revDir, ...(scope && scope !== 'whole' ? ['--scope', scope] : [])],
-      env: env(), cwd: root,
+      env: env(runId), cwd: root,
     });
     emitStatus(runId); // page flips to 'planning' NOW, even when queued behind another revision
     return { revisionId: path.basename(revDir), queued };
@@ -726,16 +1010,18 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     const downstream = jobs.slice(jobs.indexOf(jobId) + 1);
     const cascadeJobs = cascade ? downstream : [];
     const backend = m?.backend ?? 'kling';
-    const est = estimateRender(spec, { backend, mode: 'job', jobId, cascade, ...estOpts(backend) });
+    const est = estimateRender(spec, { backend, mode: 'job', jobId, cascade, ...estOpts(backend, m?.resolution) });
 
     // WS2-P5 — which boundaries this take pins, decided by the pure rule over the cut as it stands.
     // The take is one chain: its OPENING pin belongs to the first job rendered, its CLOSING pin to
     // the last, because every job in between has both ends defined by its cascade neighbours.
     const lastRendered = cascadeJobs.at(-1) ?? jobId;
     const lineage = computeLineage(cutRecordFor(runId, m, jobs));
+    const voiceRefs = voiceRefsFor(spec, backend);
     const planFor = (id) => resolveBoundaries({
       jobIds: jobs, jobId: id, continuity: lineage, mode,
       caps: capsOf(backend), castRefCount: castRefCountFor(spec, id),
+      otherRefCount: voiceRefs?.[id] ?? 0,
     });
     const opening = planFor(jobId);
     const closing = lastRendered === jobId ? opening : planFor(lastRendered);
@@ -752,7 +1038,14 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
       seamFrom = path.join(dir, 'renders', m.cuts.at(-1).take);
     }
     const openingFrame = seamFrom && prevJobId ? path.join(seamFrom, prevJobId, 'last_frame.png') : null;
-    const firstFrameFrom = openingFrame && fs.existsSync(openingFrame) ? openingFrame : undefined;
+    // A PAID opening pin is delivered, not dropped. Where no closing still was ever written for the
+    // previous segment — chaining off (KLING_CHAIN_FRAMES=0), a cleaned or a legacy take — the
+    // neighbour's CLIP is handed over instead: the child reads its LAST frame, which is the very
+    // image that still would have held (pipeline.js resolveBoundaryFrame, the documented
+    // --first-frame-from <clip> usage). Reserving a take and queueing the spend with neither was how
+    // a `start`/`both` request rendered as if it had asked for nothing.
+    const firstFrameFrom = openingFrame && fs.existsSync(openingFrame) ? openingFrame
+      : (prevClip && fs.existsSync(prevClip) ? prevClip : undefined);
     // Seam-out: the NEXT segment's own clip, handed to the child as a CLIP — grabbing its opening
     // frame is the renderer's job (one implementation of that grab, and it is the one that already
     // knows which end of a neighbour a closing pin wants).
@@ -762,6 +1055,10 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     // Every job this take will render — the cascade jobs land in the SAME take dir, so they read the
     // same snapshot (that is why it is taken once, here, and not per enqueue).
     const overrides = reserved(takeDir, () => snapshotPromptOverrides(dir, takeDir, [jobId, ...cascadeJobs]));
+    // …and so does the PLAN (see snapshotSpec). Taken once, before the ledger row: `est`, the job
+    // list this cascade walks and the boundary plan above all read this document, and a revision
+    // promoted onto the plan lane while the chain is still draining must not swap it underneath.
+    reserved(takeDir, () => snapshotSpec(takeDir, spec));
     updateManifest(dir, (mm) => {
       mm.takes.push({ id: takeId, mode: 'job', jobId, cascade, revision: mm.revisions.at(-1)?.id ?? null, createdAt: now().toISOString(), estUsd: est.totalUsd, feedback: feedback ?? null, promptSource: overrides.promptSource });
       mm.costLedger.push({ ts: now().toISOString(), action: `rerender ${jobId}${cascade ? ' + downstream' : ''}`, ...ledgerLine(est) });
@@ -776,12 +1073,20 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     });
     emitStatus(runId);
     // What was actually pinned, not what was asked for: a boundary whose frame is not on disk is
-    // reported as unpinned, so the dialog never claims a join this take will not have.
+    // reported as unpinned, so the dialog never claims a join this take will not have. The opening
+    // end is judged on `firstFrameFrom`, never on `seamFrom`: the take dir only says WHERE to look,
+    // and renderJob chains from it solely when <seamFrom>/<prevJob>/last_frame.png is really there
+    // (it warns and renders without continuity otherwise) — so a resolved dir with no frame in it
+    // is exactly the case that used to be reported as a pin nobody would get. With neither that
+    // still nor the neighbour's clip on disk there is nothing to read a frame out of, and the reply
+    // says so rather than selling a join this take cannot have.
+    // "No pin" is now the whole truth about that end: an end reported here as null was CLEARED on
+    // the way out (enqueueRenderJob), so no authored frame can pin it behind the reply's back.
     const applied = {
       mode,
-      start: seamFrom ? opening.start : null,
+      start: firstFrameFrom ? opening.start : null,
       end: lastFrameFrom ? closing.end : null,
-      startMode: seamFrom ? opening.startMode : 'none',
+      startMode: firstFrameFrom ? opening.startMode : 'none',
       endMode: lastFrameFrom ? closing.endMode : 'none',
     };
     return { takeId, queued, estUsd: est.totalUsd, cascadeJobs, boundaries: applied };
@@ -799,7 +1104,7 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
         if (!/^t\d{1,4}$/.test(String(takeId))) throw Object.assign(new Error(`"${takeId}" is not a take id`), { statusCode: 400, hint: 'take ids look like t1, t2, …' });
       }
       updateManifest(dir, (m) => {
-        m.jobClips = { ...m.jobClips };
+        m.jobClips = jobMap(m.jobClips);
         for (const [jobId, takeId] of Object.entries(composition)) {
           const takeRj = readJson(safeChild(dir, 'renders', String(takeId), 'render.json'));
           const hit = takeRj?.jobs?.find((j) => (j.jobId ?? j.job) === jobId);
@@ -823,13 +1128,24 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     return { queued: enqueueAssemble(runId, takeDir) };
   }
 
-  function approve(runId, { upscale = false, cut } = {}) {
+  function approve(runId, { upscale = false, cut, provider = null } = {}) {
     const dir = dirFor(runId);
     const run = scanRun(dir, { isAlive });
+    // A delivered run is done until it is reopened, and approving is no exception — this was the
+    // one spending route that omitted the guard. A stale tab or a retried request re-delivering the
+    // SAME master runs recordFinal again: `finals` grows a duplicate entry and the genuine prior
+    // delivery is stamped `replacedBy` something that replaced nothing. Ordered first, exactly as
+    // the other routes order it, so the answer names the way forward instead of a phantom conflict.
+    assertNotFinalized(runId);
     // Never approve while paid work runs: finalizing an older cut would mark the run complete and
     // hide the re-render/upscale the reviewer is still paying for (this covers the plain path too,
     // not just the upscale enqueue below).
     assertNoSpendInFlight(runId);
+    // The upscale-provider pick is validated whenever present — junk on a free approve is still a
+    // caller bug worth a 400, never a silent fallback onto whichever vendor the env resolves.
+    if (provider != null && provider !== 'fal' && provider !== 'segmind') {
+      throw Object.assign(new Error(`"${provider}" is not an upscale provider`), { statusCode: 400, hint: 'provider is fal or segmind' });
+    }
     // The user finalizes the cut they previewed. `cut` is optional: omitted ⇒ latest (today's
     // behavior, byte-for-byte). Each cut's take dir holds that cut's own immutable composed
     // render.json, so upscaling `renders/<cut.take>/` reproduces exactly that cut; a plain
@@ -837,6 +1153,41 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     // never used to build a path (that comes from chosen.take) — so there is no traversal risk.
     const m0 = readManifest(dir);
     const cuts = m0?.cuts ?? [];
+    // The vendor that will REALLY bill, decided once here: an explicit reviewer pick (validated
+    // above) beats the env derivation, because it is the one the finalize child is pinned to below.
+    // The ledger line and the estimate beside it read this same value, so the guard, the money row
+    // and the child can never name three different vendors.
+    const upscaleProvider = upscale ? provider ?? readUpscaleProvider(envRoot ?? root, m0?.backend, childEnv) : null;
+    // …and the knobs that PRICE that vendor's job, read in the same breath and from the same reader
+    // (see upscaleKnobsFor). The quote below is computed THROUGH them and the child is spawned WITH
+    // them, so the target, the model and the factor cap are one resolution rather than two reads of
+    // a file that can change in between.
+    const upscaleKnobs = upscaleProvider ? upscaleKnobsFor(upscaleProvider) : null;
+    // …and a vendor with no key cannot run at all: the child throws in falHeaders()/segmindHeaders()
+    // before a single Topaz submission. Accepting that would return 202 and write a PRICED cost
+    // ledger row for a charge that never happened — the run's money history is the one record that
+    // has to stay true. Refused HERE, before the manifest is touched, alongside the other pre-spend
+    // guards. The keys are read exactly as the estimator reads them (dotenv semantics, childEnv
+    // first) because that is the environment the finalize child gets, and the message names the
+    // variable that is missing. The approve bar already disables a keyless provider; this is the
+    // backstop for a stale or still-loading setup-status query.
+    //
+    // The key itself is deliberately NOT pinned into the child the way the vendor and its price
+    // knobs are. It is a CREDENTIAL, not a priced decision: it names no number in the ledger row, a
+    // key rotated while this job waits its turn in the queue SHOULD reach the child, and the only
+    // thing a .env edit in the gap can cost here is a refused call — loud (the run lands in
+    // attention with the missing variable named), never a charge that disagrees with the record.
+    if (upscaleProvider) {
+      // BOTH fal spellings — config.js accepts either, so demanding FAL_KEY alone would refuse an
+      // install the child would have billed happily.
+      const keys = upscaleProvider === 'segmind' ? ['SEGMIND_API_KEY'] : ['FAL_KEY', 'FAL_API_KEY'];
+      if (!keys.some((k) => envGet(k))) {
+        throw Object.assign(new Error(`the ${upscaleProvider} upscale needs an API key — ${keys.join(' or ')} is not set`), {
+          statusCode: 400,
+          hint: `add ${keys[0]} in Setup, or approve without the upscale — the cut is already assembled and delivering it costs nothing`,
+        });
+      }
+    }
     if (cut != null && !/^c\d{1,4}$/.test(String(cut))) {
       throw Object.assign(new Error(`"${cut}" is not a cut id`), { statusCode: 400, hint: 'cut ids look like c1, c2, …' });
     }
@@ -851,8 +1202,22 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
       throw Object.assign(new Error('nothing to approve — no assembled master exists'), { statusCode: 409, hint: 'render and let the stitch finish first (assemble is free)' });
     }
     if (!upscale) {
+      // A free finalize delivers the cut's own master untouched, so its measured size IS the cut's
+      // (the latest render's only when the default — latest — cut is the one being approved).
+      const shortSide = chosen ? chosen.shortSide ?? null : run.latestRender?.masterShortSide ?? null;
+      // Reopen → approve with nothing re-rendered hands this route the very file it already
+      // delivered. Recording that path again would list ONE file as two finals and stamp the genuine
+      // first delivery `replacedBy` a row that replaced nothing — under a card that promises
+      // "approving again writes a new final beside it". So write that file: a copy, because there is
+      // nothing new to render and the earlier delivery must stay byte-for-byte where it is.
+      const final = alreadyDelivered(m0, master) ? copyOfDelivery(master) : master;
+      // `upscaled` describes the FILE that goes out, not what this approval did. An upscale rewrites
+      // its take's render.json with the HD master it delivered, so after a reopen the run's latest
+      // master IS that upscaled file and the copy above is it byte for byte — recording `false`
+      // would have the Final card's "Upscaled" row and the delivery history call a Topaz master a
+      // plain cut. Read off the run's own record of that exact path; nothing else knows.
       const m = updateManifest(dir, (mm) => recordFinal(mm, {
-        cut: chosen?.id ?? mm.cuts.at(-1)?.id ?? null, final: master, upscaled: false, at: now().toISOString(),
+        cut: chosen?.id ?? mm.cuts.at(-1)?.id ?? null, final, upscaled: deliveredUpscaled(m0, master), shortSide, at: now().toISOString(),
       }));
       emitStatus(runId);
       return { final: m.approved.final, queued: null };
@@ -869,16 +1234,43 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
       // time a rate lands in prices.json.
       // A provider with no row AT ALL throws in there; that is still "no rate we can quote", and an
       // approve already past its checks must not die over a ledger note.
-      const upscaleProvider = readUpscaleProvider(envRoot ?? root, m.backend, childEnv);
-      let unpricedUpscale = true;
-      try { unpricedUpscale = Boolean(estimateUpscale([], { provider: upscaleProvider }).unknownPrice); } catch { /* unpriced */ }
-      m.costLedger.push(unpricedUpscale
-        ? { ts: now().toISOString(), action: 'upscale', estUsd: null, unpriced: true, note: 'estimate unavailable — no published rate for this provider' }
-        : { ts: now().toISOString(), action: 'upscale', estUsd: null, note: 'topaz per-clip — see estimate' });
+      // `upscaleProvider` is the vendor decided (and key-checked) above — the one the finalize child
+      // is pinned to below, so the line records and prices whoever actually bills.
+      // …and the line carries the FIGURE, off the very take this approve upscales, priced exactly
+      // as the estimate endpoint prices it (same helper, same target, same model knob). A ledger row
+      // that only said "see estimate" left the one durable record of a paid action with no number in
+      // it — and fal's tiers mean the number is no longer derivable from seconds alone.
+      let est = null;
+      // …and every knob in that quote is read through the PINNED environment — the very one the
+      // finalize child is spawned with — instead of the live .env a second time. A knob this vendor
+      // does not read is not in there and cannot move its price: fal never looks at Segmind's
+      // target, and Segmind's flat per-INPUT-second row ignores the factor cap and the model.
+      const pricedEnv = { ...childEnv, ...upscaleKnobs };
+      try {
+        est = estimateUpscale(
+          takeUpscaleClips(fromDir, { spec }),
+          {
+            provider: upscaleProvider,
+            targetShortSide: readUpscaleTargetShortSide(envRoot ?? root, m.backend, pricedEnv, upscaleProvider),
+            model: readUpscaleModel(envRoot ?? root, pricedEnv),
+            maxFactor: readUpscaleMaxFactor(envRoot ?? root, pricedEnv),
+          },
+        );
+      } catch { /* no rate row for this provider at all — recorded as unpriced below */ }
+      m.costLedger.push(est && !est.unknownPrice
+        ? { ts: now().toISOString(), action: 'upscale', estUsd: est.totalUsd, provider: upscaleProvider, note: 'topaz per-clip, at the tier the output lands in' }
+        : { ts: now().toISOString(), action: 'upscale', estUsd: null, unpriced: true, provider: upscaleProvider, note: 'estimate unavailable — no published rate for this provider' });
       m.lastError = null;
       return m;
     });
-    return { final: null, queued: enqueueAssemble(runId, fromDir, { upscale: true, suffix: 'final' }), spec: !!spec };
+    // …and the child is pinned to `upscaleProvider` — the vendor resolved ONCE above, before any
+    // mutation. Passing the raw `provider` here (null whenever the reviewer sent no pick) left the
+    // child to re-derive UPSCALE_PROVIDER for itself at spawn time: a .env edited in between would
+    // bill a vendor the key check never validated and the ledger row does not name, and a typo'd
+    // value — which the estimator's reader forgives as 'auto' — would throw in the child only AFTER
+    // that row was written. One resolution, used by the guard, the quote, the record and the spend —
+    // and `upscaleKnobs` closes the same gap for the values that decide the FIGURE in that row.
+    return { final: null, queued: enqueueAssemble(runId, fromDir, { upscale: true, suffix: 'final', upscaleProvider, upscaleKnobs }), spec: !!spec };
   }
 
   function cancel(runId) {
@@ -936,6 +1328,9 @@ export function createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr
     return {
       ...run,
       spec,
+      // DETAIL only, and only where a combined budget makes a voice clip and a boundary pin compete:
+      // the re-render dialog quotes a seam before the user pays and cannot read the voices dir.
+      voiceRefs: voiceRefsFor(spec, run.backend),
       queue: queuePosition >= 0 ? { position: queuePosition + 1 } : null,
       logCursor: ringFor(runId).lastCursor,
     };

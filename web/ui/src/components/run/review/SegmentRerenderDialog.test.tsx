@@ -60,6 +60,15 @@ function onBackend(run: RunDetail, backend: Backend, { castLess = false } = {}):
   return run;
 }
 
+/** Give every segment `count` cast references — the input the reference budget has to spend before
+ *  it can afford a boundary pin (castRefCountFor counts a job's own elements first). */
+function withCast(run: RunDetail, count: number): RunDetail {
+  const elements = Array.from({ length: count }, (_, i) => ({ id: `cast${i}`, role: 'subject', image: `elements/references/cast${i}.png` }));
+  run.spec!.kling.elements = elements;
+  for (const j of run.spec!.kling.jobs) j.elements = elements.map((e) => e.id);
+  return run;
+}
+
 /** An in-memory localStorage for the one test that needs the first-paid confirm to be reachable. */
 function withLocalStorage() {
   const store = new Map<string, string>();
@@ -161,6 +170,56 @@ describe('SegmentRerenderDialog — the boundary plan, in plain words (D14/D15)'
     expect(promisesSeamless(sentence())).toBe(true);
   });
 
+  // Both ends asked for, only one affordable: seedance-2.0@fal carries 9 images, so eight cast
+  // references leave room for a single pin and SEAM_PRIORITY gives up the CLOSING one —
+  // { in: 'soft', out: 'none' }. Reporting the weaker of the two for both ends lied twice over: it
+  // called a reference-guided opening a scene cut, and it hid the soft pin's caveat entirely.
+  it('a budget that can afford only one pin reports each end on its own terms', () => {
+    expect(pinStrengthsFor('seedance-2.0@fal', { castRefCount: 8, hasSeamIn: true, hasSeamOut: true }))
+      .toEqual({ in: 'soft', out: 'none' });
+
+    open(withCast(onBackend(threeSegmentRun(), 'seedance-2.0@fal'), 8));
+    const s = sentence();
+    expect(s).toContain("K2 will aim to start on K1's last frame — that join is near-seamless (reference-guided).");
+    expect(s).toContain('Nothing pins its ending, so the cut into K3 stays a scene cut.');
+    expect(s).not.toContain('rendered on its own');
+    expect(promisesSeamless(s)).toBe(false);
+    // the surviving pin keeps its caveat on screen
+    expect(screen.getByTestId('soft-pin-warning')).toBeInTheDocument();
+    // and the ending nobody could pin is predicted to break downstream, not to hold
+    expect(screen.getByTestId('downstream-seam-warning')).toHaveTextContent("K3's join will break");
+  });
+
+  // fal's Seedance 2.5 budgets images + audio + video against ONE 50-reference cap, so a registered
+  // voice clip takes the slot a boundary pin would have used — and only the pin is sacrificial. The
+  // browser cannot read the voices dir, so the count rides the run payload; without it this dialog
+  // sold a near-seamless opening on a take the renderer deterministically opens with a scene cut.
+  it('a voice reference the render will send is subtracted before any pin is promised', () => {
+    expect(pinStrengthsFor('seedance-2.5@fal', { castRefCount: 49, otherRefCount: 1, hasSeamIn: true, hasSeamOut: true }))
+      .toEqual({ in: 'none', out: 'none' });
+
+    const run = withCast(onBackend(threeSegmentRun(), 'seedance-2.5@fal'), 49);
+    open({ ...run, voiceRefs: { K2: 1 } });
+    expect(sentence()).toBe('K2 will be rendered on its own. The joins on both sides become scene cuts.');
+    expect(screen.queryByTestId('soft-pin-warning')).not.toBeInTheDocument();
+  });
+
+  it('…and a job that sends no voice clip keeps the pin that last slot buys', () => {
+    expect(pinStrengthsFor('seedance-2.5@fal', { castRefCount: 49, hasSeamIn: true, hasSeamOut: true }))
+      .toEqual({ in: 'soft', out: 'none' });
+
+    open(withCast(onBackend(threeSegmentRun(), 'seedance-2.5@fal'), 49));
+    expect(sentence()).toContain("K2 will aim to start on K1's last frame — that join is near-seamless (reference-guided).");
+  });
+
+  it('a budget that can afford neither pin still promises nothing at all', () => {
+    expect(pinStrengthsFor('seedance-2.0@fal', { castRefCount: 14, hasSeamIn: true, hasSeamOut: true }))
+      .toEqual({ in: 'none', out: 'none' });
+    open(withCast(onBackend(threeSegmentRun(), 'seedance-2.0@fal'), 14));
+    expect(sentence()).toBe('K2 will be rendered on its own. The joins on both sides become scene cuts.');
+    expect(screen.queryByTestId('soft-pin-warning')).not.toBeInTheDocument();
+  });
+
   it('Custom re-computes the sentence live, and opens on exactly what Auto would have done', () => {
     open(onBackend(threeSegmentRun(), 'seedance-2.0@fal'));
     const before = sentence();
@@ -244,6 +303,31 @@ describe('SegmentRerenderDialog — what it warns about (D16)', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: /End on K3/ }));
     expect(screen.getByTestId('downstream-seam-warning')).toHaveTextContent("K3's join will break");
   });
+
+  // …and it stops SELLING the fix, too. An applied ending pin renders K2 against the K3 that is in
+  // the cut and records that it lands there — the joint src/lib/seam-rule.js then reads as intact,
+  // which is why renderJob lists nothing stale behind it. Offering to re-render every downstream
+  // clip on top of that is charging for footage nothing changed.
+  it('a pinned ending is not sold a downstream cascade', () => {
+    open(onBackend(threeSegmentRun(), 'seedance-2.0@fal'));
+    const warn = screen.getByTestId('downstream-seam-warning');
+    expect(warn).toHaveTextContent(/K3 and everything after it can stay exactly as they are/);
+    expect(warn.textContent ?? '').not.toMatch(/exact fix/);
+    expect(screen.queryByRole('checkbox', { name: /Also re-render K3/ })).not.toBeInTheDocument();
+  });
+
+  it('…and the offer returns the moment the ending is left unpinned', () => {
+    open(onBackend(threeSegmentRun(), 'seedance-2.0@fal'));
+    fireEvent.click(screen.getByRole('radio', { name: 'Custom' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /End on K3/ }));
+    expect(screen.getByRole('checkbox', { name: /Also re-render K3/ })).toBeInTheDocument();
+  });
+
+  it('a pin the reference budget drops is no pin at all — the cascade is still offered', () => {
+    // eight cast references leave room for one pin, and SEAM_PRIORITY gives up the CLOSING one
+    open(withCast(onBackend(threeSegmentRun(), 'seedance-2.0@fal'), 8));
+    expect(screen.getByRole('checkbox', { name: /Also re-render K3/ })).toBeInTheDocument();
+  });
 });
 
 describe('SegmentRerenderDialog — the frames it shows (D14.2)', () => {
@@ -323,10 +407,39 @@ describe('SegmentRerenderDialog — the money (D13/D17)', () => {
     );
     open(onBackend(threeSegmentRun(), 'seedance-2.0@fal'));
     await screen.findByLabelText('estimated cost $4.16');
+    // The cascade is offered for the ending nobody pins — which, with an intact joint on that side,
+    // is Custom with "End on K3" unticked.
+    fireEvent.click(screen.getByRole('radio', { name: 'Custom' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /End on K3/ }));
     fireEvent.click(screen.getByRole('checkbox', { name: /Also re-render K3/ }));
     await screen.findByLabelText('estimated cost $9.50');
     fireEvent.click(screen.getByRole('button', { name: /^Re-render K2/ }));
-    await waitFor(() => expect(bodies).toEqual([{ jobId: 'K2', boundaries: 'auto', cascade: true }]));
+    await waitFor(() => expect(bodies).toEqual([{ jobId: 'K2', boundaries: 'start', cascade: true }]));
+  });
+
+  it('a cascade ticked and then pinned away is neither priced nor charged', async () => {
+    markPaidConfirmed();
+    const bodies: unknown[] = [];
+    server.use(
+      http.get('/api/runs/:id/estimate', ({ request }) => {
+        const cascade = new URL(request.url).searchParams.get('cascade');
+        return HttpResponse.json({ perJob: [], totalUsd: cascade ? 9.5 : 4.16, currency: 'USD', label: 'estimate' });
+      }),
+      http.post('/api/runs/:id/rerender-job', async ({ request }) => {
+        bodies.push(await request.json());
+        return HttpResponse.json({ takeId: 't2', estUsd: 4.16, cascadeJobs: [], boundaries: { mode: 'both' } });
+      }),
+    );
+    open(onBackend(threeSegmentRun(), 'seedance-2.0@fal'));
+    await screen.findByLabelText('estimated cost $4.16');
+    fireEvent.click(screen.getByRole('radio', { name: 'Custom' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /End on K3/ }));      // unpinned → the offer appears
+    fireEvent.click(screen.getByRole('checkbox', { name: /Also re-render K3/ }));
+    await screen.findByLabelText('estimated cost $9.50');
+    fireEvent.click(screen.getByRole('checkbox', { name: /End on K3/ }));      // pinned again → offer withdrawn
+    await screen.findByLabelText('estimated cost $4.16');
+    fireEvent.click(screen.getByRole('button', { name: /^Re-render K2/ }));
+    await waitFor(() => expect(bodies).toEqual([{ jobId: 'K2', boundaries: 'both' }]));
   });
 
   it('an unpriced backend says "rate not on file" and still fires — no figure anywhere else', async () => {

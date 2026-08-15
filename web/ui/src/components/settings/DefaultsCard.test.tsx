@@ -102,3 +102,54 @@ describe('DefaultsCard — every renderable pair is offerable as the default', (
     await waitFor(() => expect(body).toEqual({ backend: 'kling-o3@fal', aspect: '16:9' }));
   });
 });
+
+// The resolution control is per MODEL: it offers the chosen backend's own ladder, seeds from the
+// per-model map (the server reads the knob each model ACTUALLY uses — never a stale
+// KLING_RESOLUTION for a Seedance backend), and posts `resolution` for the server to write to the
+// TARGET model's knob.
+describe('DefaultsCard — per-model resolution', () => {
+  const withResolutions = (backend: string) =>
+    http.get('/api/settings/defaults', () =>
+      HttpResponse.json({
+        backend, aspect: '16:9', resolution: '720p',
+        // kling-o3 is null on the wire now — the server reports no tier for a ladder-less model
+        resolutions: { 'kling-o3': null, 'seedance-2.0': '480p', 'seedance-2.5': '720p' },
+        seedanceResolution: '480p',
+      }));
+  const resolutionGroup = () => screen.getByRole('radiogroup', { name: 'Default resolution' });
+
+  it('offers the chosen model’s ladder, seeded from ITS knob, and posts only a real change', async () => {
+    let body: unknown = null;
+    server.use(
+      withResolutions('seedance-2.5@fal'),
+      http.post('/api/settings/defaults', async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json({ written: ['SEEDANCE25_RESOLUTION'] });
+      }),
+    );
+    renderCard();
+    await waitFor(() =>
+      expect(within(resolutionGroup()).getByRole('radio', { name: '720p' })).toHaveAttribute('aria-checked', 'true'));
+    // 2.5's ladder only — a tier the model cannot render is not offerable
+    expect(within(resolutionGroup()).queryByRole('radio', { name: '1080p' })).not.toBeInTheDocument();
+
+    await userEvent.click(within(resolutionGroup()).getByRole('radio', { name: '480p' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save defaults' }));
+    // resolution-only save: the server maps it onto the saved default backend's knob
+    await waitFor(() => expect(body).toEqual({ resolution: '480p' }));
+  });
+
+  it('switching backends shows THAT model’s saved tier — never the previous model’s pick', async () => {
+    server.use(withResolutions('seedance-2.5@fal'));
+    renderCard();
+    await waitFor(() =>
+      expect(screen.getByRole('radio', { name: /Seedance 2\.5 fal/ })).toHaveAttribute('aria-checked', 'true'));
+    // 2.0's own saved tier (480p), not 720p carried over from the 2.5 view
+    await userEvent.click(screen.getByRole('radio', { name: /Seedance 2\.0 fal/ }));
+    expect(within(resolutionGroup()).getByRole('radio', { name: '480p' })).toHaveAttribute('aria-checked', 'true');
+    // Kling has no ladder at all: no tier buttons, and the card says why instead of showing blanks
+    await userEvent.click(screen.getByRole('radio', { name: /Kling/ }));
+    expect(within(resolutionGroup()).queryAllByRole('radio')).toHaveLength(0);
+    expect(screen.getByText(/renders at the endpoint’s own output/)).toBeInTheDocument();
+  });
+});

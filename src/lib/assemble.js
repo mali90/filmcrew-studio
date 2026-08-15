@@ -21,6 +21,7 @@ import log from './logger.js';
 import { ensureDir } from './util.js';
 import { planSeamstitch, runSeamstitch, seamstitchAvailable } from './seamstitch.js';
 import { computeOffsets } from './stitch-math.js';
+import { probeClipWith } from './ffprobe.js';
 
 const V = config.video;
 // EBU R128 loudness target so the track sits at a consistent level and nothing clips.
@@ -39,49 +40,16 @@ function runFfmpeg(args) {
   });
 }
 
-function runFfprobe(args) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(V.ffprobe, args, { stdio: ['ignore', 'pipe', 'pipe'] });
-    let out = '';
-    let err = '';
-    child.stdout.on('data', (d) => (out += d));
-    child.stderr.on('data', (d) => (err += d));
-    child.on('error', (e) => reject(new Error(`Failed to spawn ffprobe (${V.ffprobe}): ${e.message}`)));
-    child.on('close', (code) => (code === 0 ? resolve(out) : reject(new Error(`ffprobe exited ${code}:\n${err.slice(-1000)}`))));
-  });
-}
-
-/** Probe a clip: does it carry an audio stream, and how long is it (seconds)? */
-/** Parse an ffprobe frame-rate ratio ("24/1", "24000/1001") to a number; 0 when unknown ("0/0"). */
-function parseFps(ratio) {
-  const m = /^(\d+)\/(\d+)$/.exec(String(ratio ?? ''));
-  if (!m) return 0;
-  const [num, den] = [Number(m[1]), Number(m[2])];
-  return den > 0 ? num / den : 0;
-}
-
-/** Parse an ffprobe "16:15" ratio to a number; 1 when unknown ("0:1", "N/A", absent) — i.e. square. */
-function parseSar(ratio) {
-  const m = /^(\d+):(\d+)$/.exec(String(ratio ?? ''));
-  if (!m) return 1;
-  const [num, den] = [Number(m[1]), Number(m[2])];
-  return num > 0 && den > 0 ? num / den : 1;
-}
-
-export async function probeClip(file) {
-  const out = await runFfprobe(['-v', 'error', '-show_entries', 'stream=codec_type,width,height,avg_frame_rate,r_frame_rate,sample_aspect_ratio:format=duration', '-of', 'json', file]);
-  const info = JSON.parse(out);
-  const hasAudio = (info.streams ?? []).some((s) => s.codec_type === 'audio');
-  const v = (info.streams ?? []).find((s) => s.codec_type === 'video');
-  const duration = Number(info.format?.duration) || 0;
-  const fps = parseFps(v?.avg_frame_rate) || parseFps(v?.r_frame_rate); // avg is truer; r_frame_rate is the fallback
-  const width = Number(v?.width) || 0;
-  const height = Number(v?.height) || 0;
-  // Non-square pixels make WxH lie about the SHAPE of the picture. The seamless stitcher compares a
-  // clip's framing against the canvas, so it needs the DISPLAY aspect, not the storage one.
-  const sar = parseSar(v?.sample_aspect_ratio);
-  return { hasAudio, duration, width, height, fps, sar, dar: height > 0 ? (width * sar) / height : 0 };
-}
+/**
+ * Probe a clip: does it carry an audio stream, and how long is it (seconds)? — on the binary THIS
+ * process is configured for, read at call time so a test that re-snapshots config still lands.
+ *
+ * The args and the parsing live in ffprobe.js rather than here because a SECOND process needs the
+ * identical answer: the web server's prompt preview decides from a voice clip's duration whether the
+ * paid render will drop it (seedance-args.js fitAudioRef), and it may not import this file — config
+ * would come with it, binding the probe to the server's environment instead of the run's.
+ */
+export const probeClip = (file) => probeClipWith(V.ffprobe, file);
 
 /**
  * Extract a clip's AUDIO track to an .mp3, trimmed to the first `seconds` when given. Seedance

@@ -1,12 +1,14 @@
 // The plan-ready decision moment: probe cheap first (guided by which button is primary), or go
-// full — both with their fal.ai estimate stated calmly on the button. A probe renders only the
+// full — both with their provider estimate stated calmly on the button. A probe renders only the
 // first job, so it exists ONLY on multi-job plans — on a single-job plan it would be the full
 // render at the same price, and only Full render is offered. Revising costs only LLM usage;
-// discarding asks first.
+// discarding asks first. All money copy names the RUN's provider (providerLabelFor) — a
+// hardcoded "fal" is a false statement on a Segmind-backed run.
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { RunDetail } from '../../../../shared/api-types';
+import { modelLabelFor, providerLabelFor } from '../../../../shared/render-models';
 import { api } from '../../api/client';
 import { Button, useFirstPaidConfirm } from '../ui/Button';
 import { UnknownPriceNote } from '../ui/UnknownPriceNote';
@@ -41,6 +43,8 @@ export function PlanReview({ run }: { run: RunDetail }) {
   const jobs = spec?.kling?.jobs ?? [];
   const totalSeconds = jobs.reduce((acc, j) => (spec ? acc + jobSeconds(spec, j.job_id) : acc), 0);
   const hasTakes = (run.manifest?.takes?.length ?? 0) > 0;
+  const provider = providerLabelFor(run.backend ?? 'kling');
+  const firstJobId = jobs[0]?.job_id;
 
   const start = async (mode: Mode) => {
     setBusy(mode);
@@ -95,8 +99,10 @@ export function PlanReview({ run }: { run: RunDetail }) {
   return (
     <section aria-label="The plan is ready" className="rounded-r3 border border-line bg-surface-1 p-5">
       <h3 className="text-title text-ink">The plan is ready</h3>
+      {/* The sentence read immediately before the first spend states what is being bought —
+          aspect and resolution included, since the resolution pick changes the bill (U2b). */}
       <p className="tnum mt-1.5 text-body text-ink-secondary">
-        {spec?.project?.title ?? run.title ?? run.idea} · {jobs.length} job{jobs.length === 1 ? '' : 's'} · {totalSeconds}s total · {run.backend}
+        {spec?.project?.title ?? run.title ?? run.idea} · {jobs.length} job{jobs.length === 1 ? '' : 's'} · {totalSeconds}s total · {run.aspect} · {run.manifest?.resolution ?? 'default res'} · {modelLabelFor(run.backend ?? 'kling')}
       </p>
 
       <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -127,7 +133,13 @@ export function PlanReview({ run }: { run: RunDetail }) {
       </div>
       {unknownPrice
         ? <UnknownPriceNote hint={unknownPrice.hint} />
-        : <p className="mt-2 text-caption text-ink-muted" aria-live="polite">estimates — fal bills per second</p>}
+        : (
+          <p className="mt-2 text-caption text-ink-muted" aria-live="polite">
+            {canProbe
+              ? <>A probe renders only {firstJobId} — a cheap look before the full spend. Estimates — {provider} bills per rendered second.</>
+              : <>estimates — {provider} bills per rendered second</>}
+          </p>
+        )}
 
       {showRevise && (
         <div className="mt-4 space-y-2">
@@ -173,7 +185,7 @@ export function PlanReview({ run }: { run: RunDetail }) {
       >
         {pendingUnknown
           ? 'This spends real money with your render provider. It publishes no per-second rate, so there is no estimate to show — the bill lands on your provider account.'
-          : <>This calls fal.ai · ≈ {usd(pendingUsd)} · estimates only — fal bills per rendered second.</>}
+          : <>This calls {provider} · ≈ {usd(pendingUsd)} · estimates only — {provider} bills per rendered second.</>}
       </Dialog>
 
       <Dialog

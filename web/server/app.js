@@ -72,11 +72,17 @@ export async function buildApp({
   if (elementsRoot !== path.resolve(root, 'elements')) childEnv = { ...childEnv, ELEMENTS_REFERENCES_DIR: path.join(elementsRoot, 'references') };
   if (voicesFile !== path.resolve(root, 'voices', 'voices.json')) childEnv = { ...childEnv, VOICES_DIR: path.dirname(voicesFile) };
 
-  const app = Fastify({ logger });
+  // The JSON body ceiling, stated rather than inherited. Fastify's own default is 1 MiB, and with
+  // the Seedance prompt clamp shipped OFF that default became the LAST limit on a prompt edit — one
+  // nobody is told the number for, hit as a generic 413. 8 MiB is far past any screenplay; the error
+  // handler below quotes it the way the editor's over-budget 400 quotes its bytes. Uploaded FILES
+  // ride @fastify/multipart's own (much larger) limit, not this one.
+  const BODY_LIMIT_BYTES = 8 * 1024 ** 2;
+  const app = Fastify({ logger, bodyLimit: BODY_LIMIT_BYTES });
   const bus = createEventBus();
   let svc; // late-bound: the manager streams events into the service
   const mgr = createJobManager({ spawnCli, onEvent: (runId, evt) => svc?.onEvent(runId, evt) });
-  svc = createRunService({ root, runsDir, outDir, envRoot, childEnv, mgr, bus, isAlive });
+  svc = createRunService({ root, runsDir, outDir, envRoot, voicesFile, childEnv, mgr, bus, isAlive });
 
   app.decorate('ctx', { root, runsDir, outDir, envRoot, profilesDir, environmentsDir, elementsRoot, voicesFile, childEnv, svc, mgr, bus, lifecycle });
 
@@ -93,6 +99,14 @@ export async function buildApp({
 
   // {error, hint} everywhere — mirrors the doctor's label+hint style.
   app.setErrorHandler((err, req, reply) => {
+    // The transport's own ceiling, worded like every other refusal here: with the number in it, and
+    // saying nothing was kept. Fastify's stock message names neither.
+    if (err.code === 'FST_ERR_CTP_BODY_TOO_LARGE') {
+      return reply.code(413).send({
+        error: `the request body is over this server's ${BODY_LIMIT_BYTES}-byte limit`,
+        hint: 'nothing was saved — shorten it (a prompt this long is past anything a provider will read anyway)',
+      });
+    }
     const status = err.statusCode ?? 500;
     if (status >= 500) app.log?.error?.(err);
     reply.code(status).send({ error: err.message, hint: err.hint ?? (status >= 500 ? 'see the server log' : 'check the request and try again') });

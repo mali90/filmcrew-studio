@@ -170,8 +170,9 @@ npm run assemble -- --from runs/<run-id>
 ```
 Stitches already-generated clips into `out/<title>.mp4` — the main use is promoting a `--probe` take
 you liked (a probe prints the exact `--from` path). Add `--upscale` for higher quality (that step does
-cost). A probe renders only the first of a plan's several jobs, so the stitched result covers just
-that first job.
+cost — and `UPSCALE_ENABLED=true` in your `.env` adds it, unasked, to everything you finish from a
+terminal, so this stitch costs then too). A probe renders only the first of a plan's several jobs, so the stitched
+result covers just that first job.
 
 **Upscale a finished video:**
 ```
@@ -239,7 +240,12 @@ Node 22+, logged in via `copilot` → `/login` (or a PAT with "Copilot Requests"
 
 **It cost more than expected** — you ran a full render (or `--upscale`). While experimenting with
 long multi-job videos, use `--probe` (first job only) and finish a liked probe for free with
-`npm run assemble`. See [COST.md](COST.md).
+`npm run assemble` — free unless `UPSCALE_ENABLED=true` is in your `.env` (the init wizard writes it
+when you answer yes to the upscale question, or when you accept an AI-suggested preset that says
+upscale=yes — including under `npm run init -- --yes --brief "…"`, which accepts the suggestion
+without asking you anything), which adds the paid Topaz pass, unasked, to everything
+you finish from a terminal — renders and stitches alike — so that stitch costs then too. See
+[COST.md](COST.md).
 
 ---
 

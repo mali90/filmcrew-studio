@@ -1,7 +1,7 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { server, http, HttpResponse } from '../../../test/msw';
-import { makeRun } from '../../../test/fixtures';
+import { makeRun, SETUP_COMPLETE } from '../../../test/fixtures';
 import { renderReview, markPaidConfirmed, clearPaidState } from './test-helpers';
 import { ApproveBar } from './ApproveBar';
 
@@ -54,9 +54,11 @@ describe('ApproveBar', () => {
     expect(note.parentElement?.textContent ?? '').toMatch(/examplevendor\.invalid/i);
     expect(screen.queryByText(/≈ \$/)).not.toBeInTheDocument();   // no figure anywhere on the card
     expect(screen.queryByText(/≈—/)).not.toBeInTheDocument();     // and no em-dash masquerading as one
+    expect(screen.queryByText(/· \$/)).not.toBeInTheDocument();   // the provider options invent none either
 
     fireEvent.click(approve);
-    await waitFor(() => expect(captured.body).toEqual({ upscale: true }));
+    // the pick still rides the payload — the spend is real even when the figure is not on file
+    await waitFor(() => expect(captured.body).toEqual({ upscale: true, provider: 'fal' }));
   });
 
   it('an already-1080p master disables the paid upscale with the reason stated', async () => {
@@ -72,6 +74,49 @@ describe('ApproveBar', () => {
     expect(screen.queryByText(/≈/)).not.toBeInTheDocument();
     // approve itself stays available (it is free)
     expect(screen.getByRole('button', { name: 'Approve' })).toBeEnabled();
+  });
+
+  // U2d — the cut's ACTUAL resolution belongs beside the upscale decision; only a cut with no
+  // dimension on record keeps the generic caption.
+  it('states the cut\'s own resolution in the non-HD caption', () => {
+    const run = makeRun('review');
+    run.manifest!.cuts = [{ id: 'c1', take: 't1', master: '/abs/out/x.mp4', shortSide: 496, createdAt: 'now' }];
+    renderReview(<ApproveBar run={run} />);
+    expect(screen.getByText('This cut is 496p — one Topaz job per clip lifts it toward ~1080p.')).toBeInTheDocument();
+  });
+
+  it('keeps the generic caption when the cut\'s resolution is unknown', () => {
+    renderReview(<ApproveBar run={makeRun('review')} />); // fixture cut records no shortSide
+    expect(screen.getByText(/One Topaz job per clip — skip it if the render is already 1080p\./)).toBeInTheDocument();
+  });
+
+  // fal prices Topaz by the OUTPUT frame, so a cut lifted to a ~1080p SHORT side can still bill at
+  // the above-1080p tier when the frame is portrait (1080×1920). The label promises the target and
+  // the figure comes from the tier — without a word between them they read as two different answers.
+  it('explains the tier when the price is not the one the ~1080p label implies', async () => {
+    server.use(http.get('/api/runs/:id/estimate', () => HttpResponse.json({
+      perJob: [{ jobId: 'K1', seconds: 15, usd: 1.2 }],
+      totalUsd: 1.2, currency: 'USD', label: 'estimate', targetShortSide: 1080, tier: 'above1080p',
+    })));
+    const run = makeRun('review');
+    run.manifest!.cuts = [{ id: 'c1', take: 't1', master: '/abs/out/x.mp4', shortSide: 480, createdAt: 'now' }];
+    renderReview(<ApproveBar run={run} />);
+
+    expect(await screen.findByText(/lifts it toward ~1080p\. fal\.ai bills the taller frame at its above-1080p rate\./)).toBeInTheDocument();
+    await screen.findByText('≈ $1.20');
+  });
+
+  it('says nothing extra when the tier is the one the label implies', async () => {
+    server.use(http.get('/api/runs/:id/estimate', () => HttpResponse.json({
+      perJob: [{ jobId: 'K1', seconds: 15, usd: 0.3 }],
+      totalUsd: 0.3, currency: 'USD', label: 'estimate', targetShortSide: 1080, tier: '1080p',
+    })));
+    const run = makeRun('review');
+    run.manifest!.cuts = [{ id: 'c1', take: 't1', master: '/abs/out/x.mp4', shortSide: 480, createdAt: 'now' }];
+    renderReview(<ApproveBar run={run} />);
+
+    await screen.findByText('≈ $0.30');
+    expect(screen.queryByText(/above-1080p rate/)).not.toBeInTheDocument();
   });
 
   it('approves without upscale — free, no cost tag on the button', async () => {
@@ -97,7 +142,8 @@ describe('ApproveBar', () => {
     await screen.findByLabelText('estimated cost $4.16');
 
     fireEvent.click(approve);
-    await waitFor(() => expect(captured.body).toEqual({ upscale: true }));
+    // fal is the default pick, and the payload says so out loud — the server must not re-derive
+    await waitFor(() => expect(captured.body).toEqual({ upscale: true, provider: 'fal' }));
   });
 
   it('finalizes the SELECTED cut — the previewed cut id rides the approve payload', async () => {
@@ -205,6 +251,20 @@ describe('ApproveBar', () => {
     expect(caption).toMatch(/ocean-final\.mp4 stays on disk/); // and nothing is deleted
   });
 
+  // `approved.final` is the one path that deliberately reaches the browser unredacted, and it is
+  // written by whatever OS the SERVER runs on. On Windows it arrives backslash-delimited, and the
+  // caption still owes the reviewer a file name — a host path there is unreadable and promises
+  // nothing.
+  it('names the file even when the server hands over a Windows path', () => {
+    const run = reopenedRun();
+    run.manifest!.approved!.final = 'C:\\Users\\ali\\Videos\\out\\ocean-final.mp4';
+    renderReview(<ApproveBar run={run} />);
+
+    const caption = screen.getByText(/This writes a new final/).textContent ?? '';
+    expect(caption).toMatch(/ocean-final\.mp4 stays on disk/);
+    expect(caption).not.toMatch(/[\\/]Users[\\/]/);
+  });
+
   it('the plain replace is not a paid button; only the "& upscale" variant is', async () => {
     markPaidConfirmed();
     const { rerender } = renderReview(<ApproveBar run={reopenedRun()} />);
@@ -235,5 +295,147 @@ describe('ApproveBar', () => {
     renderReview(<ApproveBar run={reopenedRun()} />);
     fireEvent.click(screen.getByRole('button', { name: /^Replace final$/ }));
     await waitFor(() => expect(captured.body).toEqual({ upscale: false }));
+  });
+
+  // ── The provider pick (fal.ai vs Segmind Topaz) ───────────────────────────────────────────────
+  // The margin is thin (fal ≈$0.12/output-second vs Segmind's flat $0.125/input-second), so the
+  // picker shows both REAL figures instead of asking anyone to trust the default — and a keyless
+  // option can never be submitted, only explained.
+
+  /** Both keys on file, and a per-provider quote so the two figures are tellable apart. */
+  function bothProvidersKeyed({ segmindTarget = 1080 }: { segmindTarget?: number } = {}) {
+    const searches: string[] = [];
+    server.use(
+      http.get('/api/setup/status', () => HttpResponse.json({ ...SETUP_COMPLETE, segmind: { hasKey: true } })),
+      http.get('/api/runs/:id/estimate', ({ request }) => {
+        const url = new URL(request.url);
+        searches.push(url.search);
+        const segmind = url.searchParams.get('provider') === 'segmind';
+        return HttpResponse.json({
+          perJob: [{ jobId: 'K1', seconds: 13, usd: segmind ? 4.33 : 4.16 }],
+          totalUsd: segmind ? 4.33 : 4.16,
+          currency: 'USD',
+          label: 'estimate',
+          targetShortSide: segmind ? segmindTarget : 1080,
+        });
+      }),
+    );
+    return searches;
+  }
+
+  it('the picker appears with the toggle, defaults to fal.ai, and shows BOTH real figures', async () => {
+    bothProvidersKeyed();
+    renderReview(<ApproveBar run={makeRun('review')} />);
+    expect(screen.queryByRole('radiogroup', { name: 'Upscale provider' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /upscale/i }));
+    const fal = await screen.findByRole('radio', { name: /fal\.ai · \$4\.16/ });
+    expect(fal).toHaveAttribute('aria-checked', 'true'); // the default, stated with its price
+    const segmind = await screen.findByRole('radio', { name: /Segmind · \$4\.33/ });
+    expect(segmind).toHaveAttribute('aria-checked', 'false');
+    expect(segmind).toBeEnabled();
+  });
+
+  it('switching provider re-quotes: the request names the pick and the paid button follows it', async () => {
+    markPaidConfirmed();
+    const searches = bothProvidersKeyed();
+    const captured = captureApprove();
+    renderReview(<ApproveBar run={makeRun('review')} />);
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /upscale/i }));
+    await screen.findByLabelText('estimated cost $4.16'); // fal's figure while fal is picked
+    expect(searches.some((s) => s.includes('provider=fal'))).toBe(true);
+    expect(searches.some((s) => s.includes('provider=segmind'))).toBe(true); // both quoted up front
+
+    fireEvent.click(await screen.findByRole('radio', { name: /Segmind/ }));
+    const approve = await screen.findByLabelText('estimated cost $4.33'); // re-quoted for the pick
+    fireEvent.click(approve);
+    await waitFor(() => expect(captured.body).toEqual({ upscale: true, provider: 'segmind' }));
+  });
+
+  it('the target label and already-HD gate follow the PICKED provider\'s delivered short side', async () => {
+    bothProvidersKeyed({ segmindTarget: 2160 }); // e.g. UPSCALE_TARGET_RESOLUTION=4k
+    const run = makeRun('review');
+    run.manifest!.cuts = [{ id: 'c1', take: 't1', master: '/abs/out/x.mp4', shortSide: 496, createdAt: 'now' }];
+    renderReview(<ApproveBar run={run} />);
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /upscale/i }));
+    await screen.findByText(/This cut is 496p — one Topaz job per clip lifts it toward ~1080p\./);
+
+    fireEvent.click(await screen.findByRole('radio', { name: /Segmind/ }));
+    // the label now promises what SEGMIND delivers, not fal's ~1080p
+    await screen.findByText(/This cut is 496p — one Topaz job per clip lifts it toward ~4K\./);
+    expect(screen.getByRole('checkbox')).toBeEnabled();
+  });
+
+  // The gate and the options each judge by THEIR OWN vendor's target. A 1080p cut is at fal's
+  // ~1080p plan and nowhere near Segmind's 4k one — reading "already HD" off the picked vendor
+  // disabled the toggle, and the picker that could have switched to the reachable 4K job renders
+  // only while the toggle is on, so the valid upscale had no way in at all.
+  it('offers the 4K upscale on a 1080p cut when Segmind targets it — fal being at target is fal’s fact', async () => {
+    markPaidConfirmed();
+    bothProvidersKeyed({ segmindTarget: 2160 }); // UPSCALE_TARGET_RESOLUTION=4k
+    const captured = captureApprove();
+    const run = makeRun('review');
+    run.manifest!.cuts = [{ id: 'c1', take: 't1', master: '/abs/out/hd.mp4', shortSide: 1080, createdAt: 'now' }];
+    renderReview(<ApproveBar run={run} />);
+
+    const checkbox = screen.getByRole('checkbox');
+    await waitFor(() => expect(checkbox).toBeEnabled());
+    // and the vendor that can actually do the job is the one on offer
+    await screen.findByText(/This cut is 1080p — one Topaz job per clip lifts it toward ~4K\./);
+
+    fireEvent.click(checkbox);
+    const segmind = await screen.findByRole('radio', { name: /Segmind/ });
+    expect(segmind).toHaveAttribute('aria-checked', 'true');
+    // fal has a key but nothing to add here, so it is the option that goes grey — with the reason
+    const fal = screen.getByRole('radio', { name: /fal\.ai/ });
+    expect(fal).toBeDisabled();
+    expect(screen.getByText(/fal\.ai would deliver ~1080p — this cut is already 1080p\./)).toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole('button', { name: /Approve & upscale/ }));
+    await waitFor(() => expect(captured.body).toEqual({ upscale: true, provider: 'segmind' }));
+  });
+
+  it('still disables the toggle when EVERY reachable vendor is at its target', async () => {
+    bothProvidersKeyed(); // both quote ~1080p
+    const run = makeRun('review');
+    run.manifest!.cuts = [{ id: 'c1', take: 't1', master: '/abs/out/hd.mp4', shortSide: 1080, createdAt: 'now' }];
+    renderReview(<ApproveBar run={run} />);
+
+    const checkbox = screen.getByRole('checkbox');
+    await waitFor(() => expect(checkbox).toBeDisabled());
+    expect(screen.getByText(/already 1080p — at or above the 1080p target/i)).toBeInTheDocument();
+    expect(screen.queryByRole('radiogroup', { name: 'Upscale provider' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeEnabled(); // the free finalize stays
+  });
+
+  it('a keyless provider renders disabled with the reason in plain words', async () => {
+    // the default fixture is honest here already: fal has a key, Segmind does not
+    renderReview(<ApproveBar run={makeRun('review')} />);
+    fireEvent.click(screen.getByRole('checkbox', { name: /upscale/i }));
+
+    const segmind = await screen.findByRole('radio', { name: /Segmind/ });
+    await waitFor(() => expect(segmind).toBeDisabled());
+    expect(screen.getByText(/Segmind is unavailable — no SEGMIND_API_KEY on file/)).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /fal\.ai/ })).toBeEnabled();
+  });
+
+  it('when ONLY Segmind has a key it is the default — approval can never fail on a missing key', async () => {
+    markPaidConfirmed();
+    server.use(http.get('/api/setup/status', () => HttpResponse.json({
+      ...SETUP_COMPLETE, fal: { hasKey: false }, segmind: { hasKey: true },
+    })));
+    const captured = captureApprove();
+    renderReview(<ApproveBar run={makeRun('review')} />);
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /upscale/i }));
+    const segmind = await screen.findByRole('radio', { name: /Segmind/ });
+    await waitFor(() => expect(segmind).toHaveAttribute('aria-checked', 'true'));
+    expect(screen.getByRole('radio', { name: /fal\.ai/ })).toBeDisabled();
+    expect(screen.getByText(/fal\.ai is unavailable — no FAL_KEY on file/)).toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole('button', { name: /Approve & upscale/ }));
+    await waitFor(() => expect(captured.body).toEqual({ upscale: true, provider: 'segmind' }));
   });
 });

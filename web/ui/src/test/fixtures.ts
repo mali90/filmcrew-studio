@@ -96,6 +96,8 @@ export function makeRun(status: RunStatus, over: Partial<RunDetail> = {}): RunDe
     phase: status === 'complete' ? 'deliver' : status === 'review' ? 'review' : status === 'rendering' ? 'render' : 'plan',
     error: status === 'attention' ? { ts: baseManifest.createdAt, action: 'render', message: 'fal job failed: boom', logTail: ['ERR boom'] } : null,
     spec: planned ? SPEC : null,
+    // The fixture's backend has per-kind reference caps, so nothing competes with a boundary pin.
+    voiceRefs: null,
     queue: null,
     logCursor: 0,
   };
@@ -109,7 +111,15 @@ export const SETUP_COMPLETE = {
   fal: { hasKey: true },
   segmind: { hasKey: false },
   renderProvider: 'fal' as const,
-  defaults: { backend: 'kling' as const, aspect: '9:16' as const, resolution: '1080p' },
+  defaults: {
+    backend: 'kling' as const,
+    aspect: '9:16' as const,
+    // kling (the fixture's default backend) has no ladder: the server reports null for it, exactly
+    // as GET /settings/defaults now answers — a tier here would resurrect the decorative knob
+    resolution: null,
+    resolutions: { 'kling-o3': null, 'seedance-2.0': '480p', 'seedance-2.5': '720p' },
+    seedanceResolution: '480p',
+  },
   complete: true,
 };
 

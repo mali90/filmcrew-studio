@@ -4,9 +4,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { estimateRender, estimateUpscale, jobSeconds, readProbeResolution, readRenderResolution, readSeedanceResolution, readUpscaleProvider } from '../../lib/estimator.js';
+import { estimateRender, estimateUpscale, jobSeconds, readEnvVar, readProbeResolution, readRenderResolution, readSeedanceResolution, readUpscaleKnobs, readUpscaleMaxFactor, readUpscaleModel, readUpscaleProvider, readUpscaleTargetShortSide } from '../../lib/estimator.js';
+import { voiceKnobs } from '../../lib/voice-refs.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
+// config.js is the CHILD's reading of the same .env, and it runs `import 'dotenv/config'` — point
+// dotenv at nothing BEFORE it is ever loaded, so a developer's real .env cannot leak in here.
+const { neutralizeDotenv } = await import(path.join(ROOT, 'test/helpers/env.js'));
+neutralizeDotenv();
+const { buildConfig } = await import(path.join(ROOT, 'config.js'));
 const golden = () => JSON.parse(fs.readFileSync(path.join(ROOT, 'examples/ocean-lighthouse/spec.json'), 'utf8'));
 
 const threeJobs = () => {
@@ -82,6 +88,35 @@ test('seedance pricing scales with resolution: 480p default is cheap, native 108
   assert.ok(off.totalUsd < kling.totalUsd, `audio-off (${off.totalUsd}) must be under audio-on (${kling.totalUsd})`);
   // unknown resolutions fail loudly instead of silently misquoting
   assert.throws(() => estimateRender(spec, { backend: 'seedance', resolution: '9000p' }), /no per-second rate/);
+});
+
+// The per-run pick is the tier the user chose for THIS run, and it is what renders (the child ranks
+// it above a spec pin too — src/lib/prompt-settings.js seedanceResolution, which this module runs
+// rather than re-states). A price quoted for the pinned tier would bill a render nobody asked for.
+test('a per-run pick outranks a spec.seedance.resolution pin; without one the pin still beats .env', () => {
+  const pinned = threeJobs();
+  pinned.seedance = { resolution: '720p' };
+  // priced() rounds each job before summing — mirror that, not seconds × rate
+  const round2 = (n) => Math.round(n * 100) / 100;
+  const at = (r) => round2(['K1', 'K2', 'K3'].reduce((a, id) => a + round2(jobSeconds(pinned, id) * r), 0));
+
+  // picked 480p, pinned 720p, .env 720p → the pick, on 2.5's own rates ($0.2205/s vs $0.473/s)
+  assert.equal(
+    estimateRender(pinned, { backend: 'seedance-2.5@fal', mode: 'full', pick: '480p', resolution: '720p' }).totalUsd,
+    at(0.2205),
+  );
+  // same run, no pick (a CLI spec): the hand-authored pin is still worth authoring
+  assert.equal(
+    estimateRender(pinned, { backend: 'seedance-2.5@fal', mode: 'full', resolution: '480p' }).totalUsd,
+    at(0.473),
+  );
+  // a STALE pin naming a tier this model cannot render must not take the estimate down either
+  const stale = threeJobs();
+  stale.seedance = { resolution: '1080p' }; // survived a 2.0 → 2.5 switch; 2.5 renders 480p/720p
+  assert.equal(
+    estimateRender(stale, { backend: 'seedance-2.5@fal', mode: 'full', pick: '480p', resolution: '720p' }).totalUsd,
+    at(0.2205),
+  );
 });
 
 test('job mode: one job, cascade adds the stale downstream jobs', () => {
@@ -203,6 +238,19 @@ test('readRenderResolution: 2.5 reads its own knob and its own default; everythi
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('readRenderResolution: kling has no ladder — null, never a Seedance env read', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-resk-'));
+  try {
+    // Kling's endpoint takes no resolution parameter: the registry declares an empty ladder, and
+    // the estimator answers null even when legacy KLING_RESOLUTION values sit in .env or the child
+    // env — kling is priced flat, and a knob nothing sends must never masquerade as a tier.
+    assert.equal(readRenderResolution(dir, 'kling-o3@fal'), null, 'no ladder: null, not a config default');
+    fs.writeFileSync(path.join(dir, '.env'), 'KLING_RESOLUTION=720p\nSEEDANCE_RESOLUTION=4k\n');
+    assert.equal(readRenderResolution(dir, 'kling'), null, 'legacy id, legacy .env value: still null');
+    assert.equal(readRenderResolution(dir, 'kling-o3@fal', { KLING_RESOLUTION: '4k' }), null);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('readRenderResolution/readProbeResolution: an injected childEnv var beats .env — dotenv never overwrites it in the render child', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-res-child-'));
   try {
@@ -240,9 +288,170 @@ test('readUpscaleProvider: explicit wins, auto upscales where the run rendered, 
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+// The ApproveBar's pick arrives as an EXPLICIT provider, and it must beat whatever the env would
+// have derived — otherwise the gate/label judge the configured vendor while the pinned child runs
+// the picked one, and the button promises a target the upscale will not deliver.
+test('readUpscaleTargetShortSide: an explicit provider beats the env derivation', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-upt-'));
+  try {
+    fs.writeFileSync(path.join(dir, '.env'), 'UPSCALE_PROVIDER=fal\nUPSCALE_TARGET_RESOLUTION=4k\nFAL_KEY=x\nSEGMIND_API_KEY=y\n');
+    assert.equal(readUpscaleTargetShortSide(dir, 'kling-o3@fal'), 1080, 'env says fal — fal lifts toward ~1080p');
+    assert.equal(readUpscaleTargetShortSide(dir, 'kling-o3@fal', undefined, 'segmind'), 2160, 'the pick reads SEGMIND\'s target over the env provider');
+    assert.equal(readUpscaleTargetShortSide(dir, 'kling-o3@fal', undefined, 'fal'), 1080, 'an explicit fal pick stays ~1080p whatever the target knob says');
+
+    fs.writeFileSync(path.join(dir, '.env'), 'UPSCALE_PROVIDER=segmind\nUPSCALE_TARGET_RESOLUTION=720p\nSEGMIND_API_KEY=y\n');
+    assert.equal(readUpscaleTargetShortSide(dir, 'kling-o3@fal'), 720, 'env segmind honors the 720p target');
+    assert.equal(readUpscaleTargetShortSide(dir, 'kling-o3@fal', undefined, 'fal'), 1080, 'picking fal beats UPSCALE_PROVIDER=segmind');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// fal tiers Topaz by the OUTPUT frame, and the factor CAP decides how far a small clip is lifted
+// toward the target — so `FAL_TOPAZ_MAX_FACTOR` is a price knob, not a tuning detail. The render
+// child binds it (config.fal.topazMaxFactor → upscalePlan); an estimate that assumed the default 4
+// would quote a tier the child would not deliver on any install that changed it.
+test('the Topaz factor cap is read from the .env the child reads — and it moves the tier', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-topazcap-'));
+  try {
+    const clip = [{ jobId: 'K1', seconds: 10, width: 256, height: 256 }];
+    assert.equal(readUpscaleMaxFactor(dir), undefined, 'nothing configured ⇒ the planner\'s own default, never a second copy of 4');
+    assert.equal(estimateUpscale(clip, { provider: 'fal' }).tier, '1080p', '256 lifted 4× is a 1024-tall output');
+
+    fs.writeFileSync(path.join(dir, '.env'), 'export FAL_TOPAZ_MAX_FACTOR=2 # this box only pays for 2×\n');
+    assert.equal(readUpscaleMaxFactor(dir), 2);
+    assert.equal(readUpscaleMaxFactor(dir), buildConfig({ FAL_TOPAZ_MAX_FACTOR: '2' }).fal.topazMaxFactor, 'the same number the child binds');
+    const capped = estimateUpscale(clip, { provider: 'fal', maxFactor: readUpscaleMaxFactor(dir) });
+    assert.equal(capped.tier, '720p', 'capped at 2× the same clip comes back 512 tall — a cheaper tier');
+    assert.ok(capped.totalUsd < estimateUpscale(clip, { provider: 'fal' }).totalUsd);
+
+    // An unreadable cap is NaN in the child too (config.js keeps it NaN on purpose). Here that must
+    // round UP like any other unknown, never collapse to a free or a cheap tier.
+    fs.writeFileSync(path.join(dir, '.env'), 'FAL_TOPAZ_MAX_FACTOR=lots\n');
+    assert.ok(Number.isNaN(readUpscaleMaxFactor(dir)));
+    const unreadable = estimateUpscale(clip, { provider: 'fal', maxFactor: readUpscaleMaxFactor(dir) });
+    assert.equal(unreadable.tier, 'above1080p', 'an unusable cap prices at the dearest tier');
+    assert.ok(unreadable.totalUsd > 0);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ── ONE reading of the .env: dotenv's ────────────────────────────────────────
+// readEnvVar answers for EVERY .env-derived knob this server quotes or budgets — the resolution
+// tiers, the upscale provider and its target, key presence, and run-service's voice-reference
+// demand. The render child reads that same file through dotenv (`import 'dotenv/config'` in
+// config.js), whose grammar differs from a hand-rolled "first KEY= line" reader in three ways: the
+// LAST assignment wins, a trailing `# comment` is not part of the value, and `export KEY=…` is
+// still an assignment. Reading it the other way is not a cosmetic disagreement — it made the server
+// promise a soft boundary pin against a voice demand the renderer did not have, and quote a tier it
+// would not render. So dotenv itself is the oracle, on a file using all three quirks at once.
+test('readEnvVar reads a .env exactly as the render child does — dotenv itself is the oracle', async () => {
+  const { parse } = await import('dotenv');
+  const quirkyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-dotenv-q-'));
+  const plainDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-dotenv-p-'));
+  try {
+    const quirky = [
+      '# what someone had configured first',
+      'SEEDANCE_GENERATE_AUDIO=false',
+      'SEEDANCE_RESOLUTION=480p',
+      'UPSCALE_TARGET_RESOLUTION=1080p',
+      'export SEEDANCE_VOICE_MODE=reference',
+      'export UPSCALE_PROVIDER=segmind',
+      'SEGMIND_API_KEY=y',
+      'SEEDANCE_PROBE_RESOLUTION=480p # probes stay cheap',
+      'LLM_MODEL=claude sonnet 4 # a value runs to the comment, not to the first space',
+      '',
+      '# …and what they changed their mind to, further down the same file',
+      'SEEDANCE_GENERATE_AUDIO=true',
+      'SEEDANCE_RESOLUTION=1080p',
+      'UPSCALE_TARGET_RESOLUTION=4k',
+    ].join('\n') + '\n';
+    fs.writeFileSync(path.join(quirkyDir, '.env'), quirky);
+
+    // What the CHILD gets, from dotenv's own parser — never a second reading of ours.
+    const child = parse(quirky);
+    assert.deepEqual(child, {
+      SEEDANCE_GENERATE_AUDIO: 'true',
+      SEEDANCE_RESOLUTION: '1080p',
+      UPSCALE_TARGET_RESOLUTION: '4k',
+      SEEDANCE_VOICE_MODE: 'reference',
+      UPSCALE_PROVIDER: 'segmind',
+      SEGMIND_API_KEY: 'y',
+      SEEDANCE_PROBE_RESOLUTION: '480p',
+      LLM_MODEL: 'claude sonnet 4',
+    }, 'dotenv itself reads it this way');
+    for (const [key, value] of Object.entries(child)) {
+      assert.equal(readEnvVar(quirkyDir, key), value, `${key}: the server reads what the child loads`);
+    }
+
+    // The same values written plainly: every derived knob must answer identically, so no quirk of
+    // the file can move a price, a tier or a budget.
+    fs.writeFileSync(path.join(plainDir, '.env'), Object.entries(child).map(([k, v]) => `${k}=${v}`).join('\n') + '\n');
+    const knobs = (dir) => ({
+      render: readRenderResolution(dir, 'seedance-2.0@fal'),
+      probe: readProbeResolution(dir, 'seedance-2.0@fal'),
+      provider: readUpscaleProvider(dir, 'seedance-2.5@segmind'),
+      target: readUpscaleTargetShortSide(dir, 'kling-o3@fal'),
+      voices: voiceKnobs((k) => readEnvVar(dir, k)),
+    });
+    assert.deepEqual(knobs(quirkyDir), knobs(plainDir), 'the quirks change the bytes, never the answers');
+    assert.deepEqual(knobs(quirkyDir), {
+      render: '1080p',   // the LAST assignment is the tier that renders and bills
+      probe: '480p',     // a trailing comment is not part of the value
+      provider: 'segmind',
+      target: 2160,      // …nor of the target the approve bar promises
+      voices: { audioOn: true, voiceMode: 'reference' }, // `export` is an assignment
+    });
+
+    // …and the child's own reading of those same knobs agrees, by config.js's rules rather than a
+    // restatement of them: this is the pairing that decides a Seedance 2.5 job's voice-reference
+    // demand, and with it whether a promised boundary pin survives the combined-reference cap.
+    const childCfg = buildConfig(child);
+    assert.equal(voiceKnobs((k) => readEnvVar(quirkyDir, k)).audioOn, childCfg.seedance.generateAudio);
+    assert.equal(voiceKnobs((k) => readEnvVar(quirkyDir, k)).voiceMode, childCfg.seedance.voiceMode);
+    assert.equal(readRenderResolution(quirkyDir, 'seedance-2.0@fal'), childCfg.seedance.resolution);
+    assert.equal(readProbeResolution(quirkyDir, 'seedance-2.0@fal'), childCfg.seedance.probeResolution);
+    assert.equal(readEnvVar(quirkyDir, 'UPSCALE_TARGET_RESOLUTION'), childCfg.upscale.targetResolution);
+    assert.equal(readEnvVar(quirkyDir, 'UPSCALE_PROVIDER'), childCfg.upscale.provider);
+  } finally {
+    for (const d of [quirkyDir, plainDir]) fs.rmSync(d, { recursive: true, force: true });
+  }
+});
+
+// ── …and ONE normalization for a knob that is both PRICED and PINNED ─────────
+// A knob approve pins is the one value this server AUTHORS rather than mirrors, and pricing it is
+// the same act as spending it — so the pin, the quote and the child's own reading have to be one
+// string. Where they were two, a dotenv-legal `" 720p "` priced as `720p` (a value already in the
+// child's env is read trimmed) and reached the child as ` 720p `, which upscale.js refuses by name:
+// a PRICED ledger row, no upscale, a run in attention. Padding on every knob a vendor consumes, and
+// the child's own reader (buildConfig) as the oracle for what it binds.
+test('a pinned knob carries the exact value the quote priced — and the one the child binds', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-pinned-'));
+  try {
+    fs.writeFileSync(path.join(dir, '.env'), 'UPSCALE_TARGET_RESOLUTION=" 720p "\nFAL_TOPAZ_MODEL=" Gaia 2 "\nFAL_TOPAZ_MAX_FACTOR=" 2 "\n');
+
+    const segmind = readUpscaleKnobs(dir, 'segmind');
+    assert.deepEqual(segmind, { UPSCALE_TARGET_RESOLUTION: '720p' }, 'the pin carries the value, not dotenv\'s padding around it');
+    assert.equal(buildConfig(segmind).upscale.targetResolution, '720p', 'which is a target Segmind\'s Topaz accepts — the padded one throws before a frame is uploaded');
+    assert.equal(readUpscaleTargetShortSide(dir, 'kling-o3@fal', segmind, 'segmind'), 720, 'and the quote reads the pin back UNCHANGED — priced and pinned are one value');
+
+    const fal = readUpscaleKnobs(dir, 'fal');
+    assert.deepEqual(fal, { FAL_TOPAZ_MODEL: 'Gaia 2', FAL_TOPAZ_MAX_FACTOR: '2' });
+    assert.equal(readUpscaleModel(dir, fal), buildConfig(fal).fal.topazModel, 'fal is asked for the model whose rate the row was priced at (Gaia 2 bills at half)');
+    assert.equal(readUpscaleMaxFactor(dir, fal), buildConfig(fal).fal.topazMaxFactor, 'and the cap that decided which OUTPUT tier that figure came from');
+
+    // The deliberate EMPTY pin survives normalization: '' is "this knob was unset when we quoted
+    // you", which is what stops a knob ADDED to .env in the gap from moving the charge. Trimming
+    // must not turn it into an absent variable — dotenv would then let the new line win.
+    fs.writeFileSync(path.join(dir, '.env'), '# nothing configured\n');
+    assert.deepEqual(readUpscaleKnobs(dir, 'segmind'), { UPSCALE_TARGET_RESOLUTION: '' }, 'unset still RIDES, as an empty string');
+    assert.deepEqual(readUpscaleKnobs(dir, 'fal'), { FAL_TOPAZ_MODEL: '', FAL_TOPAZ_MAX_FACTOR: '' });
+    assert.equal(buildConfig(readUpscaleKnobs(dir, 'fal')).fal.topazMaxFactor, 4, 'and both sides read \'\' back as the same default');
+    assert.equal(readUpscaleMaxFactor(dir, readUpscaleKnobs(dir, 'fal')), undefined, 'the estimate\'s own reading of \'\' — the planner\'s default, never a second copy of 4');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 // The two are one system: a Segmind-rendered run must show SEGMIND's Topaz figure on approve, not
-// fal's. The rates are close ($0.125 vs $0.12 per input second), which is exactly why a mix-up here
-// would survive a casual glance — so this asserts the provider routing, not just "some number".
+// fal's. The two bill on different SHAPES (Segmind flat per input second, fal tiered by the output
+// frame), so a mix-up moves the figure without making either number look absurd — this asserts the
+// provider routing, not just "some number".
 test('a Segmind run prices its upscale at Segmind\'s rate, a fal run at fal\'s', () => {
   const clips = [{ jobId: 'K1', seconds: 5 }];
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-upv2-'));
@@ -250,8 +459,9 @@ test('a Segmind run prices its upscale at Segmind\'s rate, a fal run at fal\'s',
     fs.writeFileSync(path.join(dir, '.env'), 'FAL_KEY=x\nSEGMIND_API_KEY=y\n');
     const seg = estimateUpscale(clips, { provider: readUpscaleProvider(dir, 'seedance-2.5@segmind') });
     const fal = estimateUpscale(clips, { provider: readUpscaleProvider(dir, 'kling-o3@fal') });
-    assert.equal(seg.totalUsd, 0.63);   // 5s × $0.125
-    assert.equal(fal.totalUsd, 0.6);    // 5s × $0.12
+    assert.equal(seg.totalUsd, 0.63);   // 5s × $0.125, flat on the INPUT duration
+    // Dimensionless clips round UP to fal's dearest tier — see the upscale-tier tests below.
+    assert.equal(fal.totalUsd, 0.4);    // 5s × $0.08 (above-1080p)
     assert.ok(!seg.unknownPrice && !fal.unknownPrice, 'both providers publish a Topaz rate now');
     assert.notEqual(seg.totalUsd, fal.totalUsd, 'a Segmind run must never quote fal money');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }

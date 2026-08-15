@@ -4,7 +4,11 @@ type Listener = (ev: MessageEvent) => void;
 
 export class MockEventSource {
   static instances = new Map<string, MockEventSource[]>();
-  static reset() { MockEventSource.instances.clear(); }
+  /** A real stream opens on a network round trip, so a page can be fully up on its REST fetch while
+   *  the stream is still opening — or blocked outright. Tests that drive that race turn this off and
+   *  call `onopen` themselves. */
+  static autoOpen = true;
+  static reset() { MockEventSource.instances.clear(); MockEventSource.autoOpen = true; }
   /** Push a server event to every open stream whose URL contains `urlPart`. */
   static emit(urlPart: string, data: unknown) {
     for (const [url, list] of MockEventSource.instances) {
@@ -29,7 +33,7 @@ export class MockEventSource {
     const list = MockEventSource.instances.get(url) ?? [];
     list.push(this);
     MockEventSource.instances.set(url, list);
-    queueMicrotask(() => this.onopen?.());
+    if (MockEventSource.autoOpen) queueMicrotask(() => this.onopen?.());
   }
   close() { this.readyState = 2; }
 }

@@ -31,7 +31,7 @@ const compose = await armed(
 );
 const settingsMod = await armed(
   () => import('../../src/lib/prompt-settings.js'),
-  ['klingPromptSettings', 'seedancePromptSettings', 'knobsFor'],
+  ['klingPromptSettings', 'seedancePromptSettings', 'knobsFor', 'seedanceResolution'],
 );
 const P_COMPOSE = pending(compose, 'WS2-02: src/lib/prompt-compose.js');
 const P_SETTINGS = pending(settingsMod, 'WS2-02: src/lib/prompt-settings.js');
@@ -50,6 +50,8 @@ const KLING_DEFAULTS = {
 };
 const SEEDANCE_DEFAULTS = {
   generateAudio: true,
+  // The value pinPromptEnv() pins, which is a cap the golden matrix SETS — not the shipped default
+  // (uncapped). Both sides of the parity check must read the same number or the fixture moves.
   promptMaxBytes: 5000,
   defaultShotSeconds: 5,
   style: '',
@@ -190,6 +192,28 @@ test('seedancePromptSettings: kling.resolution NEVER leaks into Seedance (the 48
 
   const pinned = { ...spec, seedance: { resolution: '720p' } };
   assert.equal(settingsMod.seedancePromptSettings(pinned, null, SEEDANCE_DEFAULTS).resolution, '720p', 'an explicit spec.seedance pin wins');
+  // …but NOT over the tier this run was created at. The picker exists because a pin the plan
+  // carried once decided the render (and the bill) instead of the tier the user chose.
+  assert.equal(
+    settingsMod.seedancePromptSettings(pinned, null, { ...SEEDANCE_DEFAULTS, resolutionPick: '480p' }).resolution,
+    '480p',
+    'a per-run pick outranks a spec pin',
+  );
+});
+
+test('seedanceResolution: pick > spec pin > model knob > shared default, kling.resolution nowhere', P_SETTINGS, () => {
+  const { seedanceResolution } = settingsMod;
+  const pinned = { seedance: { resolution: '720p' }, kling: { resolution: '1080p' } };
+  assert.equal(seedanceResolution({ pick: '480p', spec: pinned, own: '720p', shared: '1080p' }), '480p');
+  assert.equal(seedanceResolution({ spec: pinned, own: '480p', shared: '1080p' }), '720p');
+  assert.equal(seedanceResolution({ spec: { kling: { resolution: '1080p' } }, own: '480p', shared: '720p' }), '480p');
+  assert.equal(seedanceResolution({ spec: { kling: { resolution: '1080p' } }, shared: '720p' }), '720p');
+  // An off-ladder pin (a 1080p value that survived a 2.0 → 2.5 switch) is simply outranked, not
+  // obeyed and not fatal, whenever the run has a pick of its own.
+  assert.equal(seedanceResolution({ pick: '480p', spec: { seedance: { resolution: '1080p' } }, own: '720p' }), '480p');
+  // Empty strings are absent values, not choices: config.render.resolutionPick is '' when unset.
+  assert.equal(seedanceResolution({ pick: '', spec: pinned, own: '480p' }), '720p');
+  assert.equal(seedanceResolution(), undefined);
 });
 
 test('knobsFor: own-property lookup only — a caps bundle naming __proto__ resolves to null', P_SETTINGS, () => {
@@ -245,6 +269,32 @@ test('promptFingerprint is stable, per-job, and sensitive to exactly the authore
     assert.notEqual(fp(s), ref, `an authored change must invalidate the fingerprint: ${mutate}`);
   }
 
+  // The CAST is an authored input too: characterGroups turns it into the Seedance identity clause
+  // and the Kling @ElementN speaker mapping, so a re-cast that never touches a shot still rewrites
+  // this job's prompt — and an override written before it really is stale.
+  const GULL = { id: 'gull-01', role: 'subject', image: 'elements/references/gull-01.png', character: 'Gull' };
+  for (const mutate of [
+    (s) => { s.kling.elements[0].character = 'Keeper'; },                          // the group is renamed
+    (s) => { s.kling.jobs[0].elements = ['subject', 'gull-01']; s.kling.elements.push(GULL); }, // a second group
+  ]) {
+    const s = goldenSpec();
+    mutate(s);
+    assert.notEqual(fp(s), ref, `a cast change must invalidate the fingerprint: ${mutate}`);
+  }
+  // …but only this job's cast. A roster entry no job of K1's names is not K1's prompt.
+  const otherCast = goldenSpec();
+  otherCast.kling.elements.push(GULL);
+  assert.equal(fp(otherCast), ref, 'a roster addition K1 does not name leaves K1 alone');
+  // …unless K1 named no subset at all, in which case the roster IS its cast (characterGroups).
+  const inherits = (extra) => {
+    const s = goldenSpec();
+    s.kling.jobs[0].elements = [];
+    if (extra) s.kling.elements.push(extra);
+    return fp(s);
+  };
+  assert.equal(inherits(null), ref, 'inheriting a one-element roster composes exactly what naming it does');
+  assert.notEqual(inherits(GULL), ref, 'a roster addition an inheriting job WILL send must stale its override');
+
   // Per-JOB scope: editing K2's shots must not stale K1's saved override.
   const otherJob = goldenSpec();
   otherJob.shots.find((s) => s.shot_id === 'S4').kling.content_prompt = 'A different scene entirely.';
@@ -292,11 +342,93 @@ test('kling.js and seedance.js still export everything their importers use today
 });
 
 test('prompt-compose re-exports the shared helpers both renderers import', P_COMPOSE, () => {
-  for (const name of ['utf8Bytes', 'trimToBytes', 'clampBytes', 'lineForShot', 'speakerName', 'SHOT_SIZE_WORDS', 'HOOK_PREFIX', 'TRANSITION_WORDS', 'identityClause', 'shotBlock']) {
+  for (const name of ['utf8Bytes', 'trimToBytes', 'clampBytes', 'promptCapOf', 'lineForShot', 'speakerName', 'SHOT_SIZE_WORDS', 'HOOK_PREFIX', 'TRANSITION_WORDS', 'identityClause', 'shotBlock']) {
     assert.notEqual(compose[name], undefined, `prompt-compose.js must export ${name}`);
   }
   // The helpers must be the SAME implementations the shims serve, not a second copy that can drift.
   assert.equal(compose.HOOK_PREFIX, seedance.HOOK_PREFIX);
   assert.deepEqual(compose.TRANSITION_WORDS, seedance.TRANSITION_WORDS);
   assert.deepEqual(compose.SHOT_SIZE_WORDS, kling.SHOT_SIZE_WORDS);
+});
+
+// ── 7. The whole-prompt cap: one normalizer, uncapped by default, no bleed into Kling ───────────
+//
+// `Number(settings.promptMaxBytes) || DEFAULT` lived at three Seedance sites and collapsed an
+// explicit 0 back into the ambient default — with 0 as the uncapped sentinel that is the difference
+// between sending a prompt and silently shortening it. So the decision lives in ONE exported
+// function and the sites read it, which is what these cases hold in place.
+
+test('promptCapOf is the one place a Seedance cap is decided — 0 and absent both mean uncapped', P_COMPOSE, () => {
+  // No DEFAULT_* constant to fall back to, deliberately: `Number(x) || DEFAULT_PROMPT_MAX_BYTES`
+  // still reads as working code when the default is 0, so the name alone invites the bug back.
+  assert.equal(compose.DEFAULT_PROMPT_MAX_BYTES, undefined, 'nothing defaults a cap for a caller');
+  for (const v of [undefined, null, '', 0, '0', -1, -1200, []]) {
+    assert.equal(compose.promptCapOf({ promptMaxBytes: v }), 0, `${JSON.stringify(v) ?? String(v)} is not a cap`);
+  }
+  assert.equal(compose.promptCapOf({}), 0);
+  assert.equal(compose.promptCapOf(null), 0);
+  assert.equal(compose.promptCapOf(undefined), 0);
+  assert.equal(compose.promptCapOf({ promptMaxBytes: 1200 }), 1200);
+  assert.equal(compose.promptCapOf({ promptMaxBytes: '1200' }), 1200, 'a knob read from a run\'s .env arrives as text');
+});
+
+// NaN/'nonsense'/Infinity used to answer 0 here, alongside the genuinely-unset values above. That
+// was harmless while 0 meant "fall back to 5000" and is not now: with the clamp shipped off, a knob
+// nobody can read would be indistinguishable from a knob nobody set, so `SEEDANCE_PROMPT_MAX_BYTES=5,000`
+// would answer a provider's 422 by doing exactly nothing, twice.
+test('promptCapOf REFUSES a cap that was set to something unreadable — silence is the one wrong answer', P_COMPOSE, () => {
+  for (const v of ['5,000', '5kb', '5 000', 'nonsense', NaN, Infinity, {}]) {
+    assert.throws(
+      () => compose.promptCapOf({ promptMaxBytes: v }),
+      /SEEDANCE_PROMPT_MAX_BYTES is not a number of bytes/,
+      `${JSON.stringify(v) ?? String(v)} is unreadable, not uncapped`,
+    );
+  }
+  // …and it refuses on the paid path too, before a single byte is composed.
+  const spec = goldenSpec();
+  const settings = { ...settingsMod.seedancePromptSettings(spec, null, SEEDANCE_DEFAULTS), promptMaxBytes: Number('5,000') };
+  assert.throws(
+    () => compose.composeSeedanceJobPrompt(spec.kling.jobs[0], spec, settings, { refGroups: [{ name: 'keeper', refs: ['@Image1'] }] }),
+    /not a number/,
+  );
+});
+
+test('an uncapped composer neither clamps the plan nor overflows an override', P_COMPOSE, () => {
+  const spec = goldenSpec();
+  const job = spec.kling.jobs.find((j) => j.job_id === 'K2'); // the byte-trim shots (~740 B + multibyte)
+  const settings = { ...settingsMod.seedancePromptSettings(spec, null, SEEDANCE_DEFAULTS), promptMaxBytes: 0 };
+  const opts = { refGroups: [{ name: 'keeper', refs: ['@Image1'] }], startFrameRef: '@Image2' };
+
+  const planned = compose.composeSeedanceJobPrompt(job, spec, settings, opts);
+  // Byte equality is the real proof; `endsWith` names the failure. Never `includes('…')` — the
+  // speech rule quotes a literal `says: "…"`, so it is in every audio-on prompt by design.
+  assert.equal(planned.prompt, `${planned.front}\n\n${planned.shotPrompts.join('\nWhip pan to: ')}`,
+    'the prompt is the assembled document, byte for byte');
+  assert.ok(!planned.prompt.endsWith('…'), 'nothing was cut, so nothing marks a cut');
+
+  const mine = 'z'.repeat(30000);
+  const got = compose.applyOverride(planned, { prompt: mine }, settings);
+  assert.ok(got.prompt.endsWith(mine), 'a 30 KB edit rides whole');
+  assert.equal(got.overflowBytes, 0);
+  assert.equal(compose.assertOverrideFits(got, 'K2'), got);
+});
+
+test('trimToBytes keeps its Kling semantics — the no-cap rule belongs to clampBytes alone', P_COMPOSE, () => {
+  // klingSegmentPrompt budgets the authored body with trimToBytes. Giving IT an uncapped escape
+  // would hand a 500-byte segment an unlimited body, and fal rejects the render at 512.
+  assert.equal(compose.trimToBytes('abcdef', 0), '', 'a zero budget still trims to nothing');
+  assert.equal(compose.trimToBytes('abcdef', 3), 'abc');
+  assert.equal(compose.trimToBytes('abcdef', 99), 'abcdef');
+});
+
+test('a model\'s OWN promptMaxBytes of 0 stays uncapped — `||` would swallow it', P_SETTINGS, () => {
+  const spec = goldenSpec();
+  const bag = { seedance: SEEDANCE_DEFAULTS, seedance25: { resolution: '720p', promptMaxBytes: 0 } };
+  const s = settingsMod.seedancePromptSettings(spec, { knobsKey: 'seedance25' }, { ...SEEDANCE_DEFAULTS, knobs: bag });
+  assert.equal(s.promptMaxBytes, 0, "a model that declares itself uncapped must not inherit the shared cap");
+  // …and a model that redeclares nothing still inherits, exactly as before.
+  const shared = settingsMod.seedancePromptSettings(spec, { knobsKey: 'seedance25' }, {
+    ...SEEDANCE_DEFAULTS, knobs: { seedance25: { resolution: '720p' } },
+  });
+  assert.equal(shared.promptMaxBytes, 5000);
 });

@@ -27,6 +27,9 @@ for (const d of [ENV_DIR, REFS_DIR, PROFILES_DIR, VOICES_DIR]) fs.mkdirSync(d, {
 Object.assign(process.env, {
   ENVIRONMENTS_DIR: ENV_DIR, ELEMENTS_REFERENCES_DIR: REFS_DIR,
   PROFILES_DIR, VOICES_DIR,
+  // A tier 2.5 does not render, on 2.5's OWN knob — drives the buildCtx resolution gate below while
+  // every kling/2.0 test keeps its config defaults (config.js snapshots env at import).
+  SEEDANCE25_RESOLUTION: '1080p',
 });
 
 const { buildCtx, contextBlock, isTextToVideoPlan } = await import('../../src/lib/engine.js');
@@ -81,6 +84,21 @@ test('buildCtx rejects an aspect outside the MODEL\'s list, naming the valid rat
   assert.equal((await buildCtx({ brief: 'x', backend: 'kling' })).aspectRatio, undefined);
 });
 
+// ── per-model resolutions, enforced at the gate ─────────────────────────────
+test('buildCtx judges the EFFECTIVE resolution against the model\'s own ladder, naming the knob', async () => {
+  // SEEDANCE25_RESOLUTION=1080p is pinned above; 2.5 renders 480p/720p only — the plan must cost
+  // nothing rather than advertise a tier the render child will refuse (render-seedance throws too).
+  await assert.rejects(
+    () => buildCtx({ brief: 'x', backend: 'seedance-2.5@fal' }),
+    /Unknown resolution "1080p" \(the SEEDANCE25_RESOLUTION config default\) — Seedance 2\.5 renders: 480p, 720p/,
+  );
+  // each model reads ITS knob: the bad 2.5 value must not leak into kling or 2.0 plans. Kling has
+  // no ladder at all — its resolution is null (endpoint-fixed output) and a stray KLING_RESOLUTION
+  // in .env is tolerated as the no-op it always was, never a plan-time throw.
+  assert.equal((await buildCtx({ brief: 'x', backend: 'kling' })).resolution, null);
+  assert.equal((await buildCtx({ brief: 'x', backend: 'seedance-2.0@fal' })).resolution, '480p');
+});
+
 // ── contextBlock is caps-fed ────────────────────────────────────────────────
 const baseCtx = (over) => ({
   brief: 'a courier races the last train', aspectRatio: '9:16', durationTargetS: 13,
@@ -106,6 +124,22 @@ test('contextBlock hard caps come from capsFor — Kling unchanged, Seedance now
     seedance.includes('- Hard caps: ≤6 shots/job, ≤15s/job, ≤512 chars/segment, ≤9 reference images/job'),
     'the Seedance line states the model\'s own reference-image cap',
   );
+});
+
+test('contextBlock: the resolution enum and the Defaults line are the MODEL\'s, never a Kling constant', () => {
+  // the enum once hardcoded 'kling.resolution ∈ {4k, 1080p, 720p}' — false for 2.5 (480p/720p only)
+  // and false for Kling itself, whose endpoint takes no resolution parameter at all: the planner is
+  // now told to OMIT the field rather than fed a menu of tiers nothing sends.
+  const kling = contextBlock(baseCtx({ backend: 'kling-o3@fal', caps: capsFor('kling-o3@fal') }));
+  assert.ok(kling.includes('kling.resolution — OMIT this field'));
+  assert.ok(!kling.includes('kling.resolution ∈'));
+  const sd20 = contextBlock(baseCtx({ backend: 'seedance-2.0@fal', caps: capsFor('seedance-2.0@fal') }));
+  assert.ok(sd20.includes('kling.resolution ∈ {480p, 720p, 1080p, 4k}'));
+  // and the Defaults line advertises the knob the render will READ (2.0's 480p, not KLING's 1080p);
+  // a hand-assembled ctx without `resolution` derives it from the caps' own knob
+  assert.ok(sd20.includes('resolution=480p,'), 'a Seedance plan is never told the Kling default');
+  assert.ok(kling.includes('resolution=endpoint-native (not selectable),'));
+  assert.ok(contextBlock(baseCtx({ backend: 'seedance', resolution: '720p' })).includes('resolution=720p,'), 'an explicit ctx.resolution (the per-run pick) wins');
 });
 
 test('the Seedance packing rule keys off caps.family, not a literal backend string', () => {

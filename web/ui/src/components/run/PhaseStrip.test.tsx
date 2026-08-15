@@ -38,4 +38,17 @@ describe('PhaseStrip', () => {
     // the attention fixture stopped in the plan phase — its node carries the failed soft treatment
     expect(nav.querySelector('.bg-\\[var\\(--status-failed-soft\\)\\]')).not.toBeNull();
   });
+
+  // U10 — at plan-ready the machine is finished and the pause is the user's money decision: Plan
+  // reads done, and the Render node answers "who is the flow waiting on".
+  it('plan-ready: the Plan node is done and Render carries "waiting on you"', () => {
+    render(<PhaseStrip run={makeRun('plan-ready')} agents={agents()} activeKind={null} />);
+    expect(screen.getByText('waiting on you')).toBeInTheDocument();
+    // no pulsing "active · 8/8" while nothing is working
+    expect(screen.queryByText('8/8')).not.toBeInTheDocument();
+    const nav = screen.getByRole('navigation', { name: 'Run phases' });
+    // exactly one done node (Plan) and no active ring anywhere
+    expect(nav.querySelectorAll('.bg-\\[var\\(--status-done-soft\\)\\]')).toHaveLength(1);
+    expect(nav.querySelector('.ring-accent')).toBeNull();
+  });
 });

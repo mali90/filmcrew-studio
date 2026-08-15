@@ -297,3 +297,31 @@ test("'21:9' clears the backend-less schema but FAILS validation once kling is n
   narrow.kling.aspect_ratio = '21:9';
   assert.equal(validateSpec(narrow, { backend: 'seedance-2.0@fal' }).ok, false, 'the same spec fails on fal 2.0');
 });
+
+// kling.resolution got the same registry treatment as the ratios above, with one asymmetry that is
+// the point: the field only DRIVES a kling-family render (klingPromptSettings reads it first), while
+// the Seedance renderers IGNORE it and read their own knob — and old Seedance specs legitimately
+// carry the KLING default ('1080p') the agents used to copy in. So kling is judged against its own
+// ladder, and Seedance-family / backend-less specs get the registry-wide union as a shape check —
+// never the old hardcoded '4k|1080p|720p', which rejected a planner writing 480p for a 2.5 plan.
+test('kling.resolution: the kling ladder where it drives the render, the registry union elsewhere', () => {
+  const at = (res, backend) => {
+    const spec = loadGoldenSpec();
+    spec.kling.resolution = res;
+    return validateSpec(spec, backend === undefined ? {} : { backend });
+  };
+  // kling now declares NO ladder (the endpoint takes no resolution parameter), so its specs get the
+  // registry union too — pure legacy tolerance for the old decorative field, which nothing sends.
+  assert.equal(at('720p', 'kling-o3@fal').ok, true);
+  assert.equal(at('4k', 'kling').ok, true);
+  assert.equal(at('480p', 'kling-o3@fal').ok, true, 'union shape-check — the field never reaches the render');
+  assert.equal(at('900p', 'kling-o3@fal').ok, false, 'garbage still rejected by the union');
+  // Seedance: new plans write 480p (the caps-driven engine enum), old 2.5 plans carry 1080p — both
+  // must keep validating, because neither value reaches the render
+  assert.equal(at('480p', 'seedance-2.5@fal').ok, true);
+  assert.equal(at('1080p', 'seedance-2.5@segmind').ok, true, 'a pre-registry 2.5 spec still validates');
+  assert.equal(at('480p', 'seedance').ok, true);
+  // no backend named: the union still rejects garbage
+  assert.equal(at('480p', undefined).ok, true);
+  assert.equal(at('900p', undefined).ok, false);
+});

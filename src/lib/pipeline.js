@@ -13,7 +13,7 @@ import { renderKlingJobFal } from './fal-kling.js';
 import { falAdapter } from './fal-seedance.js';
 import { segmindAdapter } from './segmind-seedance.js';
 import { renderSeedanceJob } from './render-seedance.js';
-import { assembleVideo, grabFrame, lastFrameOf, firstFrameOf } from './assemble.js';
+import { assembleVideo, grabFrame, lastFrameOf, firstFrameOf, probeClip } from './assemble.js';
 import { readPromptOverrides, OVERRIDES_FILE } from './prompt-overrides.js';
 import { readContinuity } from './seamstitch.js';
 import { upscaleVideoTopaz, probeDims } from './upscale.js';
@@ -136,6 +136,12 @@ export async function resolveBoundaryFrame(input, { end, destDir }) {
   return got;
 }
 
+/** Is an opening pin the neighbour's CLOSING frame — its clip (whose LAST frame is what gets grabbed)
+ *  or the `last_frame.png` recorded beside it? Only then does the clip it came out of name a
+ *  continuation; any other still sitting in that dir is a different frame, and claiming a source for
+ *  it would be a false chain. */
+const isClosingFrame = (input) => !IS_STILL.test(input) || path.basename(input) === 'last_frame.png';
+
 /**
  * Boundary-frame PRECEDENCE, decided in ONE place:
  *
@@ -143,16 +149,24 @@ export async function resolveBoundaryFrame(input, { end, destDir }) {
  *   2. the spec's authored `job.first_frame` / `job.last_frame`
  *   3. the chained seam frame (the previous clip's closing still)
  *
- * The renderers only know rules 2–3 (`job.first_frame || startFrame`), so an explicit pin has to
- * reach them as the seam frame with the authored field REMOVED — otherwise a spec that authors an
- * opening frame would quietly ignore the flag and render (and bill for) a boundary nobody asked for.
- * The job is returned untouched when no pin is in play, so an ordinary render is unchanged.
+ * The renderers only know rules 2–3 (`job.first_frame || startFrame`), so an authored field has to
+ * be REMOVED from the job they are handed whenever the operator decided that end themselves:
+ *
+ *   `clearStart`/`clearEnd`  a replacement pin (rule 1) — otherwise a spec that authors an opening
+ *                            frame would quietly ignore the flag and render (and bill for) a
+ *                            boundary nobody asked for — or an explicit "this end is FREE"
+ *                            (`--no-first-frame`/`--no-last-frame`), which is how the paid per-job
+ *                            re-render says the join the user excluded really is a scene cut.
+ *
+ * An omitted decision means PRESERVE: a full render honours the authored frame, because seeding a
+ * job with one is the documented way to author it. The job is returned untouched when neither end
+ * was decided, so an ordinary render is unchanged.
  */
-function jobWithPins(job, { startPin = false, endPin = false } = {}) {
-  if (!startPin && !endPin) return job;
+function jobWithPins(job, { clearStart = false, clearEnd = false } = {}) {
+  if (!clearStart && !clearEnd) return job;
   const eff = { ...job };
-  if (startPin) delete eff.first_frame;
-  if (endPin) delete eff.last_frame;
+  if (clearStart) delete eff.first_frame;
+  if (clearEnd) delete eff.last_frame;
   return eff;
 }
 
@@ -172,6 +186,28 @@ async function seamSourceFor(takeDir, jobId) {
   const prior = await readJson(path.join(takeDir, 'render.json')).catch(() => null);
   const rec = (prior?.jobs ?? []).find((j) => (j.jobId ?? j.job) === jobId);
   return { take: path.basename(takeDir), job: jobId, clip: rec?.clip ?? null };
+}
+
+/**
+ * The `{take, job, clip}` a boundary pin points AT. Both flags name a neighbouring clip this segment
+ * must join (`<…>/renders/<tN>/<job>/clip.mp4`, or a frame beside it), and both ends of a joint are
+ * recorded by that pointer: a `to: null` on an applied end pin is what made every end-pinned
+ * re-render read as a broken chain, so the seamless stitcher hard-cut the very joint the paid dialog
+ * promised to preserve — and a `from: null` on an applied opening pin says exactly the same lie from
+ * the other side. A path outside a take dir (a hand-picked still) genuinely points nowhere and stays
+ * null.
+ */
+async function seamPointerFor(input) {
+  const src = resolvePath(input);
+  const m = /(?:^|[\\/])renders[\\/](t\d+)[\\/]([^\\/]+)[\\/][^\\/]+$/.exec(src);
+  if (!m) return null;
+  const dest = await seamSourceFor(path.dirname(path.dirname(src)), m[2]);
+  // The record's own clip path wins; the file beside the frame is the fallback truth.
+  if (!dest.clip) {
+    const sibling = path.join(path.dirname(src), 'clip.mp4');
+    dest.clip = fs.existsSync(sibling) ? sibling : (/\.mp4$/i.test(src) ? src : null);
+  }
+  return dest;
 }
 
 /** First free `<dir>/<base>.mp4`, then `<base>-2.mp4`, `<base>-3.mp4`, … — masters are never overwritten. */
@@ -234,8 +270,14 @@ export async function renderSpec(spec, { runDir, probe = false, upscale = false,
     // job.first_frame both outrank the chained still, and a `from` recorded for a frame that was
     // never used is the same false continuation claim as no record at all.
     const usedChainedFrame = !startPin && !job.first_frame && startFrame;
-    const seamInFrom = usedChainedFrame && prev ? { take: takeId, job: prev.jobId, clip: prev.clip } : null;
-    const r = await RENDERERS[be].render({ job: jobWithPins(job, { startPin: !!startPin, endPin: !!endPin }), spec, runDir, seed, lowRes: probe, startFrame: openFrame, endFrame: endPin, feedsNext, seamInFrom, nonce: take ?? 0 })
+    let seamInFrom = usedChainedFrame && prev ? { take: takeId, job: prev.jobId, clip: prev.clip } : null;
+    // …and the run's opening pin carries its OWN provenance, by the same rule renderJob applies: a
+    // --first-frame-from naming a genuine closing frame (a clip, or the last_frame.png beside it) says
+    // this run starts where that clip ended, and nothing in THIS run could derive that. Left null, the
+    // joint the pin paid for reads as a scene cut and the stitcher hard-cuts it. Any other still is
+    // hand-picked and points nowhere. Scoped to the job the pin brackets — startPin is the first one.
+    if (startPin) seamInFrom = isClosingFrame(firstFrameFrom) ? await seamPointerFor(firstFrameFrom) : null;
+    const r = await RENDERERS[be].render({ job: jobWithPins(job, { clearStart: !!startPin, clearEnd: !!endPin }), spec, runDir, seed, lowRes: probe, startFrame: openFrame, endFrame: endPin, feedsNext, seamInFrom, nonce: take ?? 0 })
       .catch((e) => { log.error(`[${job.job_id}] failed: ${e.message}`); return { jobId: job.job_id, error: e.message }; });
     results.push(r);
     // The previous job's sidecar was written before THIS clip existed: stamp where its closing frame
@@ -249,6 +291,12 @@ export async function renderSpec(spec, { runDir, probe = false, upscale = false,
       const p = results.find((x) => x.jobId === prev.jobId);
       if (p?.seamOut) p.seamOut.to = to;
       stampSeamOut(runDir, prev.jobId, { to });
+    }
+    // The run-bracketing close pin's destination, by the same honesty rule as renderJob's: only an
+    // APPLIED pin records where it points.
+    if (endPin && lastFrameFrom && r.seamOut && !['none', 'unsupported'].includes(r.seamOut.mode)) {
+      const to = await seamPointerFor(lastFrameFrom);
+      if (to) { r.seamOut.to = to; stampSeamOut(runDir, job.job_id, { to }); }
     }
     startFrame = undefined;
     if (chain && r.clip) {
@@ -280,17 +328,22 @@ export async function renderSpec(spec, { runDir, probe = false, upscale = false,
  * `seamFrom` (optional): a PRIOR render dir whose previous-job `last_frame.png` seeds this job's
  * opening frame, matching renderSpec's cross-job chaining. Returns the renderer result plus
  * `staleDownstream`: job ids whose seams were chained from the OLD take of this job — re-render
- * them too (cascade) for a continuous seam, or expect a visible cut.
+ * them too (cascade) for a continuous seam, or expect a visible cut. Empty when an APPLIED
+ * `lastFrameFrom` already made this clip arrive on the next one's opening frame: that joint is
+ * recorded, so nothing downstream needs re-rendering.
  * @param {object} spec
  * @param {string} jobId
  * @param {{runDir:string, backend?:string, take?:number, feedback?:string, seamFrom?:string,
- *          lowRes?:boolean, firstFrameFrom?:string, lastFrameFrom?:string, promptOverrides?:string}} opts
+ *          lowRes?:boolean, firstFrameFrom?:string, lastFrameFrom?:string, clearFirstFrame?:boolean,
+ *          clearLastFrame?:boolean, promptOverrides?:string}} opts
  *   `firstFrameFrom`/`lastFrameFrom` pin this job's own boundaries and outrank both the authored
- *   `job.first_frame`/`job.last_frame` and the `seamFrom` chain (jobWithPins); `promptOverrides` is
- *   a sidecar file snapshotted into the take dir.
+ *   `job.first_frame`/`job.last_frame` and the `seamFrom` chain (jobWithPins);
+ *   `clearFirstFrame`/`clearLastFrame` decide that end the other way — the authored frame is
+ *   dropped, so the end is free (opening) or a plain cut (closing); `promptOverrides` is a sidecar
+ *   file snapshotted into the take dir.
  * @returns {Promise<{jobId:string, clip:string, totalDuration:number, segments:number, backend:string, staleDownstream:string[]}>}
  */
-export async function renderJob(spec, jobId, { runDir, backend, take = 0, feedback, seamFrom, lowRes = false, firstFrameFrom, lastFrameFrom, promptOverrides } = {}) {
+export async function renderJob(spec, jobId, { runDir, backend, take = 0, feedback, seamFrom, lowRes = false, firstFrameFrom, lastFrameFrom, clearFirstFrame = false, clearLastFrame = false, promptOverrides } = {}) {
   const be = resolveBackend(spec, backend);
   // Structural pass first, so an invalid spec fails with the full validation report rather than a
   // job-lookup error.
@@ -314,7 +367,7 @@ export async function renderJob(spec, jobId, { runDir, backend, take = 0, feedba
       // WHICH take's clip this frame came off is the whole point: a cut that mixes take 2's K1 with
       // take 1's K2 is indistinguishable from an intact chain without it.
       seamInFrom = await seamSourceFor(srcDir, jobs[idx - 1].job_id);
-    } else log.warn(`no seam frame at ${cand} — rendering ${jobId} without cross-job continuity`);
+    } else if (!firstFrameFrom) log.warn(`no seam frame at ${cand} — rendering ${jobId} without cross-job continuity`);
   }
 
   // No budget re-check here any more: a seam frame that has to ride as a reference is a soft pin,
@@ -332,15 +385,28 @@ export async function renderJob(spec, jobId, { runDir, backend, take = 0, feedba
     // names the boundary outright (so the choice survives whatever chainFrames is set to) while
     // --seam-from still says which take/job/clip it came off. Dropping the source there would tell
     // the continuity rule this clip opens on nothing, and every re-rendered joint would read as a
-    // scene cut. Any OTHER still is hand-picked and genuinely points nowhere.
-    if (!startFrame || path.resolve(pinned) !== path.resolve(startFrame)) seamInFrom = null;
+    // scene cut.
+    // A pin the chain never derived can still BE that chain, spelled out: `--first-frame-from
+    // <…>/renders/<tN>/<job>/clip.mp4` is the documented way to say "start where that clip ended",
+    // and it is what the web layer hands over when the neighbour's closing still was never written
+    // (chaining off, a cleaned or legacy take). The frame comes off the predecessor either way, so
+    // the pin's own path is the provenance. Any OTHER still is hand-picked and points nowhere.
+    if (!startFrame || path.resolve(pinned) !== path.resolve(startFrame)) {
+      seamInFrom = isClosingFrame(firstFrameFrom) ? await seamPointerFor(firstFrameFrom) : null;
+    }
     startFrame = pinned;
-  } else if (job.first_frame) {
+  } else if (job.first_frame && !clearFirstFrame) {
     seamInFrom = null; // the authored frame is what the renderer will use — naming the chain's
                        // source here would claim a continuation this clip does not have
   }
   const endFrame = lastFrameFrom ? await resolveBoundaryFrame(lastFrameFrom, { end: 'out', destDir: jobDir }) : null;
-  const effJob = jobWithPins(job, { startPin: !!firstFrameFrom, endPin: !!lastFrameFrom });
+  // Each end is cleared by a replacement pin OR by an explicit "leave it free" — with the authored
+  // frame gone, an opening falls through to the --seam-from chain (that is what lets a cascade
+  // rebuild a chain across a job the spec seeded) or to nothing at all, and a closing to nothing.
+  const effJob = jobWithPins(job, {
+    clearStart: !!firstFrameFrom || clearFirstFrame,
+    clearEnd: !!lastFrameFrom || clearLastFrame,
+  });
 
   const staleDownstream = downstreamJobs(spec, jobId);
 
@@ -358,9 +424,27 @@ export async function renderJob(spec, jobId, { runDir, backend, take = 0, feedba
     stampSeamOut(runDir, job.job_id, frame ? { frame, frameSource } : { frameSource });
     if (!frame) log.warn(`could not extract ${jobId}'s last frame — downstream jobs will chain from the PREVIOUS take's seam.`);
   }
+  // An APPLIED end pin knows its destination — the clip --last-frame-from named. Recorded only when
+  // the pin survived (a budget-dropped soft pin records mode 'none', and a destination for a frame
+  // nothing consumed would be a false continuation claim from this side of the joint).
+  let endPinned = false;
+  if (lastFrameFrom && r.seamOut && !['none', 'unsupported'].includes(r.seamOut.mode)) {
+    const to = await seamPointerFor(lastFrameFrom);
+    if (to) { r.seamOut.to = to; stampSeamOut(runDir, job.job_id, { to }); endPinned = true; }
+  }
 
-  if (staleDownstream.length) {
-    log.warn(`Seam note: ${staleDownstream.join(', ')} chained from the previous ${jobId} take — re-render them too for a continuous seam.`);
+  // …and a joint that pin really made is not stale. This clip was rendered to ARRIVE on the next
+  // one's opening frame and wrote down where it lands, which is the evidence BOTH judges of a joint
+  // accept from this side (seam-rule.js closesOnNext — the stitcher and the lineage badge ask the
+  // same function). Advising a cascade over it would sell a paid re-render of footage nothing
+  // changed. Only an APPLIED pin clears the list: an absent one, a soft pin the reference budget
+  // dropped ('none') or one the provider refused ('unsupported') leaves every downstream seam
+  // chained from the take this render just replaced.
+  const stale = endPinned ? [] : staleDownstream;
+  if (stale.length) {
+    log.warn(`Seam note: ${stale.join(', ')} chained from the previous ${jobId} take — re-render them too for a continuous seam.`);
+  } else if (endPinned && staleDownstream.length) {
+    log.info(`Seam note: ${jobId} was rendered to arrive on its pinned closing frame — nothing downstream needs re-rendering (${staleDownstream.join(', ')} unchanged).`);
   }
 
   // Merge into any render.json already in this dir (a cascade renders several jobs into ONE take
@@ -371,7 +455,7 @@ export async function renderJob(spec, jobId, { runDir, backend, take = 0, feedba
   merged.set(r.jobId, r);
   const ordered = jobs.map((j) => merged.get(j.job_id)).filter(Boolean);
   await writeJson(rjPath, { project: spec.project.title, backend: be, take, jobs: ordered });
-  return { ...r, backend: be, staleDownstream };
+  return { ...r, backend: be, staleDownstream: stale };
 }
 
 /** The provider a run rendered on ('fal' | 'segmind'), or null when the backend is unrecorded — an
@@ -405,6 +489,30 @@ export async function finishRender(spec, results, { runDir, upscale = false, bac
   ensureDir(outDir);
   const name = slug(outName || spec.project.title || 'video');
   const nativeAudio = spec.kling.generate_audio !== undefined ? !!spec.kling.generate_audio : config.kling.nativeAudio;
+
+  // Each job clip's SOURCE frame AND its SOURCE duration, measured BEFORE the optional upscale off
+  // the very file the record below names. Neither can be derived from anything else here:
+  //   · the master cannot stand in for the frame — an approve-time upscale lifts these clips into
+  //     NEW files, stitches those, and rewrites this same render.json with the HD master it
+  //     delivered, while `jobs[].clip` still points at the originals, which is exactly what a second
+  //     upscale of this take hands Topaz;
+  //   · the SPEC cannot stand in for the duration — a composed cut keeps clips rendered from OLDER
+  //     plans, so a revision that shortens a shot leaves the current spec claiming 5s for a file
+  //     Topaz processes, and bills, as 10.
+  // Both facts are about the FILE, so both are read from it, once, here. probeClip answers frame and
+  // duration in ONE ffprobe (the same reader assembleVideo measures these clips with); an unreadable
+  // clip records neither rather than failing an assembled render — the estimator prices an unmeasured
+  // clip at the dearest tier and from the plan, and a missing field must never read as a measured
+  // zero.
+  const clipFacts = new Map();
+  for (const clip of clipPaths) {
+    const d = await probeClip(clip).catch(() => null);
+    const fact = {
+      ...(d?.width && d?.height ? { width: d.width, height: d.height } : {}),
+      ...(d?.duration > 0 ? { duration: d.duration } : {}),
+    };
+    if (Object.keys(fact).length) clipFacts.set(clip, fact);
+  }
 
   // Optional fal Topaz upscale runs PER CLIP, before the stitch: assembleVideo scales everything to
   // the delivery frame (config.video), so a sub-1080p source (a 480p/720p Seedance render, a probe
@@ -448,7 +556,7 @@ export async function finishRender(spec, results, { runDir, upscale = false, bac
   // would forget the seam lineage and silently downgrade to a hard-cut stitch.
   // The seam LINEAGE must survive this rewrite too — it is the only record of which clip each
   // segment really continues from, and re-deriving it later is exactly the guess P2 exists to end.
-  const summary = { runDir, project: spec.project.title, backend: backend ?? null, master, cover, masterShortSide, chained, stitch, jobs: results.map((r) => ({ jobId: r.jobId, job: r.jobId, clip: r.clip, error: r.error, seamIn: r.seamIn ?? null, seamOut: r.seamOut ?? null })) };
+  const summary = { runDir, project: spec.project.title, backend: backend ?? null, master, cover, masterShortSide, chained, stitch, jobs: results.map((r) => ({ jobId: r.jobId, job: r.jobId, clip: r.clip, error: r.error, ...(clipFacts.get(r.clip) ?? {}), seamIn: r.seamIn ?? null, seamOut: r.seamOut ?? null })) };
   await writeJson(path.join(runDir, 'render.json'), summary);
   log.info(`\n✅ Master: ${master}  (${clipPaths.length} job clip(s), ${stitch.stitcher === 'seamless' ? `seamless stitch, ${stitch.matched}/${stitch.joints} joint(s) colour-matched` : 'hard-cut stitch'})`);
   return { runDir, master, cover, masterShortSide, stitch, jobs: results };

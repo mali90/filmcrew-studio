@@ -21,7 +21,7 @@ import type { PropsWithChildren, ReactElement } from 'react';
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: shim });
 })();
 import { render } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { RunDetail } from '../../../../shared/api-types';
 import { http, HttpResponse, server } from '../../test/msw';
@@ -55,6 +55,42 @@ export function renderRunPage(run: RunDetail) {
           <Routes>
             <Route path="/runs/:id" element={<RunPage />} />
             <Route path="/" element={<div>home page</div>} />
+          </Routes>
+        </MemoryRouter>
+      </ToastProvider>
+    </QueryClientProvider>,
+  );
+}
+
+/**
+ * Mount the page on the FIRST run, with the others reachable at their own URLs. React Router
+ * REUSES one RunPage across /runs/A → /runs/B (same route, new param), so nothing the page holds in
+ * state may leak across the jump — the `goto-<id>` buttons drive that navigation the way a link in
+ * the library would.
+ */
+export function renderRunPages(runs: RunDetail[]) {
+  server.use(http.get('/api/runs/:id', ({ params }) => {
+    const run = runs.find((r) => r.id === String(params.id));
+    return run ? HttpResponse.json({ run }) : HttpResponse.json({ error: `no run ${params.id}` }, { status: 404 });
+  }));
+  const client = makeClient();
+  function Nav() {
+    const navigate = useNavigate();
+    return (
+      <>
+        {runs.map((r) => (
+          <button key={r.id} type="button" data-testid={`goto-${r.id}`} onClick={() => navigate(`/runs/${r.id}`)} />
+        ))}
+      </>
+    );
+  }
+  return render(
+    <QueryClientProvider client={client}>
+      <ToastProvider>
+        <MemoryRouter initialEntries={[`/runs/${runs[0].id}`]}>
+          <Nav />
+          <Routes>
+            <Route path="/runs/:id" element={<RunPage />} />
           </Routes>
         </MemoryRouter>
       </ToastProvider>

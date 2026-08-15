@@ -29,10 +29,15 @@ const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kva-boundaries-'));
 const runsDir = path.join(tmpRoot, 'runs');
 const outDir = path.join(tmpRoot, 'out');
 const envRoot = path.join(tmpRoot, 'envroot');
-for (const d of [runsDir, outDir, envRoot]) fs.mkdirSync(d, { recursive: true });
+const voicesDir = path.join(tmpRoot, 'voices');
+const voicesFile = path.join(voicesDir, 'voices.json');
+for (const d of [runsDir, outDir, envRoot, voicesDir]) fs.mkdirSync(d, { recursive: true });
 fs.writeFileSync(path.join(envRoot, '.env'), '');
+// A bundled clip on disk IS a registered voice (voices.js stages one from any clip it finds), so
+// "keeper" costs an @Audio reference here without a minted voices.json.
+fs.writeFileSync(path.join(voicesDir, 'keeper.mp3'), 'ID3');
 
-const app = await buildApp({ root: HOST_ROOT, runsDir, outDir, envRoot });
+const app = await buildApp({ root: HOST_ROOT, runsDir, outDir, envRoot, voicesFile });
 test.after(async () => { await app.close(); fs.rmSync(tmpRoot, { recursive: true, force: true }); });
 const post = (url, payload) => app.inject({ method: 'POST', url, payload });
 
@@ -52,19 +57,30 @@ const seamIn = (runId, take, job) => (job
  * closing still really on disk. `chainedFrom` names, per job, the {take, job} its opening frame was
  * grabbed from, which is what makes a joint whole or broken.
  */
-function seedRun(runId, layout) {
+function seedRun(runId, layout, over = {}) {
+  const backend = over.backend ?? 'seedance';
+  const elements = over.elements ?? [{ id: 'subject', image: 'subject.png' }];
+  const jobIds = over.jobs ?? JOBS;
   const dir = path.join(runsDir, runId);
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'spec.json'), JSON.stringify({
     spec_version: '1.0',
-    render_backend: 'seedance',
+    render_backend: backend,
     project: { title: 'Boundary Drill', aspect_ratio: '9:16' },
-    shots: JOBS.map((_, i) => ({ shot_id: `S${i + 1}`, duration_s: 5, description: 'a shot' })),
-    kling: { elements: [{ id: 'subject', image: 'subject.png' }], jobs: JOBS.map((j, i) => ({ job_id: j, shots: [`S${i + 1}`], elements: ['subject'] })) },
+    shots: jobIds.map((_, i) => ({ shot_id: `S${i + 1}`, duration_s: 5, description: 'a shot' })),
+    kling: {
+      elements,
+      jobs: jobIds.map((j, i) => ({ job_id: j, shots: [`S${i + 1}`], elements: elements.map((e) => e.id) })),
+      // ABSENT is "whatever the .env defaults to"; `false` is the plan itself turning audio off
+      ...(over.specAudio === undefined ? {} : { generate_audio: over.specAudio }),
+    },
+    ...(over.voiceLines ? { audio: { voice: { lines: over.voiceLines } } } : {}),
   }, null, 2));
 
-  const jobClips = {};
-  const clipLineage = {};
+  // Null-prototype, exactly like the manifest maps run-service writes: a plan may legitimately name
+  // a job `__proto__`, and a plain `{}` would swallow it HERE, before any assertion could see it.
+  const jobClips = Object.create(null);
+  const clipLineage = Object.create(null);
   for (const { job, take, from } of layout) {
     fs.mkdirSync(path.join(dir, 'renders', take, job), { recursive: true });
     fs.writeFileSync(clipOf(runId, take, job), 'FAKE-MP4');
@@ -78,7 +94,7 @@ function seedRun(runId, layout) {
   }
   const newestTake = layout.at(-1).take;
   writeManifest(dir, {
-    ...newManifest({ idea: 'boundary drill', backend: 'seedance', aspect: '9:16', durationS: 20 }, '2026-08-01T00:00:00.000Z'),
+    ...newManifest({ idea: 'boundary drill', backend, aspect: '9:16', durationS: 20 }, '2026-08-01T00:00:00.000Z'),
     takes: [{ id: newestTake, mode: 'full', createdAt: '2026-08-01T00:00:00.000Z' }],
     cuts: [{ id: 'c1', take: newestTake, master: null, createdAt: '2026-08-01T00:00:00.000Z' }],
     jobClips,
@@ -94,8 +110,10 @@ const mixed = [{ job: 'K1', take: 't2', from: null }, ...JOBS.slice(1).map((job,
   job, take: 't1', from: { take: 't1', job: JOBS[i] },
 }))];
 
-function fakeService(runId, layout) {
-  const dir = seedRun(runId, layout);
+/** `wiring` overrides what the service is BUILT with (env root, served voices file, child env) —
+ *  the knobs a real deployment varies, kept apart from `over`, which shapes the run on disk. */
+function fakeService(runId, layout, over = {}, wiring = {}) {
+  const dir = seedRun(runId, layout, over);
   const enqueued = [];
   const live = [];
   const mgr = {
@@ -108,9 +126,10 @@ function fakeService(runId, layout) {
     cancel: () => false,
   };
   const svc = createRunService({
-    root: HOST_ROOT, runsDir, outDir, envRoot, childEnv: { PATH: process.env.PATH }, mgr,
+    root: HOST_ROOT, runsDir, outDir, envRoot, voicesFile, childEnv: { PATH: process.env.PATH }, mgr,
     bus: { emit() {}, subscribe: () => () => {} },
     isAlive: () => false,
+    ...wiring,
   });
   return { dir, svc, enqueued, drain: () => { live.length = 0; } };
 }
@@ -120,6 +139,8 @@ const flag = (job, name) => {
   const i = job.args.indexOf(name);
   return i === -1 ? undefined : job.args[i + 1];
 };
+/** Whether a valueless flag was passed — the boundary CLEARS carry no value. */
+const has = (job, name) => job.args.includes(name);
 const jobsOf = (enqueued, jobId) => enqueued.filter((j) => flag(j, '--job') === jobId);
 
 // ── the five plans ──────────────────────────────────────────────────────────────────────────────
@@ -165,6 +186,47 @@ test('both REPAIRS the joint auto left alone', () => {
   assert.equal(r.boundaries.start.from.take, 't2');
 });
 
+// `--seam-from` is a place to LOOK, never evidence that anything is there. When the previous clip's
+// own take carries no closing still — a KLING_CHAIN_FRAMES=0 render, a cleaned or legacy take — the
+// fallback aims at the latest cut's take dir, which for a cut assembled from several takes need not
+// hold that segment at all. The user PAID for that opening join, so the neighbour's CLIP is handed
+// over instead and the child reads the missing still out of it: dropping the pin here queued a spend
+// that rendered as if nobody had asked for one, and the strip afterwards reported the joint broken
+// for no visible reason.
+test("a paid opening pin whose closing still is gone is derived from the neighbour's CLIP", () => {
+  const runId = 'web-19990101000006-noframe';
+  const { dir, svc, enqueued } = fakeService(runId, mixed);
+  // K1 lives in t2; take away its closing still. The cut's take is t1, which never held a K1.
+  fs.rmSync(frameOf(runId, 't2', 'K1'));
+
+  const r = svc.rerenderJob(runId, { jobId: 'K2', boundaries: 'both' });
+
+  const child = enqueued.at(-1);
+  assert.equal(flag(child, '--seam-from'), path.join(dir, 'renders', 't1'), 'the child is still told where to look');
+  assert.equal(flag(child, '--first-frame-from'), clipOf(runId, 't2', 'K1'),
+    "the clip itself — its LAST frame is exactly the still that is missing");
+  assert.equal(r.boundaries.start.from.take, 't2', 'and the reply promises the join this take will really have');
+  assert.notEqual(r.boundaries.startMode, 'none');
+  // the other end is judged on its own file and is untouched by any of this
+  assert.equal(r.boundaries.end.to.jobId, 'K3');
+  assert.notEqual(r.boundaries.endMode, 'none');
+});
+
+test('with neither the still nor the clip on disk, no opening pin is claimed', () => {
+  const runId = 'web-19990101000010-nothing';
+  const { svc, enqueued } = fakeService(runId, mixed);
+  // Nothing is left of K1 to read a frame out of — the honest answer is that this take opens on
+  // nothing, not a promise the render cannot keep.
+  fs.rmSync(frameOf(runId, 't2', 'K1'));
+  fs.rmSync(clipOf(runId, 't2', 'K1'));
+
+  const r = svc.rerenderJob(runId, { jobId: 'K2', boundaries: 'both' });
+
+  assert.equal(flag(enqueued.at(-1), '--first-frame-from'), undefined);
+  assert.equal(r.boundaries.start, null, 'so the reply promises no opening join');
+  assert.equal(r.boundaries.startMode, 'none');
+});
+
 test('start and end each pin one side only; none renders standalone', () => {
   const runId = 'web-19990101000004-sides';
   const { svc, enqueued, drain } = fakeService(runId, intact);
@@ -189,6 +251,37 @@ test('start and end each pin one side only; none renders standalone', () => {
   assert.equal(r.boundaries.end, null);
   assert.equal(r.boundaries.startMode, 'none');
   assert.equal(r.boundaries.endMode, 'none');
+});
+
+// …and an end left out is CLEARED, not merely left unmentioned. Inside the renderers an omitted
+// --first-frame-from/--last-frame-from reads as "keep whatever the spec authored" (job.first_frame /
+// job.last_frame outrank the chain, and seeding a job that way is what a FULL render is for), so a
+// plan chosen to break a join used to render conditioned on that very frame — after the dialog had
+// called the join a scene cut and after the money moved. Every end of a paid re-render therefore
+// leaves here decided: a named frame, or an explicit clear.
+test('an end the plan leaves out is CLEARED on the wire, never left to the spec', () => {
+  const runId = 'web-19990101000018-clear';
+  const { svc, enqueued, drain } = fakeService(runId, intact);
+
+  svc.rerenderJob(runId, { jobId: 'K2', boundaries: 'none' });
+  let child = enqueued.at(-1);
+  assert.ok(has(child, '--no-first-frame'), 'standalone: an authored opening frame is dropped for this take');
+  assert.ok(has(child, '--no-last-frame'), 'and the authored closing one with it');
+
+  drain();
+  svc.rerenderJob(runId, { jobId: 'K2', boundaries: 'start' });
+  child = enqueued.at(-1);
+  assert.ok(flag(child, '--first-frame-from'), 'the chosen end is pinned to a named frame…');
+  assert.ok(!has(child, '--no-first-frame'), '…and is not cleared as well — one answer per end');
+  assert.ok(has(child, '--no-last-frame'), 'the end left out is the cleared one');
+
+  drain();
+  // The edge of the cut is the same promise made differently: "K1 opens the cut, so nothing pins its
+  // start" is a sentence the render has to keep, whatever the plan authored for that job.
+  svc.rerenderJob(runId, { jobId: 'K1', boundaries: 'both' });
+  child = enqueued.at(-1);
+  assert.ok(has(child, '--no-first-frame'), 'nothing precedes K1, so its opening is free — said out loud');
+  assert.ok(flag(child, '--last-frame-from'), 'while the end it really has stays pinned');
 });
 
 test('the ends of the cut are never pinned outward', () => {
@@ -241,14 +334,178 @@ test('a cascade end-conditions ONLY its last job — the earlier ones are define
   for (const jobId of ['K3', 'K4']) {
     const child = jobsOf(enqueued, jobId).at(-1);
     assert.equal(flag(child, '--seam-from'), takeDir, `${jobId} chains from the take being rendered`);
+    // …and opens on THAT chain and nothing else: an authored first_frame outranks a chained seam
+    // frame in both renderers, so leaving one in place would break the very chain this cascade is
+    // being paid to rebuild.
+    assert.ok(has(child, '--no-first-frame'), `${jobId}'s authored opening frame is cleared for the chain`);
   }
   // K4 ends the plan, so even the LAST job of the cascade has nothing to close on: the rule allows
   // exactly one closing pin per take, and here there is no segment left to pin to. (A cascade always
   // runs to the end of the plan, so this is the only shape it can take.)
   assert.equal(enqueued.filter((j) => flag(j, '--last-frame-from') !== undefined).length, 0,
     'no job of the cascade carries a closing pin');
+  assert.equal(enqueued.filter((j) => j.kind === 'render-job' && !has(j, '--no-last-frame')).length, 0,
+    'and none of them keeps an authored one instead');
   assert.equal(readManifest(dir).lastError, null, 'the cascade ran clean');
   assert.ok(enqueued.some((j) => j.kind === 'assemble'), 'and the new cut is still auto-assembled');
+});
+
+// ── the COMBINED reference budget (fal Seedance 2.5) ────────────────────────────────────────────
+// 2.5 on fal budgets images + audio + video against ONE 50-reference cap, so a registered voice clip
+// and a soft boundary pin want the same slot — and only the pin is sacrificial: SEAM_PRIORITY gives
+// it up, while nothing ever drops a voice clip (the renderer throws rather than ship a job over the
+// cap). With 49 cast images and one voiced speaker the render therefore has 49 image slots and opens
+// on a scene cut, so a reply that reports a pin sells continuity this PAID take cannot deliver.
+// The renderer has always subtracted the demand (render-seedance.js hands planSeamRefs its
+// `otherRefCount`); this is the same subtraction on the side that quotes the seam before the spend.
+
+const CAST_49 = Array.from({ length: 49 }, (_, i) => ({ id: `cast${i}`, image: `cast${i}.png` }));
+const on25 = { backend: 'seedance-2.5@fal', elements: CAST_49 };
+const lineFor = (speaker) => [{ shot_id: 'S2', speaker, text: 'Forty years I kept this light.' }];
+
+test('a voice reference spends the slot the opening pin wanted, and the reply stops promising it', () => {
+  const runId = 'web-19990101000011-voicebudget';
+  const { svc } = fakeService(runId, intact, { ...on25, voiceLines: lineFor('keeper') });
+
+  const r = svc.rerenderJob(runId, { jobId: 'K2', boundaries: 'both' });
+
+  assert.equal(r.boundaries.startMode, 'none', '49 cast refs + 1 voice clip fill the 50-reference budget');
+  assert.equal(r.boundaries.endMode, 'none', 'the closing pin went first, as it always does');
+});
+
+test('…and with nothing voiced the same cast still affords the opening pin', () => {
+  const runId = 'web-19990101000012-novoice';
+  const { svc } = fakeService(runId, intact, on25);
+
+  const r = svc.rerenderJob(runId, { jobId: 'K2', boundaries: 'both' });
+
+  assert.equal(r.boundaries.startMode, 'soft', 'the 50th slot is free, so SEAM_PRIORITY keeps the opening pin');
+  assert.equal(r.boundaries.endMode, 'none');
+});
+
+// The demand is what will RIDE, not who speaks: a speaker with no registered clip is voiced by the
+// model natively and costs no reference at all. Reserving a slot for one would give up a pin the
+// render was going to keep — and the strip would then offer a downstream cascade nobody needs.
+test('a speaker with no registered clip costs no slot at all', () => {
+  const runId = 'web-19990101000013-clipless';
+  const { svc } = fakeService(runId, intact, { ...on25, voiceLines: lineFor('stranger') });
+
+  const r = svc.rerenderJob(runId, { jobId: 'K2', boundaries: 'both' });
+
+  assert.equal(r.boundaries.startMode, 'soft');
+});
+
+// …and the same is true when the PLAN is what turned audio off. The renderer resolves
+// `generate_audio` spec-first (prompt-settings.js `audioFlag`: a spec flag outranks the .env
+// default), so a plan with `generate_audio:false` ships no @Audio reference whatever
+// SEEDANCE_GENERATE_AUDIO says. Reading the environment alone here reserved a slot the render never
+// spends and answered `none` for an opening pin the PAID take was always going to keep.
+test('a spec that disables audio spends no voice slot — the pin it leaves free is still promised', () => {
+  const runId = 'web-19990101000016-specaudio';
+  const { svc } = fakeService(runId, intact, { ...on25, voiceLines: lineFor('keeper'), specAudio: false });
+
+  const r = svc.rerenderJob(runId, { jobId: 'K2', boundaries: 'both' });
+
+  assert.equal(r.boundaries.startMode, 'soft', 'audio off ⇒ no voice reference ⇒ the 50th slot is the opening pin\'s');
+  assert.deepEqual(svc.detail(runId).voiceRefs, { K1: 0, K2: 0, K3: 0, K4: 0 }, 'and the dialog is told the same');
+});
+
+// …and the same is true of WHERE those clips live. config.js resolves the voices dir straight off
+// the environment (`voices.dir = env.VOICES_DIR || './voices'`), so a project that sets VOICES_DIR
+// in its .env has the render child — and the prompt preview beside it — reading a folder that is
+// NOT <root>/voices. Budgeting against the default there books a slot no clip will spend, or frees
+// one a clip will: at the 50-reference cap that is a soft seam sold on a PAID take that drops it,
+// or a seam refused that the take would have kept. The dir is resolved the child's way instead.
+const altVoices = path.join(tmpRoot, 'voices-alt');
+const emptyVoices = path.join(tmpRoot, 'voices-empty');
+for (const d of [altVoices, emptyVoices]) fs.mkdirSync(d, { recursive: true });
+// A name <root>/voices cannot hold, so a run wired this way is only ever voiced by the override.
+fs.writeFileSync(path.join(altVoices, 'lampwright.mp3'), 'ID3');
+/** An env root whose .env is exactly one VOICES_DIR assignment. */
+const envRootWith = (name, value) => {
+  const dir = path.join(tmpRoot, name);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, '.env'), `VOICES_DIR=${value}\n`);
+  return dir;
+};
+
+test("the run's .env picks the voices dir, exactly as it does for the render child", () => {
+  const runId = 'web-19990101000017-envvoices';
+  const { svc } = fakeService(runId, intact, { ...on25, voiceLines: lineFor('lampwright') },
+    { envRoot: envRootWith('envroot-alt', altVoices), voicesFile: undefined });
+
+  const r = svc.rerenderJob(runId, { jobId: 'K2', boundaries: 'both' });
+
+  assert.equal(r.boundaries.startMode, 'none', 'the override holds the clip ⇒ 49 + 1 fills the cap');
+  assert.deepEqual(svc.detail(runId).voiceRefs, { K1: 0, K2: 1, K3: 0, K4: 0 }, 'and the dialog agrees');
+});
+
+// A relative VOICES_DIR is anchored at the PROJECT ROOT (config.js's resolvePath), not at the
+// server's cwd: `VOICES_DIR=./voices-alt` has to name one folder on both ends of the spawn.
+test('a relative VOICES_DIR resolves against the project root, like config.js', () => {
+  const runId = 'web-19990101000018-relvoices';
+  const relative = path.relative(HOST_ROOT, altVoices);
+  const { svc } = fakeService(runId, intact, { ...on25, voiceLines: lineFor('lampwright') },
+    { envRoot: envRootWith('envroot-rel', relative), voicesFile: undefined });
+
+  assert.equal(svc.rerenderJob(runId, { jobId: 'K2', boundaries: 'both' }).boundaries.startMode, 'none');
+});
+
+// …and childEnv outranks that .env, because dotenv never overwrites a variable the spawned child
+// already has. Reading the file first would budget against a dir the renderer will not open.
+test('an explicit childEnv VOICES_DIR beats the .env, the way it does in the child', () => {
+  const runId = 'web-19990101000019-childenvvoices';
+  const { svc } = fakeService(runId, intact, { ...on25, voiceLines: lineFor('lampwright') }, {
+    envRoot: envRootWith('envroot-empty', emptyVoices),
+    voicesFile: undefined,
+    childEnv: { PATH: process.env.PATH, VOICES_DIR: altVoices },
+  });
+
+  assert.equal(svc.rerenderJob(runId, { jobId: 'K2', boundaries: 'both' }).boundaries.startMode, 'none',
+    'childEnv named the dir holding the clip; the .env named an empty one');
+});
+
+test('the run payload carries the same count, because the browser cannot read the voices dir', () => {
+  const runId = 'web-19990101000014-wire';
+  const { svc } = fakeService(runId, intact, { ...on25, voiceLines: lineFor('keeper') });
+
+  const detail = svc.detail(runId);
+
+  assert.deepEqual(detail.voiceRefs, { K1: 0, K2: 1, K3: 0, K4: 0 }, 'ids only — the count, never a path');
+  assert.equal(JSON.stringify(detail.voiceRefs).includes(tmpRoot), false);
+});
+
+test('a model with no combined budget has nothing to report', () => {
+  const runId = 'web-19990101000015-nocombined';
+  const { svc } = fakeService(runId, intact, { voiceLines: lineFor('keeper') });
+
+  assert.equal(svc.detail(runId).voiceRefs, null, 'per-kind caps never make a voice clip and a pin compete');
+});
+
+// ── the lineage mirror `auto` reads ─────────────────────────────────────────────────────────────
+// Every `auto` plan above answers out of m.clipLineage, so composing a cut has to leave an entry
+// there for EVERY job it composed — including one the plan named `__proto__` (the spec asks only for
+// a non-empty string, and this build supports such an id everywhere else). On a manifest that
+// predates clipLineage the mirror was recreated as a plain `{}`, where that assignment hits
+// Object.prototype's setter: the cut was written, but the job's seams silently vanished from
+// web.json and every later `auto` plan lost the joint.
+
+test('composing a cut on a pre-lineage manifest keeps a `__proto__` job\'s seams', () => {
+  const runId = 'web-19990101000017-protolineage';
+  const jobs = ['K1', '__proto__'];
+  const layout = [{ job: 'K1', take: 't1', from: null }, { job: '__proto__', take: 't1', from: { take: 't1', job: 'K1' } }];
+  const { dir, svc } = fakeService(runId, layout, { jobs });
+  // a run rendered before WS2-P2: clips on record, no lineage at all
+  const pre = readManifest(dir);
+  delete pre.clipLineage;
+  writeManifest(dir, pre);
+
+  svc.assemble(runId, { composition: { ['__proto__']: 't1' } }); // computed key: `{__proto__: …}` is the OTHER thing
+
+  const lineage = readManifest(dir).clipLineage;
+  assert.ok(Object.hasOwn(lineage, '__proto__'), 'the oddly named job is an OWN key, not a swallowed prototype write');
+  assert.equal(lineage['__proto__'].take, 't1');
+  assert.equal(lineage.K1.take, 't1', 'and the ordinary job is mirrored beside it');
 });
 
 // ── guards ──────────────────────────────────────────────────────────────────────────────────────

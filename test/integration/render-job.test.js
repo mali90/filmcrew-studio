@@ -70,6 +70,42 @@ test('kling: first job never chains; missing seam frame renders standalone with 
   } finally { take.cleanup(); }
 });
 
+// The cascade advice and the seam lineage must tell one story. An applied closing pin renders this
+// clip to ARRIVE on the next one's opening frame and records where it lands, which is the evidence
+// seam-rule.js accepts from this side — so the joint is whole and the downstream jobs the CLI used
+// to list are footage a cascade would replace for nothing.
+test('kling: an APPLIED closing pin leaves nothing stale downstream', async () => {
+  const take = mkTmp('rj-endpin');
+  const cut = mkTmp('rj-endpin-cut');
+  try {
+    // The next segment as the cut holds it: a take dir the pin can be traced back to.
+    const nextDir = path.join(cut.dir, 'renders', 't1', 'K3');
+    fs.mkdirSync(nextDir, { recursive: true });
+    fs.writeFileSync(path.join(nextDir, 'clip.mp4'), 'FAKE-MP4');
+    const pin = path.join(nextDir, 'first_frame.png');
+    fs.writeFileSync(pin, ONE_PX_PNG);
+
+    const r = await renderJob(threeJobSpec(), 'K2', { runDir: take.dir, lastFrameFrom: pin });
+    assert.ok(!['none', 'unsupported'].includes(r.seamOut.mode), 'the pin was really applied');
+    assert.deepEqual(r.seamOut.to, { take: 't1', job: 'K3', clip: path.join(nextDir, 'clip.mp4') });
+    assert.deepEqual(r.staleDownstream, [], 'K2 arrives on K3 — a cascade would re-render an intact joint');
+  } finally { take.cleanup(); cut.cleanup(); }
+});
+
+test('kling: a closing pin that names nowhere keeps the downstream jobs stale', async () => {
+  const take = mkTmp('rj-endpin-loose');
+  const still = mkTmp('rj-endpin-still');
+  try {
+    // A hand-picked frame is a real pin, but it names no clip in this cut: neither side of that
+    // joint gets recorded, so the lineage still reads a break and the cascade advice stands.
+    const pin = path.join(still.dir, 'somewhere.png');
+    fs.writeFileSync(pin, ONE_PX_PNG);
+    const r = await renderJob(threeJobSpec(), 'K2', { runDir: take.dir, lastFrameFrom: pin });
+    assert.equal(r.seamOut.to, null);
+    assert.deepEqual(r.staleDownstream, ['K3']);
+  } finally { take.cleanup(); still.cleanup(); }
+});
+
 test('seedance: --take and --feedback reach the prompt (Alternate take + Director note)', async () => {
   const take = mkTmp('rj-seedance');
   try {

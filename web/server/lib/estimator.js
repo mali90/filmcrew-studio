@@ -10,9 +10,19 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-// The registry is the ONE static import this server takes from the host src/ tree — zero imports,
-// no env, so it can never drag config.js in. See the canary in test/integration/runs-caps.test.js.
-import { normalizeBackend } from '../../../src/lib/render-models.js';
+// Static imports from the host src/ tree, all config-free — no env of their own and nothing in their
+// graphs reaches config.js. See the canary in test/integration/runs-caps.test.js, which walks them.
+// Static rather than lazy because this module is SYNCHRONOUS: readEnvVar answers inside an estimate.
+import { capsFor, normalizeBackend } from '../../../src/lib/render-models.js';
+// …and the render child's OWN resolution rule, imported rather than re-stated: a price quoted for a
+// tier the renderer would not use is exactly the bug a mirrored copy of it caused.
+import { seedanceResolution } from '../../../src/lib/prompt-settings.js';
+// …and the upscaler's OWN sizing rule, for the same reason: fal tiers Topaz by the OUTPUT frame, so
+// the quote has to be built from the factor the upscale will really apply, not a copy of it.
+import { upscalePlan } from '../../../src/lib/upscale-plan.js';
+// …and dotenv's OWN grammar for the .env, for exactly the same reason (see readEnvVar). It is a
+// re-implementation of dotenv's line parser, NOT dotenv — nothing here ever sources a file.
+import { dotenvValues } from '../../../src/lib/env-file.js';
 
 const PRICES = JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'prices.json'), 'utf8'));
 const DEFAULT_SHOT_SECONDS = 5; // mirrors config.kling.defaultShotSeconds
@@ -94,7 +104,7 @@ function priced(perSecond, perJob, priceKey, rates) {
   return { perJob: rows, totalUsd: sumUsd(rows), currency: 'USD', label: 'estimate' };
 }
 
-export function estimateRender(spec, { backend, mode = 'full', jobId, cascade = false, resolution, probeResolution } = {}) {
+export function estimateRender(spec, { backend, mode = 'full', jobId, cascade = false, pick, resolution, probeResolution } = {}) {
   const { key: priceKey, rates } = tableFor(backend);
   if (!rates) throw new Error(`no price table for backend "${backend}" (have: ${priceKeys().join(', ')})`);
   const jobs = spec?.kling?.jobs ?? [];
@@ -110,10 +120,11 @@ export function estimateRender(spec, { backend, mode = 'full', jobId, cascade = 
     // throw when the probe itself rides a perfectly legal rate.
     perSecond = rates.probePerSecondUsd ?? rateFor(rates, probeResolution ?? rates.probeResolution ?? resolution);
   } else {
-    // mirror the renderer's own precedence (seedanceConfigFor): an EXPLICIT spec.seedance.resolution
-    // pin overrides the .env default — but never the kling block, which the agents fill with KLING
-    // defaults and which would misprice (and mis-render) Seedance at 1080p
-    perSecond = rateFor(rates, spec?.seedance?.resolution ?? resolution);
+    // The renderer's own rule, RUN rather than mirrored (seedanceResolution, the function the render
+    // child resolves its tier with): the run's per-run pick first, then an explicit
+    // spec.seedance.resolution pin, then the .env knob — and never the kling block, which the agents
+    // fill with KLING defaults and which would misprice (and mis-render) Seedance at 1080p.
+    perSecond = rateFor(rates, seedanceResolution({ pick, spec, shared: resolution }));
     // fal prices Kling FLAT across resolutions; the only price knob is native audio on/off
     if (priceKey === 'kling' && spec?.kling?.generate_audio === false && rates.audioOffPerSecondUsd) {
       perSecond = rates.audioOffPerSecondUsd;
@@ -134,39 +145,72 @@ export function estimateRender(spec, { backend, mode = 'full', jobId, cascade = 
  *  (a registered-but-unpriced backend is a known state, so it belongs in the "have:" list). */
 const priceKeys = () => Object.keys(PRICES).filter((k) => PRICES[k] && typeof PRICES[k] === 'object' && ('perSecondUsd' in PRICES[k] || PRICES[k].$alias));
 
+/**
+ * The bytes a knob carries once this server PINS it into a child's environment — and, because a pin
+ * lands in exactly that env, the reading readEnvVar gives it back below.
+ *
+ * A pin is the one case where this server AUTHORS a knob instead of mirroring one, so it is the one
+ * case where a value may be normalized at all. It has to be: dotenv keeps padding INSIDE a quoted
+ * value, so a dotenv-valid `UPSCALE_TARGET_RESOLUTION=" 720p "` was priced here as `720p` (this
+ * trim, on the way back out of the pinned env) and handed to the child as ` 720p `, which
+ * shortSideForTarget refuses by name — a PRICED ledger row, no upscale, and a run in attention.
+ * Normalizing at the pin instead makes the value quoted, the value pinned and the value the child
+ * consumes one string.
+ *
+ * Trim only — never a default, never a case fold. '' stays '', because pinning an EMPTY knob is how
+ * approve says "this was unset when we quoted you" (see readUpscaleKnobs), and both sides read ''
+ * back as the same default. And nothing normalizes a knob this server merely MIRRORS: an unpinned
+ * value is returned exactly as dotenv would load it, because that is what the child will be handed.
+ */
+const pinnedEnvValue = (value) => String(value ?? '').trim();
+
 /** One value out of <envRoot>/.env, read as DATA (never sourced) — the settings page writes that
- *  file and the render child reads it, so it is what the estimate has to price. */
-function readEnvVar(envRoot, key, fallbackEnv) {
+ *  file and the render child reads it, so it is what the estimate has to price. Exported because
+ *  the same reader answers the non-price knobs a run's boundary budget depends on (run-service's
+ *  voice-reference demand); a second .env parser in this server would be one too many, which is
+ *  why this one and the prompt preview's now share dotenvValues — ONE rule for every knob. */
+export function readEnvVar(envRoot, key, fallbackEnv) {
   // The CHILD's precedence, mirrored exactly: a variable already present in the spawned process's
   // env (childEnv — even an explicit empty string) wins, because dotenv never overwrites an
   // existing variable. Reading .env first here would quote one provider while the render child
-  // actually bills another.
-  if (fallbackEnv && Object.hasOwn(fallbackEnv, key)) return String(fallbackEnv[key] ?? '').trim();
+  // actually bills another. Read through pinnedEnvValue, the same rule that WROTE any value this
+  // server pinned there, so a pinned knob reads back as the exact string the child will consume.
+  if (fallbackEnv && Object.hasOwn(fallbackEnv, key)) return pinnedEnvValue(fallbackEnv[key]);
   try {
-    const text = fs.readFileSync(path.join(envRoot, '.env'), 'utf8');
-    // LINE-bounded whitespace ([^\S\n], never \s): `\s` crosses the newline, so a blank `FAL_KEY=`
-    // line would swallow the NEXT assignment as its value and report a key that is not there.
-    const m = text.match(new RegExp(`^[^\\S\\n]*${key}[^\\S\\n]*=[^\\S\\n]*("([^"]*)"|'([^']*)'|[^\\s#]+)`, 'm'));
-    return (m?.[2] ?? m?.[3] ?? m?.[1] ?? '').trim();
+    // dotenv's grammar, through the ONE implementation of it this repo has (src/lib/env-file.js,
+    // where it is pinned against dotenv's own parser). A regex of our own answered three of its
+    // rules differently — it took the FIRST assignment where dotenv keeps the LAST, ignored an
+    // `export ` prefix, and ended a value at the first space rather than at a trailing `# comment`
+    // — so an ordinary .env had this server pricing a tier, choosing a vendor and budgeting a
+    // voice reference the render child never saw. Missing stays '' (not undefined): every caller
+    // below reads the answer as a string.
+    return dotenvValues(fs.readFileSync(path.join(envRoot, '.env'), 'utf8'))[key] ?? '';
   } catch { /* no .env yet */ }
   return '';
 }
 
-/** The render resolution the CHILD will use, per MODEL: Seedance 2.5 has its own knob and its own
- *  default (720p — 480p is only its probe tier), everything else rides SEEDANCE_RESOLUTION (480p,
- *  the cheap path; approve's Topaz upscale lifts the master to 1080p). Seedance is billed by
- *  pixel-seconds, so reading the wrong knob quietly misprices the button. */
+/** The render resolution the CHILD will use, per MODEL — the registry names the knob each model
+ *  reads (caps.resolutionEnv: KLING_RESOLUTION / SEEDANCE_RESOLUTION / SEEDANCE25_RESOLUTION) and
+ *  its default. Seedance is billed by pixel-seconds, so reading the wrong knob quietly misprices
+ *  the button; an unknown/absent backend keeps the legacy Seedance answer. */
 export function readRenderResolution(envRoot, backend, childEnv) {
-  const is25 = typeof backend === 'string' && backend.includes('seedance-2.5');
-  return readEnvVar(envRoot, is25 ? 'SEEDANCE25_RESOLUTION' : 'SEEDANCE_RESOLUTION', childEnv) || (is25 ? '720p' : '480p');
+  let caps = null;
+  try { caps = capsFor(normalizeBackend(backend).id); } catch { /* unknown/absent backend */ }
+  // A model with NO selectable ladder (Kling: the endpoint renders its own output) has no knob to
+  // read and nothing resolution-priced — null, never a sibling model's env var.
+  if (caps && !caps.resolutions?.length) return null;
+  const key = caps?.resolutionEnv ?? 'SEEDANCE_RESOLUTION';
+  return readEnvVar(envRoot, key, childEnv) || caps?.defaultResolution || '480p';
 }
 
 /** The short side the approve-time upscale will actually DELIVER: Segmind takes an explicit
  *  target (UPSCALE_TARGET_RESOLUTION); fal's factor plan lifts toward ~1080p. The UI's
  *  "already HD" threshold and its label both ride on this — a 4k target must keep offering the
- *  upscale on a 1080p cut, and a 720p target must never advertise 1080. */
-export function readUpscaleTargetShortSide(envRoot, backend, childEnv) {
-  if (readUpscaleProvider(envRoot, backend, childEnv) !== 'segmind') return 1080;
+ *  upscale on a 1080p cut, and a 720p target must never advertise 1080. An explicit `provider`
+ *  (the ApproveBar's pick, pinned into the finalize child's env) beats the env derivation —
+ *  the gate must judge the vendor that will actually run, not the configured default. */
+export function readUpscaleTargetShortSide(envRoot, backend, childEnv, provider = null) {
+  if ((provider ?? readUpscaleProvider(envRoot, backend, childEnv)) !== 'segmind') return 1080;
   const target = readEnvVar(envRoot, 'UPSCALE_TARGET_RESOLUTION', childEnv).toLowerCase();
   return { '720p': 720, '1080p': 1080, '4k': 2160 }[target] ?? 1080;
 }
@@ -204,16 +248,171 @@ export function readUpscaleProvider(envRoot, backend, childEnv) {
   return 'fal';
 }
 
-/** Estimate a Topaz upscale over clip durations (one Topaz job per sub-1080p clip). Topaz runs on
- *  either provider now and the two bill differently ($0.12/s on fal, $0.125/s on Segmind, both on
- *  the INPUT duration) — so this answers per provider rather than quoting one vendor's number. */
-export function estimateUpscale(clips, { provider = 'fal' } = {}) {
+/** The Topaz MODEL the fal upscale will ask for (FAL_TOPAZ_MODEL) — a PRICE knob, because fal
+ *  charges half for Gaia 2 output. Empty means the config default ('Proteus'), which is not Gaia. */
+export function readUpscaleModel(envRoot, childEnv) {
+  return readEnvVar(envRoot, 'FAL_TOPAZ_MODEL', childEnv);
+}
+
+/** The Topaz factor CAP the fal upscale is bound by (FAL_TOPAZ_MAX_FACTOR → config.fal.topazMaxFactor
+ *  → upscalePlan) — also a price knob: it decides how far a small clip is lifted, and so which
+ *  OUTPUT tier fal bills for it. Unset is `undefined`, which leaves upscalePlan's own default rather
+ *  than restating 4 here. Anything unparseable stays NaN, exactly as config.js keeps it — an
+ *  unusable cap must price like any other unknown (the dearest tier), never like a cheap one. */
+export function readUpscaleMaxFactor(envRoot, childEnv) {
+  const raw = readEnvVar(envRoot, 'FAL_TOPAZ_MAX_FACTOR', childEnv);
+  return raw === '' ? undefined : Number(raw);
+}
+
+/**
+ * The .env knobs the finalize child must NOT re-derive: approve PRICES the ledger row from these
+ * exact values, so the child has to SPEND on them. Per vendor, because the two Topaz APIs read
+ * different knobs — fal takes a factor plan (FAL_TOPAZ_MAX_FACTOR, which decides how far a small
+ * clip is lifted and so which OUTPUT tier fal bills) plus a model (FAL_TOPAZ_MODEL, also a price
+ * knob: fal halves the rate for Gaia 2 output), while Segmind's Topaz takes a target resolution
+ * (UPSCALE_TARGET_RESOLUTION) and has no factor and no model at all. Each vendor is pinned only
+ * what it actually consumes; a knob it never reads cannot move its bill. Segmind's other input,
+ * `target_fps`, is PROBED off the source clip rather than configured — there is no knob to pin, and
+ * it moves no price (Segmind bills flat per INPUT second).
+ *
+ * An EMPTY value is pinned too, and deliberately: dotenv leaves an already-present variable alone
+ * whatever it holds, so '' is exactly "this knob was unset when we quoted you" — and every reader on
+ * both sides (config.js's numEnv and `||` defaults, the readers above) turns '' back into the same
+ * default. Pinning nothing instead would leave a knob ADDED to .env in the gap free to move the
+ * charge away from the recorded estUsd.
+ *
+ * It lives HERE, beside the readers, because the same map is what every quote of that job is priced
+ * THROUGH (approve's ledger row and the estimate endpoint both overlay it on childEnv before
+ * reading): one function decides the bytes, so the price and the spend cannot be told apart.
+ * @param {'fal'|'segmind'} provider  the vendor approve resolved — never a raw request field
+ */
+export function readUpscaleKnobs(envRoot, provider, childEnv) {
+  const pin = (key) => pinnedEnvValue(readEnvVar(envRoot, key, childEnv));
+  return provider === 'segmind'
+    ? { UPSCALE_TARGET_RESOLUTION: pin('UPSCALE_TARGET_RESOLUTION') }
+    : { FAL_TOPAZ_MODEL: pin('FAL_TOPAZ_MODEL'), FAL_TOPAZ_MAX_FACTOR: pin('FAL_TOPAZ_MAX_FACTOR') };
+}
+
+/** OUTPUT frame height → the row's tier key. fal tiers Topaz by the output, and this app's 9:16
+ *  default makes that a portrait 1080×1920 frame — which fal bills as ABOVE 1080p (see the row's
+ *  _source: inferred from a real invoice, not documented). A row with no ladder is flat (Segmind),
+ *  and an output taller than every rung falls through to defaultResolution — the top tier. */
+function tierOf(rates, outputHeight) {
+  const ladder = rates.tierMaxOutputHeight;
+  if (!ladder) return undefined; // flat vendor row — rateFor ignores the tier entirely
+  return Object.entries(ladder).sort((a, b) => a[1] - b[1]).find(([, max]) => outputHeight <= max)?.[0];
+}
+
+/** What one clip rides: the tier its OUTPUT lands in, or `skipped` when the source is already at or
+ *  above the target — both engines return that input untouched (src/lib/upscale.js), so there is no
+ *  job and no bill. Unknown dimensions are NEITHER: the tier stays undefined so rateFor falls to the
+ *  row's defaultResolution, which is deliberately the dearest one. `maxFactor` is the CONFIGURED cap
+ *  the render child binds; undefined leaves the planner's own default. */
+function clipTier(rates, clip, targetShort, maxFactor) {
+  const width = Number(clip?.width) || 0;
+  const height = Number(clip?.height) || 0;
+  if (!width || !height) return { tier: undefined, skipped: false };
+  const plan = upscalePlan(width, height, { targetShort, maxFactor });
+  if (!plan.needsUpscale) return { tier: undefined, skipped: true };
+  return { tier: tierOf(rates, Math.round(height * plan.upscaleFactor)), skipped: false };
+}
+
+/** fal's "for Gaia 2 output costs half of the prices", applied ONLY to an unambiguous Gaia 2 pick.
+ *  Any other model — including a bare 'Gaia' — pays full: halving a rate on a guess under-quotes a
+ *  paid button, and that is the one direction this file will not err in. */
+function modelMultiplier(rates, model) {
+  const half = rates.gaia2Multiplier;
+  if (!half) return 1;
+  return /^gaia[\s._-]*2$/i.test(String(model ?? '').trim()) ? half : 1;
+}
+
+/**
+ * Estimate a Topaz upscale over a take's clips (one Topaz job per clip below the target). The two
+ * providers bill on completely different shapes and neither may be quoted with the other's number:
+ * Segmind is flat per INPUT second, while fal tiers by the OUTPUT frame — so each clip carries the
+ * dimensions its tier is chosen from, and a clip already at the target costs nothing.
+ * `maxFactor` is fal's configured factor cap; Segmind takes an explicit target and no factor at all,
+ * so its flat row simply ignores it.
+ * @param {{jobId:string, seconds:number, width?:number, height?:number}[]} clips
+ * @param {{provider?:string, targetShortSide?:number, model?:string|null, maxFactor?:number}} opts
+ * @returns {{perJob:{jobId:string,seconds:number,usd:number|null}[], totalUsd:number|null, currency:'USD', label:'estimate', tier?:string, unknownPrice?:object}}
+ */
+export function estimateUpscale(clips, { provider = 'fal', targetShortSide = 1080, model = null, maxFactor } = {}) {
   const priceKey = provider === 'fal' ? 'topaz' : `topaz@${provider}`;
   const { key, rates } = tableFor(priceKey);
   if (!rates) throw new Error(`no price table for upscale provider "${provider}" (have: ${priceKeys().join(', ')})`);
-  return priced(rateFor(rates), (clips ?? []).map((c) => ({ jobId: c.jobId, seconds: c.seconds })), key, rates);
+  const list = clips ?? [];
+  // "Publishes no rate" is a fact about the ROW, not about any one clip — ask it once, before any
+  // per-clip arithmetic can invent a figure underneath it.
+  if (rates.perSecondUsd === null) return priced(null, list.map((c) => ({ jobId: c.jobId, seconds: c.seconds })), key, rates);
+
+  const multiplier = modelMultiplier(rates, model);
+  let dearest = null; // the tier that explains the quote — the UI labels the price with it
+  const rows = list.map((clip) => {
+    const job = { jobId: clip.jobId, seconds: clip.seconds };
+    const { tier, skipped } = clipTier(rates, clip, targetShortSide, maxFactor);
+    if (skipped) return { ...job, usd: 0 };
+    const perSecond = rateFor(rates, tier) * multiplier;
+    if (!dearest || perSecond > dearest.perSecond) dearest = { perSecond, tier: tier ?? rates.defaultResolution };
+    return { ...job, usd: round2(job.seconds * perSecond) };
+  });
+  return {
+    perJob: rows, totalUsd: sumUsd(rows), currency: 'USD', label: 'estimate',
+    ...(dearest?.tier ? { tier: dearest.tier } : {}),
+  };
+}
+
+/**
+ * The seconds Topaz is billed for ONE clip. Both vendors bill the INPUT video's duration, so the
+ * honest number is the one MEASURED off that file at assembly time (finishRender) — never the plan,
+ * which a composed cut outlives: a cut may keep a clip rendered before a revision shortened its
+ * shot, and the take's current spec then calls a 10-second file 5 seconds while Topaz processes,
+ * and charges for, all 10.
+ *
+ * Rounded UP to the whole second: fal's own invoices carry at least a second of billing granularity
+ * on top of the input length (see prices.json's topaz row), so the ceiling is the FLOOR of what gets
+ * billed — and any positive duration ceils to at least 1, so a measured clip can never quote free.
+ * Nothing measurable is recorded as 0, so an absent duration means "not measured", never "empty": it
+ * falls back to the plan the take saved beside itself, which is the reading every take used before
+ * this record existed.
+ */
+function clipSeconds(rec, takeSpec, jobId) {
+  const measured = Number(rec?.duration) || 0;
+  return measured > 0 ? Math.ceil(measured) : jobSeconds(takeSpec, jobId);
+}
+
+/**
+ * The clips ONE take hands Topaz, read from that take's own records — the estimate endpoint and
+ * approve's ledger line share it so a quote and the ledger row it becomes cannot drift apart.
+ *   - the take's saved spec, because a pre-revision take may rename jobs or change durations;
+ *   - only the jobs that produced a clip: finishRender upscales exactly those paths;
+ *   - each clip's OWN frame and OWN duration, measured off that file at assembly time
+ *     (finishRender). Neither the master nor the spec may stand in for them: an approve-time upscale
+ *     lifts the clips into new files and rewrites this render.json with the HD master it delivered,
+ *     leaving `jobs[].clip` pointing at the originals — so a master-derived quote calls a real
+ *     second charge a free no-op — and a composed cut mixes in clips from takes the current spec has
+ *     since re-timed, so a plan-derived quote bills a 10-second file as 5. A take rendered before
+ *     those records existed carries neither, and prices UP for it: the dearest tier (clipTier) and
+ *     the plan's seconds, which over-quote a no-op but can never under-quote a charge.
+ * @param {string|null} takeDir
+ * @param {{spec?:object|null}} p the run's spec, for a take that saved none of its own
+ */
+export function takeUpscaleClips(takeDir, { spec = null } = {}) {
+  if (!takeDir) return [];
+  const readTakeJson = (name) => {
+    try { return JSON.parse(fs.readFileSync(path.join(takeDir, name), 'utf8')); } catch { return null; }
+  };
+  const takeSpec = readTakeJson('spec.json') ?? spec; // the spec the take was rendered from
+  const render = readTakeJson('render.json');
+  return ((render?.jobs) ?? [])
+    .filter((j) => j.clip) // only jobs Topaz will actually process
+    .map((j) => {
+      const jobId = j.jobId ?? j.job;
+      const [width, height] = [Number(j.width) || 0, Number(j.height) || 0];
+      return { jobId, seconds: clipSeconds(j, takeSpec, jobId), ...(width && height ? { width, height } : {}) };
+    });
 }
 
 export const VOICE_MINT_USD = PRICES.voiceMintUsd;
 
-export default { estimateRender, estimateUpscale, jobSeconds, readRenderResolution, readSeedanceResolution, readUpscaleProvider, VOICE_MINT_USD };
+export default { estimateRender, estimateUpscale, takeUpscaleClips, jobSeconds, readRenderResolution, readSeedanceResolution, readUpscaleProvider, readUpscaleModel, readUpscaleMaxFactor, readUpscaleKnobs, VOICE_MINT_USD };

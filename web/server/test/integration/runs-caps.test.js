@@ -184,6 +184,58 @@ test('every ratio the chosen model DOES list is accepted', async () => {
   }
 });
 
+// ── per-model resolutions ───────────────────────────────────────────────────
+// The pick must be refused at the gate when the model cannot render it — a 1080p pick surviving to
+// a Seedance 2.5 render child would die (or silently drop) AFTER planning already spent money.
+test('a resolution outside the chosen model\'s ladder is a 400 naming the model\'s tiers', async () => {
+  const before = runCount();
+  const hd = await create({ backend: 'seedance-2.5@fal', aspect: '16:9', resolution: '1080p' });
+  assert.equal(hd.statusCode, 400, hd.body);
+  assert.match(JSON.stringify(hd.json()), /1080p/);
+  for (const r of ['480p', '720p']) assert.ok(JSON.stringify(hd.json()).includes(r), r);
+  assert.ok(!hd.json().hint.includes('4k'), 'it must not offer a tier the model cannot render');
+
+  const low = await create({ resolution: '480p' }); // kling's ladder starts at 720p
+  assert.equal(low.statusCode, 400, low.body);
+  const junk = await create({ resolution: 'max' });
+  assert.equal(junk.statusCode, 400, junk.body);
+  assert.equal(runCount(), before, 'nothing spawned, no run dir');
+});
+
+test('every ladder tier of every backend is creatable, and the pick lands on the manifest', async () => {
+  const { BACKEND_IDS, capsFor } = await import('../../../../src/lib/render-models.js');
+  const manifestOfNew = (beforeDirs) => {
+    const dirName = fs.readdirSync(dirs.runs).find((d) => !beforeDirs.has(d));
+    return JSON.parse(fs.readFileSync(path.join(dirs.runs, dirName, 'web.json'), 'utf8'));
+  };
+  for (const id of BACKEND_IDS) {
+    const caps = capsFor(id);
+    // A ladder-less model (Kling: the endpoint takes no resolution parameter) is the inverse
+    // contract — ANY pick is refused before a spawn, and a pickless create still works.
+    if (!caps.resolutions.length) {
+      const refused = await create({ backend: id, aspect: caps.aspects[0], resolution: '1080p' });
+      assert.equal(refused.statusCode, 400, `${id}: a tier pick on a ladder-less model must 400`);
+      assert.match(JSON.parse(refused.body).hint ?? '', /no selectable resolution/, `${id} hint says why`);
+      const beforeDirs = new Set(fs.readdirSync(dirs.runs));
+      const ok = await create({ backend: id, aspect: caps.aspects[0] });
+      assert.equal(ok.statusCode, 201, `${id}: ${ok.body}`);
+      assert.equal(manifestOfNew(beforeDirs).resolution, null, `${id}: nothing to persist`);
+      continue;
+    }
+    const beforeDirs = new Set(fs.readdirSync(dirs.runs));
+    const res = await create({ backend: id, aspect: caps.aspects[0], resolution: caps.resolutions.at(-1) });
+    assert.equal(res.statusCode, 201, `${id}: ${res.body}`);
+    // the manifest is where run-service re-reads the pick on EVERY child spawn (and the estimator
+    // prices it) — a pick that never lands here silently reverts to the .env default
+    assert.equal(manifestOfNew(beforeDirs).resolution, caps.resolutions.at(-1), `${id} persists the pick`);
+  }
+  // absent = no pick: the configured default governs, recorded as null (never invented)
+  const beforeDirs = new Set(fs.readdirSync(dirs.runs));
+  const noPick = await create({});
+  assert.equal(noPick.statusCode, 201, noPick.body);
+  assert.equal(manifestOfNew(beforeDirs).resolution, null);
+});
+
 // ── environment single-select: REGRESSION ONLY (already enforced) ───────────
 test('regression: environment must stay a single string — an array is a 400', async () => {
   const before = runCount();

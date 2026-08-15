@@ -28,7 +28,7 @@ function threeSegmentRun(over: Partial<RunDetail> = {}): RunDetail {
 
 function renderStrip(run: RunDetail, onSeek = vi.fn()) {
   const jobs = run.latestRender!.jobs;
-  const view = render(<ClipStrip run={run} jobs={jobs} takeCountFor={() => 1} onSeek={onSeek} />);
+  const view = render(<ClipStrip run={run} jobs={jobs} takeCountFor={() => 1} isLatestCut onSeek={onSeek} />);
   return { ...view, onSeek };
 }
 
@@ -144,10 +144,31 @@ describe('ClipStrip', () => {
     expect(screen.queryByText('joined')).not.toBeInTheDocument();
   });
 
+  // A cascade replaces several segments in ONE take, in plan order: one clip is on the wire and the
+  // rest are queued behind it. ReviewStage synthesizes exactly this shape (the plan's job list, with
+  // the segments this take is replacing marked as not-yet-landed), so a strip that called everything
+  // behind the active clip "done" wore the continuity of the very clips being replaced.
+  it('a queued cascade clip is not done — it claims nothing about its joins', () => {
+    const run = threeSegmentRun({ status: 'rendering' });
+    run.spec!.shots.push({ shot_id: 'S5', beat: 'payoff', duration_s: 3, kling: { content_prompt: 'The light goes out.' } });
+    run.spec!.kling.jobs.push({ job_id: 'K4', shots: ['S5'], elements: ['subject'] });
+    run.continuity = [entry('K2', 1), entry('K3', 2), entry('K4', 3)];
+    const pending = (jobId: string): JobView => ({ ...clip(jobId), clip: null, clipExists: false, clipUrl: null });
+    run.latestRender!.jobs = [clip('K1'), pending('K2'), pending('K3'), pending('K4')];
+    renderStrip(run);
+
+    expect(screen.getAllByText('rendering')).toHaveLength(1); // only the one really on the wire
+    expect(screen.getAllByText('queued')).toHaveLength(2);
+    expect(screen.queryByText('joined')).not.toBeInTheDocument();
+    // …and no connector between two clips that do not exist yet may promise a join either way.
+    expect(screen.getAllByTestId('clip-joint-pending')).toHaveLength(3);
+    expect(screen.queryByTestId('clip-joint-linked')).not.toBeInTheDocument();
+  });
+
   it('picking a segment reveals its actions, and Re-render opens the one paid dialog', async () => {
     const run = threeSegmentRun({ continuity: [entry('K2', 1), entry('K3', 2)] });
     renderReview(
-      <ClipStrip run={run} jobs={run.latestRender!.jobs} takeCountFor={() => 1} onSeek={vi.fn()} />,
+      <ClipStrip run={run} jobs={run.latestRender!.jobs} takeCountFor={() => 1} isLatestCut onSeek={vi.fn()} />,
     );
     // Nothing is selected: no money affordance is on screen at all (spec D11).
     expect(screen.queryByRole('button', { name: /Re-render/ })).not.toBeInTheDocument();
@@ -156,6 +177,72 @@ describe('ClipStrip', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Re-render K2' }));
     // The price and the one-time paid confirm live on the dialog's PaidButton — the strip states none.
     expect(await screen.findByRole('dialog', { name: 'Re-render K2' })).toBeInTheDocument();
+  });
+
+  // U1 — one render at a time: while a render is in flight the strip keeps the prompt readable but
+  // refuses to queue a second spend, and the disabled button itself says why.
+  it('disables Re-render while the run is rendering, with the one-at-a-time reason', () => {
+    const run = threeSegmentRun({ status: 'rendering', continuity: null });
+    run.latestRender!.jobs = [clip('K1'), { ...clip('K2'), clip: null, clipExists: false, clipUrl: null }, clip('K3')];
+    renderReview(
+      <ClipStrip run={run} jobs={run.latestRender!.jobs} takeCountFor={() => 1} isLatestCut onSeek={vi.fn()} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Play from K1' }));
+    const rerender = screen.getByRole('button', { name: 'Re-render K1' });
+    expect(rerender).toBeDisabled();
+    expect(rerender).toHaveAttribute('title', 'One render at a time — wait for the current one to finish.');
+    // the free affordance stays live
+    expect(screen.getByRole('button', { name: 'Prompt for K1' })).toBeEnabled();
+  });
+
+  // The re-render endpoint takes a job id and nothing else: it resolves both neighbours and the
+  // composition it writes from the manifest's CURRENT clips, which are the latest cut's. Offered on
+  // an older cut, confirming it would spend on rebuilding a composition that is not the master
+  // playing above — so the strip withholds it and the button says which cut it would have changed.
+  it('withholds Re-render while an older cut is on the stage, and says why', () => {
+    const run = threeSegmentRun({ continuity: [entry('K2', 1), entry('K3', 2)] });
+    renderReview(
+      <ClipStrip run={run} jobs={run.latestRender!.jobs} takeCountFor={() => 1} isLatestCut={false} onSeek={vi.fn()} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Play from K2' }));
+    const rerender = screen.getByRole('button', { name: 'Re-render K2' });
+    expect(rerender).toBeDisabled();
+    expect(rerender).toHaveAttribute(
+      'title',
+      'You’re watching an older cut. A re-render always rebuilds the latest one, so switch back to it first.',
+    );
+    // and no paid dialog can be reached from here
+    fireEvent.click(rerender);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    // reading stays free, exactly as it does mid-render
+    expect(screen.getByRole('button', { name: 'Prompt for K2' })).toBeEnabled();
+  });
+
+  // The DISPLAY half of the same fact: the tiles come from `latestRender.jobs` and the verdicts from
+  // `run.continuity`, which the server aligns to that render — so under an older master every badge
+  // is the LATEST cut's, and a joint re-rendered since can read the exact opposite of the video
+  // playing. The strip says whose joins these are instead of wearing them as the older cut's.
+  it('names the cut its badges belong to while an older cut is on the stage', () => {
+    const run = threeSegmentRun({ continuity: [entry('K2', 1), entry('K3', 2)] });
+    run.manifest!.cuts = [
+      { id: 'c1', take: 't1', master: '/abs/out/ocean v1.mp4', createdAt: '2026-07-04T09:00:00.000Z' },
+      { id: 'c2', take: 't2', master: '/abs/out/ocean.mp4', createdAt: '2026-07-04T10:00:00.000Z' },
+    ];
+    render(<ClipStrip run={run} jobs={run.latestRender!.jobs} takeCountFor={() => 1} isLatestCut={false} onSeek={vi.fn()} />);
+
+    expect(screen.getByTestId('clip-strip-cut-scope')).toHaveTextContent(
+      'These clips and joins describe the latest cut (c2) — not the older master playing above.',
+    );
+    // assistive tech hears the same scope from the region's own name
+    expect(screen.getByLabelText('Clips in the latest cut')).toBeInTheDocument();
+    // and the joins stay readable — the fix is a caption, not a blank strip
+    expect(screen.getAllByText('joined')).toHaveLength(2);
+  });
+
+  it('claims nothing about another cut while the latest one is playing', () => {
+    renderStrip(threeSegmentRun({ continuity: [entry('K2', 1), entry('K3', 2)] }));
+    expect(screen.queryByTestId('clip-strip-cut-scope')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Clips in this cut')).toBeInTheDocument();
   });
 
   // No legend: the strip explains itself with the drawing and one sentence (Don't #9).

@@ -270,6 +270,74 @@ test('settings: masked env read, previewed diff, write, defaults round-trip', as
   assert.equal(status.json().defaults.backend, 'kling');
 });
 
+// The defaults surfaces write and read the knob the TARGET model actually uses. Writing
+// KLING_RESOLUTION for every backend (the old behavior) is how a Seedance default silently
+// rendered at its own default whatever the user saved.
+test('defaults: resolution rides the target model\'s own knob; reads report the knob the backend uses', async () => {
+  const envFile = path.join(envRoot, '.env');
+  const original = fs.readFileSync(envFile, 'utf8');
+  try {
+    const save = await post('/api/settings/defaults', { backend: 'seedance-2.5@segmind', resolution: '480p' });
+    assert.equal(save.statusCode, 200, save.body);
+    const env = fs.readFileSync(envFile, 'utf8');
+    assert.match(env, /^SEEDANCE25_RESOLUTION=480p$/m, '2.5 has its own knob');
+    assert.ok(!/^KLING_RESOLUTION=/m.test(env), 'the kling knob stays untouched');
+
+    // migration honesty: the reported tier is the one the default backend's render will USE
+    const d = (await get('/api/settings/defaults')).json();
+    assert.equal(d.resolution, '480p');
+    assert.equal(d.resolutions['seedance-2.5'], '480p');
+    assert.equal(d.resolutions['kling-o3'], null, 'a ladder-less model answers null — no knob exists to report');
+    assert.equal((await get('/api/setup/status')).json().defaults.resolution, '480p');
+
+    // a tier the target model cannot render is a 400 naming its ladder — nothing written
+    const bad = await post('/api/settings/defaults', { resolution: '4k' }); // saved default is now 2.5
+    assert.equal(bad.statusCode, 400, bad.body);
+    assert.match(bad.json().hint, /480p, 720p/);
+    assert.ok(!/^SEEDANCE25_RESOLUTION=4k$/m.test(fs.readFileSync(envFile, 'utf8')));
+    // a resolution-only save maps onto the SAVED default backend's knob
+    const only = await post('/api/settings/defaults', { resolution: '720p' });
+    assert.equal(only.statusCode, 200, only.body);
+    assert.match(fs.readFileSync(envFile, 'utf8'), /^SEEDANCE25_RESOLUTION=720p$/m);
+  } finally { fs.writeFileSync(envFile, original); }
+});
+
+// The effective defaults are not decoration: the create page hydrates from them and posts them back
+// as an explicit per-run pin, so a value read the wrong WAY changes the output and the bill. These
+// four lines are all ordinary dotenv — and all four are where the wizard's line editor (first match,
+// comment kept inside the value, `export` unrecognised, quotes kept) disagrees with the render child.
+test('defaults are read with the CHILD\'s dotenv semantics, not the wizard\'s line editor', async () => {
+  const envFile = path.join(envRoot, '.env');
+  const original = fs.readFileSync(envFile, 'utf8');
+  try {
+    fs.writeFileSync(envFile, [
+      'export RENDER_BACKEND=seedance-2.5@fal',      // dotenv accepts the shell prefix; the editor sees no assignment at all
+      'SEEDANCE25_RESOLUTION=720p',                  // …and dotenv keeps the LAST assignment, the editor the first
+      'SEEDANCE25_RESOLUTION="480p"',                // …and strips the quotes the editor would hand back
+      'SEEDANCE_RESOLUTION="1080p"',
+      'KLING_ASPECT=16:9   # the aspect, with a trailing comment dotenv cuts',
+      '',
+    ].join('\n'));
+
+    const d = (await get('/api/settings/defaults')).json();
+    assert.equal(d.backend, 'seedance-2.5@fal', 'an export-prefixed backend is the backend the child renders on');
+    assert.equal(d.resolutions['seedance-2.5'], '480p', 'the LAST assignment wins, without its quotes — 720p is the line dotenv discarded');
+    assert.equal(d.resolution, '480p', 'and the default backend\'s tier is that same value');
+    assert.equal(d.resolutions['seedance-2.0'], '1080p', 'a quoted tier is 1080p, not "1080p" — the quotes are dotenv\'s, not the value\'s');
+    assert.equal(d.seedanceResolution, '1080p', 'the legacy field reads the same way');
+    assert.equal(d.aspect, '16:9', 'the trailing comment is not part of the ratio the child renders');
+
+    // the wizard's own status card answers from the same reading — it seeds the same create page
+    const s = (await get('/api/setup/status')).json();
+    assert.deepEqual(s.defaults, { backend: 'seedance-2.5@fal', aspect: '16:9', resolution: '480p' });
+
+    // …while the settings editor still reports the file BYTE FOR BYTE: it exists to rewrite lines,
+    // and a value it "cleaned up" on the way out would be written back cleaned up.
+    const rows = (await get('/api/settings/env')).json().rows;
+    assert.equal(rows.find((r) => r.key === 'KLING_ASPECT').value, '16:9   # the aspect, with a trailing comment dotenv cuts');
+  } finally { fs.writeFileSync(envFile, original); }
+});
+
 test('doctor runs as a fresh child and reports machine-readable checks', async () => {
   const res = await post('/api/doctor', {});
   assert.equal(res.statusCode, 200, res.body);
@@ -442,6 +510,28 @@ test('approve with upscale: Topaz child runs, final recorded, run completes', { 
   assert.ok(fs.existsSync(run.manifest.approved.final), 'the upscaled final exists on disk');
 });
 
+// A vendor with no key on file cannot run at all: the finalize child throws in falHeaders() /
+// segmindHeaders() before a single Topaz submission. Accepting the approve anyway returned 202 AND
+// wrote a priced cost-ledger row — the one durable record of what this run cost, made to show a
+// charge that never happened. This harness pins SEGMIND_API_KEY='' in childEnv (see above), which
+// is exactly the keyless install the reviewer's stale/loading setup-status query can still name.
+test('approve refuses a keyless upscale provider — 400 before any ledger row or child', { skip: FF ? false : 'ffmpeg not installed' }, async () => {
+  const { runId } = await makeReviewedRun('a charge that never happened');
+  const ledgerBefore = (await get(`/api/runs/${runId}`)).json().run.manifest.costLedger.length;
+
+  const res = await post(`/api/runs/${runId}/approve`, { upscale: true, provider: 'segmind' });
+  assert.equal(res.statusCode, 400, res.body);
+  assert.match(res.json().error, /SEGMIND_API_KEY/, 'the message names the variable that is missing');
+
+  const run = (await get(`/api/runs/${runId}`)).json().run;
+  assert.equal(run.manifest.costLedger.length, ledgerBefore, 'no upscale line was recorded for work that cannot run');
+  assert.equal(run.manifest.approved ?? null, null, 'and nothing was delivered');
+  assert.equal(run.status, 'review', 'the run is untouched — still reviewable, still approvable for free');
+
+  // …and the free finalize of the same cut still works, which is what the message offers
+  assert.equal((await post(`/api/runs/${runId}/approve`, { upscale: false })).statusCode, 200);
+});
+
 // Regression: approving must finalize the CUT the reviewer previewed, not whichever take rendered
 // last. A run with two cuts (full → c1, K1 re-render → c2) must honor `cut:'c1'`.
 async function makeTwoCutRun(idea) {
@@ -458,6 +548,11 @@ async function makeTwoCutRun(idea) {
 test('approve honors the selected cut: finalizing c1 records c1 (not the latest c2)', { skip: FF ? false : 'ffmpeg not installed' }, async () => {
   const { runId, cuts } = await makeTwoCutRun('finalize the first cut');
 
+  // guards, while the run is still open: a bad or unknown cut id is rejected 400 (never silently
+  // falls back to latest)
+  assert.equal((await post(`/api/runs/${runId}/approve`, { cut: '../etc' })).statusCode, 400);
+  assert.equal((await post(`/api/runs/${runId}/approve`, { cut: 'c9' })).statusCode, 400);
+
   const fin = await post(`/api/runs/${runId}/approve`, { cut: 'c1' });
   assert.equal(fin.statusCode, 200, fin.body); // plain finalize is instant
   let m = (await get(`/api/runs/${runId}`)).json().run.manifest;
@@ -465,9 +560,11 @@ test('approve honors the selected cut: finalizing c1 records c1 (not the latest 
   assert.equal(m.approved.final, cuts[0].master, 'the delivered file is c1’s exact master');
   assert.equal(m.approved.upscaled, false);
 
-  // guards: a bad or unknown cut id is rejected 400 (never silently falls back to latest)
-  assert.equal((await post(`/api/runs/${runId}/approve`, { cut: '../etc' })).statusCode, 400);
-  assert.equal((await post(`/api/runs/${runId}/approve`, { cut: 'c9' })).statusCode, 400);
+  // A delivered run does not re-deliver on its own: switching the finalized cut is a deliberate
+  // reopen, not a second POST from whatever tab is still open (reopen-finalize.test.js owns the
+  // duplicate-history half of that rule).
+  assert.equal((await post(`/api/runs/${runId}/approve`, {})).statusCode, 409);
+  assert.equal((await post(`/api/runs/${runId}/reopen`, {})).statusCode, 200);
 
   // omitting the cut still finalizes the latest — today's behavior is preserved
   assert.equal((await post(`/api/runs/${runId}/approve`, {})).statusCode, 200);
@@ -497,6 +594,27 @@ test('upscale estimate is cut-aware: prices the selected cut’s jobs and reject
 
   assert.equal((await get(`/api/runs/${runId}/estimate?mode=upscale&cut=../etc`)).statusCode, 400);
   assert.equal((await get(`/api/runs/${runId}/estimate?mode=upscale&cut=c9`)).statusCode, 400);
+});
+
+test('the DEFAULT upscale estimate prices the latest TAKE, not the whole plan (a probe holds one clip)', { skip: FF ? false : 'ffmpeg not installed' }, async () => {
+  // Omitting `cut` is the ApproveBar's normal path (it means "the latest selection"), and approve
+  // upscales exactly the clips the latest take's render.json lists. A probe renders only the first
+  // job, so pricing every job in the spec quoted MORE than the button would bill — an over-quote is
+  // as dishonest as an under-quote, and both are fixed the same way: price what the take holds.
+  const { runId } = (await post('/api/runs', { idea: 'price the probe TWO-JOB', backend: 'kling', aspect: '9:16', durationS: null })).json();
+  await waitForStatus(runId, 'plan-ready');
+  const planned = (await get(`/api/runs/${runId}`)).json().run.spec.kling.jobs.map((j) => j.job_id);
+  assert.deepEqual(planned, ['K1', 'K2'], 'the probe brief plans two jobs — a probe renders only the first');
+
+  await post(`/api/runs/${runId}/render`, { mode: 'probe' });
+  const run = await waitForStatus(runId, 'review');
+  assert.deepEqual(run.latestRender.jobs.map((j) => j.jobId), ['K1'], 'the probe take holds one clip');
+
+  const dflt = (await get(`/api/runs/${runId}/estimate?mode=upscale`)).json();
+  assert.deepEqual(dflt.perJob.map((p) => p.jobId), ['K1'], 'the default quote prices only the clip the probe rendered');
+  // …and it agrees with the explicit cut over that same take, which is the ApproveBar's other path
+  const c1 = (await get(`/api/runs/${runId}/estimate?mode=upscale&cut=c1`)).json();
+  assert.equal(dflt.totalUsd, c1.totalUsd, 'implicit latest and explicit c1 name one take — and one price');
 });
 
 test('SSE Last-Event-ID: reconnect replays only the log lines after the cursor', async () => {
@@ -611,6 +729,108 @@ test('estimate: a Segmind-backed run answers 200 priced at Segmind\'s own rate',
       + `(got ${onSegmindTopaz.totalUsd} vs ${onFalTopaz.totalUsd})`,
     );
   } finally { fs.writeFileSync(envFile, original); }
+});
+
+// ── Per-run resolution: the pick governs the ESTIMATE, the RENDER child and every later spawn ───
+// The wizard once wrote only KLING_RESOLUTION, so a Seedance-backed run silently rendered (and was
+// priced) at the .env default whatever was picked. The pick is stored on the manifest and
+// re-injected as the MODEL's own knob into every child env — dotenv never overwrites an existing
+// variable — so it must survive a later .env edit AND a revise.
+test('a run created at a non-default resolution estimates, renders and (post-revise) re-estimates AT that resolution', async () => {
+  const { runId } = (await post('/api/runs', { idea: 'a fox on a frozen lake', backend: 'seedance-2.0@fal', aspect: '16:9', resolution: '720p', durationS: null })).json();
+  await waitForStatus(runId, 'plan-ready');
+
+  // 2.0@fal bills $0.3024/s at 720p — the env default (480p, $0.135/s) must not leak in
+  const est = (await get(`/api/runs/${runId}/estimate?mode=full`)).json();
+  const seconds = est.perJob.reduce((a, j) => a + j.seconds, 0);
+  assert.equal(est.totalUsd, Math.round(seconds * 0.3024 * 100) / 100, 'the estimate prices the pick, not the default');
+
+  // …even when .env pins the OTHER tier after the run was created
+  const envFile = path.join(envRoot, '.env');
+  const original = fs.readFileSync(envFile, 'utf8');
+  try {
+    fs.writeFileSync(envFile, `${original}SEEDANCE_RESOLUTION=480p\n`);
+    assert.equal((await get(`/api/runs/${runId}/estimate?mode=full`)).json().totalUsd, est.totalUsd, 'the per-run pick outranks a later .env edit');
+  } finally { fs.writeFileSync(envFile, original); }
+
+  // the RENDER: the child submits resolution=720p (the mock records every body), the ledger agrees
+  const before = fal.requests.length;
+  const r = await post(`/api/runs/${runId}/render`, { mode: 'full' });
+  assert.equal(r.statusCode, 202, r.body);
+  assert.equal(r.json().estUsd, est.totalUsd, 'the paid button quotes the same money the ledger records');
+  await waitForStatus(runId, ['review', 'attention']); // attention = assemble-only trouble; the submit already happened
+  const submits = fal.requests.slice(before).filter((q) => q.method === 'POST' && q.path === '/seedance-submit');
+  assert.ok(submits.length, 'the render reached the endpoint');
+  for (const s of submits) assert.equal(JSON.parse(s.body).resolution, '720p', 'the render child used the picked tier');
+  const run = (await get(`/api/runs/${runId}`)).json().run;
+  assert.equal(run.manifest.costLedger.at(-1).estUsd, est.totalUsd);
+
+  // the pick survives a revise (re-injected on that child too): the next estimate still prices 720p
+  await post(`/api/runs/${runId}/revise`, { feedback: 'slower pans' });
+  const t0 = Date.now();
+  for (;;) {
+    const m = (await get(`/api/runs/${runId}`)).json().run.manifest;
+    if (m.revisions.length === 1) break;
+    if (Date.now() - t0 > 90000) throw new Error('timeout waiting for the revision');
+    await sleep(150);
+  }
+  const est2 = (await get(`/api/runs/${runId}/estimate?mode=full`)).json();
+  const seconds2 = est2.perJob.reduce((a, j) => a + j.seconds, 0);
+  assert.equal(est2.totalUsd, Math.round(seconds2 * 0.3024 * 100) / 100, 'still the picked tier after revise');
+});
+
+// …and the pick outranks the SPEC too. A plan can carry a seedance.resolution pin — hand-authored,
+// or inherited from a spec that was planned on another tier or another model — and that pin used to
+// beat the tier the run was created at, so the render and the bill landed somewhere the user never
+// chose (or, off-ladder, failed outright). The pick is the choice; the pin is a default.
+test('a spec.seedance.resolution pin never outranks the run\'s own pick — estimate, render, and after a revise', async () => {
+  const { runId } = (await post('/api/runs', { idea: 'a heron over the reeds', backend: 'seedance-2.5@fal', aspect: '16:9', resolution: '480p', durationS: null })).json();
+  await waitForStatus(runId, 'plan-ready');
+  // 2.5@fal bills $0.2205/s at the picked 480p and $0.473/s at the pinned 720p
+  const specFile = path.join(runsDir, runId, 'spec.json');
+  const pin = (resolution) => {
+    const spec = JSON.parse(fs.readFileSync(specFile, 'utf8'));
+    spec.seedance = { resolution };
+    fs.writeFileSync(specFile, JSON.stringify(spec, null, 2));
+  };
+  const estimate = async () => (await get(`/api/runs/${runId}/estimate?mode=full`)).json();
+  const round2 = (n) => Math.round(n * 100) / 100;
+  // the estimator rounds each job before summing — mirror it rather than pricing the total
+  const at = (e, rate) => round2(e.perJob.reduce((a, j) => a + round2(j.seconds * rate), 0));
+
+  pin('720p');
+  const est = await estimate();
+  assert.equal(est.totalUsd, at(est, 0.2205), 'priced at the picked 480p, not the pinned 720p');
+  assert.notEqual(est.totalUsd, at(est, 0.473), 'and 480p is not what 720p would have cost');
+
+  // an OFF-LADDER pin (1080p survived a 2.0 → 2.5 switch) prices the pick too, instead of throwing
+  pin('1080p');
+  assert.equal((await estimate()).totalUsd, est.totalUsd);
+
+  // …and the render child agrees with the price it was quoted: it submits the picked tier
+  pin('720p');
+  const before = fal.requests.length;
+  const r = await post(`/api/runs/${runId}/render`, { mode: 'full' });
+  assert.equal(r.statusCode, 202, r.body);
+  assert.equal(r.json().estUsd, est.totalUsd, 'the paid button quotes the tier that will render');
+  await waitForStatus(runId, ['review', 'attention']); // attention = assemble-only trouble; the submit already happened
+  const submits = fal.requests.slice(before).filter((q) => q.method === 'POST' && q.path.includes('seedance-2.5'));
+  assert.ok(submits.length, 'the render reached the endpoint');
+  for (const s of submits) assert.equal(JSON.parse(s.body).resolution, '480p', 'the render child used the picked tier, not the pin');
+
+  // the pick still wins after a revise — the revision re-plans the spec, so the pin is re-applied
+  // to whatever it wrote, exactly as an inherited pin would survive one
+  await post(`/api/runs/${runId}/revise`, { feedback: 'hold the wide shot longer' });
+  const t0 = Date.now();
+  for (;;) {
+    const m = (await get(`/api/runs/${runId}`)).json().run.manifest;
+    if (m.revisions.length === 1) break;
+    if (Date.now() - t0 > 90000) throw new Error('timeout waiting for the revision');
+    await sleep(150);
+  }
+  pin('720p');
+  const est2 = await estimate();
+  assert.equal(est2.totalUsd, at(est2, 0.2205), 'still the picked tier after a revise');
 });
 
 // Seedance 2.5 is billed by pixel-seconds and has its OWN resolution knob. Reading the 2.0 knob

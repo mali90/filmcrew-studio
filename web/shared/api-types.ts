@@ -14,7 +14,13 @@ export type Backend =
  *  (aspectsFor(backend)). 'adaptive'/'auto' are deliberately absent: the stitch canvas needs a
  *  deterministic ratio. */
 export type Aspect = '9:16' | '16:9' | '1:1' | '4:3' | '3:4' | '21:9';
+/** Every render tier SOME model offers — which ones a given run may pick is per-model
+ *  (resolutionsFor(backend): Kling is 720p+, Seedance 2.5 tops out at 720p). */
+export type Resolution = '480p' | '720p' | '1080p' | '4k';
 export type RunStatus = 'planning' | 'plan-ready' | 'rendering' | 'attention' | 'review' | 'complete';
+/** The two vendors that run the approve-time Topaz upscale. Only ever these two literal ids on the
+ *  wire — 'auto' is a config value, never a payload one (the server 400s anything else). */
+export type UpscaleProvider = 'fal' | 'segmind';
 export type Phase = 'plan' | 'render' | 'review' | 'deliver';
 export type ActionKind = 'plan' | 'revise' | 'render' | 'probe' | 'render-job' | 'assemble' | 'upscale' | 'mint-voice';
 
@@ -47,6 +53,9 @@ export interface Manifest {
   idea: string;
   backend: Backend;
   aspect: Aspect;
+  /** Per-run render resolution pick; null/absent = the model's configured default. Reapplied as the
+   *  model's own env knob on every child spawn, and priced by the estimator over the .env value. */
+  resolution?: Resolution | null;
   durationS: number | null;                 // null = auto (the engine decides)
   environment?: string | null;              // selected world/mood/style bible slug (null = none) — revisions re-inject it
   createdAt: string;
@@ -58,8 +67,13 @@ export interface Manifest {
   cuts: { id: string; take: string; master: string | null; shortSide?: number | null; stitcher?: 'seamless' | 'concat'; joints?: number; matched?: number; createdAt: string }[];
   // `unpriced` marks a line that SPENT money at a rate nobody publishes (Segmind, Topaz per-clip):
   // estUsd is null there because the figure is unknown, not because the step was free.
-  costLedger: { ts: string; action: string; estUsd: number | null; unpriced?: boolean; note: string }[];
-  approved: { cut: string | null; final: string; upscaled: boolean; stitcher?: 'seamless' | 'concat'; joints?: number; matched?: number; at: string } | null;
+  // `provider` (upscale lines only) records which vendor the Topaz job billed — the reviewer's
+  // explicit pick, or the same derivation the estimate priced when nothing was picked.
+  costLedger: { ts: string; action: string; estUsd: number | null; unpriced?: boolean; provider?: UpscaleProvider; note: string }[];
+  // `shortSide` is the DELIVERED file's own measured short side (after any Topaz upscale), so the
+  // deliver card never quotes the source cut's pre-upscale size. Absent on runs delivered before it
+  // was recorded — absence means "not measured", never 0.
+  approved: { cut: string | null; final: string; upscaled: boolean; shortSide?: number | null; stitcher?: 'seamless' | 'concat'; joints?: number; matched?: number; at: string } | null;
   // Delivery lifecycle (WS2-P6), all three ADDITIVE — absent on every run delivered before it
   // existed, and absence means "never reopened, no history", never an error.
   /** When the user reopened a delivered run to make changes. The run is delivered again only once
@@ -67,7 +81,7 @@ export interface Manifest {
   reopenedAt?: string | null;
   /** Every delivery this run has made, oldest first. `replacedBy` names the entry that superseded
    *  it — the file itself is never deleted, so an older final stays downloadable. */
-  finals?: { id: string; cut: string | null; final: string; upscaled: boolean; at: string; replacedBy?: string }[];
+  finals?: { id: string; cut: string | null; final: string; upscaled: boolean; shortSide?: number | null; at: string; replacedBy?: string }[];
   /** Lifecycle markers for the History panel to list beside takes/cuts/revisions: reopens, and the
    *  prompt edits that change which words the NEXT render sends (`job` names the segment). Saving
    *  or discarding an edit is a local file write — these rows record a change of intent, not spend. */
@@ -77,7 +91,19 @@ export interface Manifest {
   jobClips?: Record<string, string>;
   // Where each job's newest clip came from and the seams the renderer recorded for it. Absent on
   // runs made before WS2-P1 — their continuity is derived from take history and flagged as such.
-  clipLineage?: Record<string, { take: string; seamIn?: unknown; seamOut?: unknown }>;
+  // IDS ONLY on the wire: the manifest on disk records each seam's frame and neighbour-clip paths
+  // for the stitcher, and routes/runs.js strips them on the way out (same contract as `continuity`).
+  clipLineage?: Record<string, { take: string | null; seamIn?: ClipLineageSeam; seamOut?: ClipLineageSeam }>;
+}
+
+/** One recorded seam, as the wire carries it: how the join was pinned and the take/job it joins to.
+ *  `frameSource` says who produced the closing still ('provider' = the model returned its own,
+ *  'ffmpeg' = grabbed locally) — a token, never a path. */
+export interface ClipLineageSeam {
+  mode: string | null;
+  frameSource?: string | null;
+  from?: { take: string | null; job: string | null } | null;
+  to?: { take: string | null; job: string | null } | null;
 }
 
 /**
@@ -124,6 +150,11 @@ export interface RunDetail extends RunSummary {
   // costs a render.json read per take per run, and the list re-fetches on every SSE status tick —
   // for a field only the run page (ClipStrip, SegmentRerenderDialog) ever reads.
   continuity: ContinuityEntry[] | null;
+  // DETAIL only, and only on a model whose reference budget is COMBINED across kinds (fal Seedance
+  // 2.5 takes 50 images + audio + video together) — `null` everywhere else, where a voice clip never
+  // takes an image slot. Per job: how many references its voice clips spend, which is what a
+  // boundary pin has to fit AROUND. The browser cannot read the voices dir, so the server counts it.
+  voiceRefs: Record<string, number> | null;
   spec: ProductionSpec | null;
   queue: { position: number } | null;
   logCursor: number;
@@ -181,7 +212,17 @@ export type GlobalEvent =
   | { type: 'run-activity'; runId: string; eventType: string };
 
 // ── Endpoint payloads ──
-export interface CreateRunBody { idea: string; backend: Backend; aspect: Aspect; durationS: number | null; cast?: string[]; environment?: string }
+export interface CreateRunBody {
+  idea: string;
+  backend: Backend;
+  aspect: Aspect;
+  /** Per-run render resolution — one of the model's own resolutionsFor(backend); omitted/null = the
+   *  configured default. Validated server-side (400 before any spawn). */
+  resolution?: Resolution | null;
+  durationS: number | null;
+  cast?: string[];
+  environment?: string;
+}
 
 // ── Frame-conditioned re-render (WS2-P5) ──
 /** What a re-render pins at its two ends. `auto` mirrors the joins the cut already has — it keeps a
@@ -200,6 +241,27 @@ export interface BoundaryPlan {
   endMode: 'native' | 'soft' | 'none' | 'unsupported';
 }
 export interface RerenderJobBody { jobId: string; cascade?: boolean; feedback?: string; take?: number; boundaries?: BoundaryMode }
+/** POST /api/runs/:id/approve — finalize (free) or upscale-and-finalize (paid). */
+export interface ApproveBody {
+  upscale: boolean;
+  /** Which cut to finalize; omitted = the latest render (the stage's implicit target). */
+  cut?: string;
+  /** Which vendor runs the Topaz upscale — the ApproveBar's pick. Only meaningful with
+   *  `upscale: true`; omitted = the server derives it exactly as the estimate did (env/keys).
+   *  Anything but 'fal'/'segmind' is a 400 before any money moves. */
+  provider?: UpscaleProvider;
+}
+/** GET /api/runs/:id/estimate query params (api.estimate). */
+export interface EstimateParams {
+  mode: 'full' | 'probe' | 'job' | 'upscale';
+  jobId?: string;
+  cascade?: boolean;
+  /** mode=upscale only: price this cut's clips (omitted = every job in the current spec). */
+  cut?: string;
+  /** mode=upscale only: quote THIS vendor's Topaz rate (and its delivered target) instead of the
+   *  env-derived one — the ApproveBar re-quotes per pick through this. */
+  provider?: UpscaleProvider;
+}
 export interface RerenderJobResult {
   takeId: string;
   estUsd: number | null;
@@ -216,8 +278,14 @@ export interface Estimate {
   label: 'estimate';
   unknownPrice?: { provider?: string | null; hint: string };
   /** mode=upscale only: the short side the upscale would DELIVER (Segmind's explicit target, or
-   *  ~1080 for fal's factor plan) — the review UI's "already HD" gate judges against this. */
+   *  ~1080 for fal's factor plan) — the review UI's "already HD" gate judges against this. Follows
+   *  the `provider` query param when one is given, so the gate tracks the PICKED vendor. */
   targetShortSide?: number;
+  /** mode=upscale only, and only for a vendor that tiers its rate: the price tier the quote rides,
+   *  keyed as prices.json keys it ('720p' | '1080p' | 'above1080p'). fal charges by the OUTPUT
+   *  frame, so a cut lifted to a ~1080p SHORT side can still bill above-1080p when the frame is
+   *  portrait — the review UI says so beside the figure rather than leaving it unexplained. */
+  tier?: string;
 }
 // ── Prompt preview (WS2-P3) ──
 // What the render will be sent, composed by the SAME pure builder the renderer uses
@@ -244,7 +312,9 @@ export interface PromptView {
   /** 'plan' = the agents' text; 'override' = a saved edit (P4); 'take' = immutable, as sent. */
   source: 'plan' | 'override' | 'take';
   take: string | null;
-  /** When a 'take' view's prompts.json was written — i.e. when this text was sent. */
+  /** When the provider ACCEPTED this take's job — the recorded submission time, never the moment
+   *  the render finished. Falls back to the sidecar's mtime only for takes rendered before that was
+   *  recorded. */
   sentAt: string | null;
   /** True when the plan moved under a saved override (fingerprint mismatch). It changes nothing
    *  about what is sent — a stale override still renders word for word — only what is SAID. */
@@ -268,8 +338,9 @@ export interface PromptView {
   planDraftSegments?: string[] | null;
   /** Hash of exactly the authored inputs this prompt is composed from; null for a past take. */
   fingerprint: string | null;
-  /** Take ids that kept a `prompts.json` for THIS job, newest first — the version picker's options.
-   *  A take that never sent this job is absent, so no option opens onto a 404. */
+  /** Take ids that really SENT this job, newest first — the version picker's options. A take whose
+   *  prompt was composed but never accepted by a provider is absent (the sidecar is written before
+   *  the submit), so no option opens onto a 404 or on to text nobody ever received. */
   availableTakes: string[];
   prompt: string;
   /** Kling only — one entry per shot; null on Seedance (one prompt per job). */
@@ -278,7 +349,11 @@ export interface PromptView {
   shotPrompts: string[] | null;
   refs: PromptRef[];
   bytes: number;
-  /** The byte budget the meter draws against; null for a past take (its budget isn't recorded). */
+  /** The byte budget the meter draws against. Null when there is NO budget to draw: the model has
+   *  no prompt-length cap (Seedance ships uncapped, and `SEEDANCE_PROMPT_MAX_BYTES` is the lever for
+   *  anyone who meets a provider limit anyway), the job cannot be composed, or this is a past take,
+   *  whose budget was never recorded. Never 0 — the editor's room is `maxBytes − pinBytes`, which a
+   *  0 sends negative and meters every draft as instantly over. */
   maxBytes: number | null;
   /** Kling's per-segment cap, when the budget is per segment. */
   segmentMaxBytes: number | null;

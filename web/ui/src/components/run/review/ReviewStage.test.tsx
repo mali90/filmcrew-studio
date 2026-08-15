@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { server, http, HttpResponse } from '../../../test/msw';
-import { makeRun, promptView } from '../../../test/fixtures';
+import { makeRun, promptView, SPEC } from '../../../test/fixtures';
 import { renderReview, markPaidConfirmed, clearPaidState } from './test-helpers';
 import { ReviewStage } from './ReviewStage';
 
@@ -61,6 +61,29 @@ describe('ReviewStage', () => {
     expect(screen.getByTestId('master-video')).toHaveAttribute('src', '/api/media/out/ocean%20v1.mp4');
   });
 
+  // The stage swaps the video for an older cut but keeps handing the strip the LATEST render's jobs
+  // and continuity — there is no per-cut composition to hand it instead. So the pair must not read
+  // as one thing: the strip states which cut its clips and joins belong to, and the paid re-render
+  // (which can only ever rebuild the latest cut) stays withheld.
+  it('scopes the strip to the latest cut while an older one plays, and still withholds the re-render', () => {
+    const run = makeRun('review');
+    run.manifest!.cuts = [
+      { id: 'c1', take: 't1', master: '/abs/out/ocean v1.mp4', createdAt: '2026-07-04T09:00:00.000Z' },
+      { id: 'c2', take: 't2', master: '/abs/out/ocean.mp4', createdAt: '2026-07-04T10:00:00.000Z' },
+    ];
+    renderReview(<Stage run={run} />);
+    expect(screen.queryByTestId('clip-strip-cut-scope')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Switch cut' }));
+    fireEvent.click(screen.getAllByRole('option')[1]);
+
+    expect(screen.getByTestId('clip-strip-cut-scope')).toHaveTextContent(
+      'These clips and joins describe the latest cut (c2) — not the older master playing above.',
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Play from K2' }));
+    expect(screen.getByRole('button', { name: 'Re-render K2' })).toBeDisabled();
+  });
+
   it('seeks the master to the sum of preceding jobs when a clip card is clicked', () => {
     const run = makeRun('review');
     renderReview(<Stage run={run} />);
@@ -85,8 +108,11 @@ describe('ReviewStage', () => {
     );
 
     renderReview(<Stage run={run} />);
-    expect(screen.getByText('Probe take — first job only, low cost.')).toBeInTheDocument();
-    expect(screen.getByText(/Finishing is free — assembly already happened\./)).toBeInTheDocument();
+    // U5: the lead names the one job the probe rendered; the trailing sentence says what the paid
+    // button buys. Nothing in this banner may read "free" — it sits beside a $-tagged button.
+    const banner = screen.getByText('Probe take — only K1 rendered.').closest('div')!;
+    expect(within(banner).getByText(/Full render replaces this probe with all 2 clips, as a new take\./)).toBeInTheDocument();
+    expect(banner.textContent).not.toMatch(/free/i);
 
     // the estimate arrives and prices the button
     await screen.findByLabelText('estimated cost $4.16');
@@ -175,5 +201,165 @@ describe('ReviewStage', () => {
   it('a run that was never delivered shows no notice', () => {
     renderReview(<Stage run={makeRun('review')} />);
     expect(screen.queryByTestId('reopened-notice')).not.toBeInTheDocument();
+  });
+
+  // U1 — the page keeps this stage mounted while a segment re-renders, so the stage itself must
+  // keep playing (masterUrl is null mid-flight) and say what is happening in the banner slot.
+  it('keeps playing the current cut and shows the in-flight banner while a segment re-renders', () => {
+    const run = makeRun('review');
+    run.status = 'rendering';
+    run.manifest!.activeJob = { kind: 'render-job', pid: 7, startedAt: new Date(Date.now() - 42000).toISOString() };
+    run.manifest!.takes = [
+      { id: 't1', mode: 'full', revision: null, createdAt: '2026-07-04T09:00:00.000Z' },
+      { id: 't2', mode: 'job', jobId: 'K2', revision: null, createdAt: '2026-07-04T10:00:00.000Z' },
+    ];
+    // a distinct basename proves the fallback: latestRender.masterUrl is gone, the cut's file is not
+    run.manifest!.cuts = [{ id: 'c1', take: 't1', master: '/abs/out/ocean v1.mp4', createdAt: '2026-07-04T09:05:00.000Z' }];
+    run.latestRender!.masterUrl = null;
+    run.latestRender!.jobs = [
+      { jobId: 'K1', clip: '/abs/clip1.mp4', clipExists: true, clipUrl: '/api/media/runs/x/renders/t2/K1/clip.mp4', error: null },
+      { jobId: 'K2', clip: null, clipExists: false, clipUrl: null, error: null },
+    ];
+    renderReview(<Stage run={run} />);
+
+    const notice = screen.getByTestId('rerender-inflight-notice');
+    expect(notice.textContent).toContain(
+      "Re-rendering K2 — you're watching the current cut; the new clip takes its place here when it lands.",
+    );
+    expect(notice.textContent).toMatch(/\d+:\d{2}/); // ticking elapsed from activeJob.startedAt
+    // the stage falls back to the cut's own file while the latest master is rebuilt
+    expect(screen.getByTestId('master-video')).toHaveAttribute('src', '/api/media/out/ocean%20v1.mp4');
+  });
+
+  // A cascade renders several segments into ONE take, so the take's render.json exists (and holds
+  // only the finished children) from the first landing onward. The scan then stops synthesizing the
+  // take's pending jobs, and the segment actually on the wire is in NO server-sent list.
+  it('keeps naming the working segment, and the whole cut on the strip, mid-cascade', () => {
+    const run = makeRun('review');
+    run.status = 'rendering';
+    run.spec = {
+      ...SPEC,
+      shots: [...SPEC.shots],
+      kling: { ...SPEC.kling, jobs: [
+        { job_id: 'K1', shots: ['S1'], elements: ['subject'] },
+        { job_id: 'K2', shots: ['S2'], elements: ['subject'] },
+        { job_id: 'K3', shots: ['S3'], elements: ['subject'] },
+      ] },
+    };
+    run.manifest!.activeJob = { kind: 'render-job', pid: 7, startedAt: new Date(Date.now() - 9000).toISOString() };
+    // K2 was re-rendered with a cascade, so K2 and K3 are being replaced in take t2. K2 has landed
+    // and written render.json; K3 is on the wire right now.
+    run.manifest!.takes = [
+      { id: 't1', mode: 'full', revision: null, createdAt: '2026-07-04T10:00:00.000Z' },
+      { id: 't2', mode: 'job', jobId: 'K2', cascade: true, revision: null, createdAt: '2026-07-04T11:00:00.000Z' },
+    ];
+    run.manifest!.jobClips = { K1: '/abs/runs/x/renders/t1/K1/clip.mp4', K2: '/abs/runs/x/renders/t2/K2/clip.mp4' };
+    run.latestRender!.masterUrl = null;
+    run.latestRender!.jobs = [
+      { jobId: 'K2', clip: '/abs/runs/x/renders/t2/K2/clip.mp4', clipExists: true, clipUrl: '/api/media/runs/x/renders/t2/K2/clip.mp4', error: null },
+    ];
+
+    renderReview(<Stage run={run} />);
+
+    expect(screen.getByTestId('rerender-inflight-notice').textContent).toContain('Re-rendering K3 —');
+    // …and the strip is the whole cut, not the one clip this partial take happens to hold
+    for (const id of ['K1', 'K2', 'K3']) expect(screen.getByTestId(`segment-tile-${id}`)).toBeInTheDocument();
+    // K1 was never in the cascade's path, so it is still a finished clip; K3 is the one rendering.
+    expect(within(screen.getByTestId('segment-tile-K3')).getByText('rendering')).toBeInTheDocument();
+    expect(within(screen.getByTestId('segment-tile-K1')).queryByText('rendering')).not.toBeInTheDocument();
+  });
+
+  it('does not second-guess the take the scan is still synthesizing', () => {
+    // Before the cascade's FIRST child lands there is no render.json, so the scan already sends the
+    // full plan with the targeted jobs blank — the server's list is used verbatim.
+    const run = makeRun('review');
+    run.status = 'rendering';
+    run.manifest!.activeJob = { kind: 'render-job', pid: 7, startedAt: new Date().toISOString() };
+    run.manifest!.takes = [
+      { id: 't1', mode: 'full', revision: null, createdAt: '2026-07-04T10:00:00.000Z' },
+      { id: 't2', mode: 'job', jobId: 'K1', cascade: true, revision: null, createdAt: '2026-07-04T11:00:00.000Z' },
+    ];
+    run.latestRender!.jobs = [
+      { jobId: 'K1', clip: null, clipExists: false, clipUrl: null, error: null },
+      { jobId: 'K2', clip: null, clipExists: false, clipUrl: null, error: null },
+    ];
+    renderReview(<Stage run={run} />);
+    expect(screen.getByTestId('rerender-inflight-notice').textContent).toContain('Re-rendering K1 —');
+  });
+
+  // `activeJob` names only the MIDDLE of a re-render. Before the child spawns (the job waits behind
+  // another run — the queue is global, only the spend lock is per run) there is no active job at
+  // all, and the reserved take has no render.json, so the scan sends no render either. The take
+  // record is what still names the interval.
+  it('holds the stage while the re-render is only QUEUED — no active job, no take on disk yet', () => {
+    const run = makeRun('review');
+    run.status = 'rendering';
+    run.manifest!.activeJob = null;
+    run.manifest!.takes = [
+      { id: 't1', mode: 'full', revision: null, createdAt: '2026-07-04T10:00:00.000Z' },
+      { id: 't2', mode: 'job', jobId: 'K2', revision: null, createdAt: '2026-07-04T11:00:00.000Z' },
+    ];
+    run.manifest!.jobClips = { K1: '/abs/runs/x/renders/t1/K1/clip.mp4', K2: '/abs/runs/x/renders/t1/K2/clip.mp4' };
+    run.latestRender = null; // a reserved take with no render.json — the server hands the UI nothing
+
+    renderReview(<Stage run={run} />);
+
+    expect(screen.getByTestId('rerender-inflight-notice').textContent).toContain('Re-rendering K2 —');
+    // the strip is still the whole cut, with only the segment being replaced blank
+    for (const id of ['K1', 'K2']) expect(screen.getByTestId(`segment-tile-${id}`)).toBeInTheDocument();
+    expect(within(screen.getByTestId('segment-tile-K2')).getByText('rendering')).toBeInTheDocument();
+    // no child, so no elapsed clock to quote — the sentence stands on its own
+    expect(screen.getByTestId('rerender-inflight-notice').textContent).not.toMatch(/\d+:\d{2}/);
+  });
+
+  // …and the tail: the clips are all back, and the free stitch that rebuilds the master is what is
+  // left. Naming a segment here would name one that is already finished.
+  it('holds the stage through the free stitch, and says THAT is what is happening', () => {
+    const run = makeRun('review');
+    run.status = 'rendering';
+    run.manifest!.activeJob = { kind: 'assemble', pid: 8, startedAt: new Date(Date.now() - 3000).toISOString() };
+    run.manifest!.takes = [
+      { id: 't1', mode: 'full', revision: null, createdAt: '2026-07-04T10:00:00.000Z' },
+      { id: 't2', mode: 'job', jobId: 'K2', revision: null, createdAt: '2026-07-04T11:00:00.000Z' },
+    ];
+    run.latestRender!.masterUrl = null; // the master is being rebuilt right now
+
+    renderReview(<Stage run={run} />);
+
+    const notice = screen.getByTestId('rerender-inflight-notice');
+    expect(notice.textContent).toContain(
+      "Stitching the new cut — the clips are back; you're watching the current cut until the new master is ready.",
+    );
+    expect(notice.textContent).not.toContain('undefined');
+    expect(screen.getByTestId('master-video')).toHaveAttribute('src', '/api/media/out/ocean.mp4');
+  });
+
+  it('shows no in-flight banner when nothing is rendering', () => {
+    renderReview(<Stage run={makeRun('review')} />);
+    expect(screen.queryByTestId('rerender-inflight-notice')).not.toBeInTheDocument();
+  });
+
+  // U14 — when the plan moved past the latest cut (same derivation as ChangeRequestPanel's
+  // planChanged), the stage says the video below is the OLD cut and points at the rail.
+  it('notes in the banner slot when the plan changed after the latest cut', () => {
+    const run = makeRun('review');
+    // take t1 is from 10:00; a revision at 11:00 outran the cut
+    run.manifest!.revisions = [
+      { id: 'r2', feedback: 'the keeper should look older', scope: 'K2', owners: [4], createdAt: '2026-07-04T11:00:00.000Z' },
+    ];
+    renderReview(<Stage run={run} />);
+    const notice = screen.getByTestId('plan-outran-cut-notice');
+    expect(notice.textContent).toMatch(/The plan changed after this cut \(r2\) — the video below is unchanged\./);
+    expect(notice.textContent).toMatch(/Re-render options are in the rail\./);
+  });
+
+  it('shows no plan-changed notice when a take is newer than the last revision', () => {
+    const run = makeRun('review');
+    // revision at 09:00 predates take t1 (10:00) — the cut already carries this plan
+    run.manifest!.revisions = [
+      { id: 'r1', feedback: 'wider hook shot', scope: 'whole', owners: [1], createdAt: '2026-07-04T09:00:00.000Z' },
+    ];
+    renderReview(<Stage run={run} />);
+    expect(screen.queryByTestId('plan-outran-cut-notice')).not.toBeInTheDocument();
   });
 });

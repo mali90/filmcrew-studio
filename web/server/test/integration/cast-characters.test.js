@@ -173,6 +173,35 @@ test('deleting a character unlinks its assets by default (they move to Unassigne
   assert.ok(after.unassigned.references.length >= refCount, 'refs survive into the pool');
 });
 
+// Two characters whose slugs PREFIX one another (ann / ann-marie; jack / jack-jr in a real cast).
+// Asked one name at a time, "ann-marie-01" belongs to both — the junior's face shows up on the
+// senior's card, and the engine, which shares this rule, attaches it to a PAID render as the senior.
+test('a character never borrows the references of another whose slug it prefixes', async () => {
+  assert.equal((await post('/api/cast/profiles', { name: 'Ann' })).statusCode, 201);
+  assert.equal((await post('/api/cast/profiles', { name: 'Ann Marie' })).statusCode, 201);
+  assert.equal((await uploadRef('face.png', 'Ann')).json().added, 'ann-01.png');
+  assert.equal((await uploadRef('face.png', 'Ann Marie')).json().added, 'ann-marie-01.png');
+
+  const view = (await get('/api/cast/characters')).json();
+  const refIds = (s) => view.characters.find((c) => c.slug === s).refs.map((r) => r.id);
+  assert.deepEqual(refIds('ann'), ['ann-01'], 'the longest matching slug owns the file');
+  assert.deepEqual(refIds('ann-marie'), ['ann-marie-01']);
+  assert.ok(!view.unassigned.references.some((r) => r.id.startsWith('ann')), 'both are claimed, once each');
+
+  // Re-linking reads the old owner by the same rule: "ann-marie-01" is Ann Marie's, so it is her
+  // prefix that comes off — not "ann"'s, which would have made Ann's file out of "marie-01".
+  const moved = await post('/api/cast/references/ann-marie-01/assign', { character: 'ann' });
+  assert.equal(moved.json().id, 'ann-01-2', 'stripped to "01", re-prefixed for Ann, de-duped against ann-01');
+  assert.equal((await post('/api/cast/references/ann-01-2/assign', { character: 'ann-marie' })).json().id, 'ann-marie-01-2');
+  assert.equal((await get('/api/cast/characters')).json().characters.find((c) => c.slug === 'ann').refs.length, 1,
+    'the round trip left Ann exactly what she started with');
+
+  // …and so does a delete that takes its references with it.
+  assert.equal((await del('/api/cast/profiles/ann?deleteRefs=1')).json().refsDeleted, 1, 'only Ann\'s own file');
+  assert.ok(fs.existsSync(path.join(dirs.elements, 'references', 'ann-marie-01-2.png')), 'the other character keeps hers');
+  await del('/api/cast/profiles/ann-marie?deleteRefs=1');
+});
+
 test('a description that already starts with the heading never doubles it (editor regression)', async () => {
   const created = await post('/api/cast/profiles', { name: 'Echo', description: '# Echo\n\nSpeaks twice.' });
   assert.equal(created.statusCode, 201);

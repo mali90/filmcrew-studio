@@ -15,9 +15,12 @@ import {
   aspectsFor as registryAspectsFor,
   capsFor as registryCapsFor,
   castLimitFor as registryCastLimitFor,
+  defaultResolutionFor as registryDefaultResolutionFor,
   normalizeBackend as registryNormalizeBackend,
+  resolutionEnvFor as registryResolutionEnvFor,
+  resolutionsFor as registryResolutionsFor,
 } from '../../src/lib/render-models.js';
-import type { Aspect, Backend } from './api-types';
+import type { Aspect, Backend, Resolution } from './api-types';
 
 // The registry is untyped JS; describe here only the fields the UI actually reads.
 interface ModelEntry { label: string; shortLabel?: string; castLimit: number; aspects: Aspect[]; providers: Record<string, unknown> }
@@ -82,6 +85,13 @@ export function backendIdFor(model: string, provider: string): Backend {
 export const castLimitFor = (value: string): number => registryCastLimitFor(value) as number;
 /** The ratios this model renders, in menu order (never 'adaptive'/'auto'). */
 export const aspectsFor = (value: string): Aspect[] => registryAspectsFor(value) as Aspect[];
+/** The render tiers this model offers, lowest first — the resolution control's segments. */
+export const resolutionsFor = (value: string): Resolution[] => registryResolutionsFor(value) as Resolution[];
+/** The model's own default tier (its config knob's fallback, before any .env override). */
+export const defaultResolutionFor = (value: string): Resolution => registryDefaultResolutionFor(value) as Resolution;
+/** The .env knob this model's resolution rides (KLING_RESOLUTION / SEEDANCE_RESOLUTION /
+ *  SEEDANCE25_RESOLUTION) — what the wizard's buildUpdates writes, per MODEL, never per provider. */
+export const resolutionEnvFor = (value: string): string => registryResolutionEnvFor(value) as string;
 
 // ── Seams: how strongly this backend can pin a boundary frame (WS2-P5) ──────────────────────────
 //
@@ -151,11 +161,16 @@ export function pinStrengthFor(
  * cast, SEAM_PRIORITY drops the closing pin, then the opening one, and the renderer records the
  * joint as a scene cut. Selling "near-seamless" for a pin that will be dropped is the one thing
  * this must never do, so both ends are asked together (they compete for the same slots).
+ *
+ * `otherRefCount` is what the same job already spends out of a COMBINED budget — its voice clips,
+ * on a model that counts images + audio + video against one cap (fal Seedance 2.5). Those slots are
+ * gone before a pin can have one (nothing drops a voice clip), and the browser cannot read the
+ * voices dir, so the count arrives on the run payload as `voiceRefs`.
  */
 export function pinStrengthsFor(
   backend: Backend | string,
-  { castRefCount = 0, hasSeamIn = false, hasSeamOut = false }:
-    { castRefCount?: number; hasSeamIn?: boolean; hasSeamOut?: boolean },
+  { castRefCount = 0, otherRefCount = 0, hasSeamIn = false, hasSeamOut = false }:
+    { castRefCount?: number; otherRefCount?: number; hasSeamIn?: boolean; hasSeamOut?: boolean },
 ): { in: PinStrength; out: PinStrength } {
   let caps: SeamCaps;
   try {
@@ -163,5 +178,5 @@ export function pinStrengthsFor(
   } catch {
     return { in: 'none', out: 'none' };
   }
-  return pinStrengths({ caps, castRefCount, hasSeamIn, hasSeamOut });
+  return pinStrengths({ caps, castRefCount, otherRefCount, hasSeamIn, hasSeamOut });
 }

@@ -102,6 +102,24 @@ test('PUT stores the words verbatim; GET /prompt serves them as an override, and
   assert.ok(view.pinBytes > 0);
 });
 
+// "Verbatim" has to include the edges. The sidecar stores the body byte for byte and the editor's
+// meter prices it byte for byte, so an edit deliberately opening (or closing) on a blank line must
+// reach the provider carrying those bytes — a trim on the way out sends something the editor never
+// showed, and bills for it.
+test('an edit saved with blank lines around it keeps them all the way to the wire', async () => {
+  const runId = await plannedRun();
+  const jobId = await firstJob(runId);
+  const mine = '\n\nHold on the dark for a long beat.\n\nThen the lamp.  \n';
+
+  assert.equal((await put(`/api/runs/${runId}/prompt`, { job: jobId, prompt: mine })).statusCode, 200);
+  assert.equal(readJson(sidecarOf(runId)).jobs[jobId].prompt, mine, 'stored byte for byte');
+
+  const view = (await get(`/api/runs/${runId}/prompt?job=${jobId}`)).json();
+  assert.ok(view.prompt.endsWith(mine), 'composed with those bytes, not with a trimmed copy of them');
+  assert.deepEqual(view.shotPrompts, [mine], 'and the record of the authored body says the same');
+  assert.equal(view.bytes, Buffer.byteLength(view.prompt, 'utf8'), 'the meter counts what would go');
+});
+
 test('DELETE discards the edit and restores the agents\' text byte for byte', async () => {
   const runId = await plannedRun();
   const jobId = await firstJob(runId);
@@ -133,6 +151,72 @@ test('DELETE /prompt on an Object.prototype key is a 404, not a bogus success', 
   assert.equal((m?.history ?? []).filter((h) => h?.kind === 'prompt-discard').length, 0, 'no junk history row');
 });
 
+// The mirror image of the read above: a plan may legitimately CALL a job `__proto__` (the spec asks
+// only that a job_id is non-empty), and `jobs[jobId] = edit` on a plain object then hits
+// Object.prototype's setter — no own key, `Object.keys` empty, the sidecar deleted as "no edits
+// left", and the words the user typed for a paid render gone with a 200 in front of them.
+test('a job the plan named "__proto__" keeps its edit — the sidecar is a null-prototype map', async () => {
+  const runId = await plannedRun();
+  const jobId = '__proto__';
+  const spec = readJson(specOf(runId));
+  spec.kling.jobs[0].job_id = jobId;
+  fs.writeFileSync(specOf(runId), JSON.stringify(spec, null, 2));
+
+  const mine = 'the lamp room, held, nothing moving';
+  const saved = await put(`/api/runs/${runId}/prompt`, { job: jobId, prompt: mine });
+  assert.equal(saved.statusCode, 200, saved.body);
+  assert.equal(saved.json().source, 'override');
+
+  assert.ok(fs.existsSync(sidecarOf(runId)), 'the sidecar survives the save');
+  assert.equal(readJson(sidecarOf(runId)).jobs[jobId].prompt, mine, 'stored under the id the plan used');
+
+  const view = (await get(`/api/runs/${runId}/prompt?job=${encodeURIComponent(jobId)}`)).json();
+  assert.equal(view.source, 'override');
+  assert.ok(view.prompt.includes(mine), 'and it is what a later render would send');
+
+  // Every other job still reads as the plan's — the map answers for own keys only.
+  const other = (await get(`/api/runs/${runId}/prompt?job=${spec.kling.jobs[1]?.job_id ?? 'K2'}`)).json();
+  if (other?.jobId) assert.equal(other.source, 'plan');
+});
+
+// Same lesson, different spelling: the schema asks only that a job_id is non-blank, and the renderer
+// makes a directory of that EXACT name — so a plan may call a job " K1 ". Trimming the id at the
+// door was not normalisation but a rename, and the two ends of it disagreed: the read either missed
+// the job or answered for whichever job happened to be spelled like its trimmed form, while a save
+// stored the user's words under a key no render would ever look up.
+test('a job id carrying edge whitespace is read, edited and discarded under the name the plan gave it', async () => {
+  const runId = await plannedRun();
+  const spec = readJson(specOf(runId));
+  const trimmedSpelling = spec.kling.jobs[0].job_id;
+  const jobId = ` ${trimmedSpelling} `;
+  // A second job whose id IS the trimmed spelling: a trim here does not just miss, it aims elsewhere.
+  const neighbourJob = structuredClone(spec.kling.jobs[0]);
+  spec.kling.jobs[0].job_id = jobId;
+  if (spec.kling.jobs[1]) spec.kling.jobs[1].job_id = trimmedSpelling;
+  else spec.kling.jobs.push(neighbourJob);
+  fs.writeFileSync(specOf(runId), JSON.stringify(spec, null, 2));
+
+  const view = await get(`/api/runs/${runId}/prompt?job=${encodeURIComponent(jobId)}`);
+  assert.equal(view.statusCode, 200, view.body);
+  assert.equal(view.json().jobId, jobId, 'the id travels to the plan lookup exactly as it was asked for');
+
+  const mine = 'the lamp room, held, nothing moving';
+  const saved = await put(`/api/runs/${runId}/prompt`, { job: jobId, prompt: mine });
+  assert.equal(saved.statusCode, 200, saved.body);
+  assert.equal(readJson(sidecarOf(runId)).jobs[jobId].prompt, mine, 'stored under the id the plan used');
+  const neighbour = (await get(`/api/runs/${runId}/prompt?job=${trimmedSpelling}`)).json();
+  assert.equal(neighbour.jobId, trimmedSpelling);
+  assert.equal(neighbour.source, 'plan', 'the job spelled like the trimmed form was never touched');
+
+  const gone = await del(`/api/runs/${runId}/prompt?job=${encodeURIComponent(jobId)}`);
+  assert.equal(gone.statusCode, 200, gone.body);
+  assert.ok(!fs.existsSync(sidecarOf(runId)), 'and the discard found the same edit the save wrote');
+
+  // Naming no job at all is still the 400 that tells you what the plan has.
+  const bare = await get(`/api/runs/${runId}/prompt?job=`);
+  assert.equal(bare.statusCode, 400, bare.body);
+});
+
 test('an over-budget edit is refused WITH the numbers — never silently truncated', async () => {
   const runId = await plannedRun();
   const view = (await get(`/api/runs/${runId}/prompts`)).json().prompts[0];
@@ -142,6 +226,76 @@ test('an over-budget edit is refused WITH the numbers — never silently truncat
   assert.match(r.body, /\d+ bytes/, 'the message carries the byte numbers the meter shows');
   assert.equal((await get(`/api/runs/${runId}/prompt?job=${view.jobId}`)).json().source, 'plan', 'nothing was stored');
   assert.ok(!fs.existsSync(sidecarOf(runId)));
+});
+
+// With no app-level cap, the TRANSPORT's ceiling is the only one left on an edit — so it is stated
+// (web/server/app.js's BODY_LIMIT_BYTES, 8 MiB) and refused with the number in it. Fastify's own
+// default was 1 MiB and a generic 413 naming neither prompts nor bytes: a limit you cannot see or
+// measure against is the silence this whole change removed, relocated to the framework.
+test('a body past the server\'s stated limit is refused WITH the number, not by a generic 413', async () => {
+  const r = await put('/api/runs/whatever/prompt', { job: 'K1', prompt: 'x'.repeat(9 * 1024 ** 2) });
+  assert.equal(r.statusCode, 413);
+  const body = r.json();
+  assert.match(body.error, /8388608-byte limit/, 'the number is in the message, like every other refusal here');
+  assert.match(body.hint, /nothing was saved/);
+});
+
+// The other half of that promise. The root above SETS SEEDANCE_PROMPT_MAX_BYTES, and everything
+// about a set cap still holds — it clamps, and an edit over it is refused with the numbers. The
+// SHIPPED default sets nothing: nothing checkable documents a prompt-length limit for Seedance
+// (Segmind's API pages and fal's published schemas declare none), so there is no denominator to
+// meter against and no length a save may be refused for. This needs its own
+// app because a cap is read from a run's .env, and this one must not carry the line — in EITHER
+// place, since childEnv wins over .env (dotenv never overwrites an existing variable).
+test('with no cap set, the view has no denominator and a ~20 KB edit rides the whole path verbatim', async () => {
+  const bareEnvRoot = path.join(tmpRoot, 'envroot-uncapped');
+  fs.mkdirSync(bareEnvRoot, { recursive: true });
+  // A REAL .env, because only a real one is read as data (an .env.example previews a prompt no
+  // child would send) — with no SEEDANCE_PROMPT_MAX_BYTES in it.
+  fs.writeFileSync(path.join(bareEnvRoot, '.env'), '# deliberately no SEEDANCE_PROMPT_MAX_BYTES — uncapped is the shipped default\n');
+  const bareRunsDir = path.join(tmpRoot, 'runs-uncapped'); // its own service: recover() scans a runs dir
+  const { SEEDANCE_PROMPT_MAX_BYTES: _capped, ...bareChildEnv } = childEnv;
+  const bare = await buildApp({ root: HOST_ROOT, runsDir: bareRunsDir, outDir, childEnv: bareChildEnv, envRoot: bareEnvRoot });
+  try {
+    const inject = (method, url, payload) => bare.inject({ method, url, payload });
+    const { runId } = (await inject('POST', '/api/runs', { idea: 'a lighthouse keeper on his last night', backend: 'seedance', aspect: '9:16', durationS: null })).json();
+    const t0 = Date.now();
+    for (;;) {
+      const { status, error } = (await inject('GET', `/api/runs/${runId}`)).json().run;
+      if (status === 'plan-ready') break;
+      if (Date.now() - t0 > 120000) throw new Error(`timeout waiting for plan-ready (last: ${status} err=${JSON.stringify(error)})`);
+      await sleep(150);
+    }
+
+    const view = (await inject('GET', `/api/runs/${runId}/prompts`)).json().prompts[0];
+    assert.equal(view.maxBytes, null, '"no limit" travels as null — a 0 would meter every edit as instantly over');
+    assert.equal(view.segmentMaxBytes, null, 'Seedance renders one document per job, so there is no per-segment cap either');
+    assert.equal(typeof view.pinBytes, 'number', 'what the SYSTEM owns is still measured — it just has no budget to be subtracted from');
+    assert.ok(view.pinBytes > 0);
+
+    // ~20 KB of one user's own words: four times the house rule this replaced, and the kind of rich
+    // multi-shot prompt that used to be cut off mid-sentence where nobody could see it.
+    const long = 'A held shot of the lamp, the beam turning slowly over the water. '.repeat(320).trim();
+    assert.ok(Buffer.byteLength(long, 'utf8') > 20000);
+    const saved = await inject('PUT', `/api/runs/${runId}/prompt`, { job: view.jobId, prompt: long });
+    assert.equal(saved.statusCode, 200, saved.body);
+    assert.equal(saved.json().source, 'override');
+
+    const stored = readJson(path.join(bareRunsDir, runId, 'prompt-overrides.json'));
+    assert.equal(stored.jobs[view.jobId].prompt, long, 'stored byte for byte — no trimming, no clamp');
+
+    // …and a reload gets those same bytes back. `draft` is the editable body, which is exactly what
+    // was sent up; `prompt` is that body with the system contract re-composed over it.
+    const reread = (await inject('GET', `/api/runs/${runId}/prompt?job=${view.jobId}`)).json();
+    assert.equal(Buffer.compare(Buffer.from(reread.draft, 'utf8'), Buffer.from(long, 'utf8')), 0, 'round-tripped byte for byte');
+    assert.ok(reread.prompt.includes(long), 'and every one of those bytes is in what we would send');
+    assert.equal(reread.maxBytes, null, 'still no denominator on the way back');
+    // `endsWith`, never `includes` — the speech rule quotes a literal `says: "…"` in every audio-on
+    // prompt, so an `includes` would report a truncation that never happened.
+    assert.ok(!reread.prompt.endsWith('…'), 'nothing was cut, so nothing marks a cut');
+  } finally {
+    await bare.close();
+  }
 });
 
 test('an unknown job 404s and writes nothing', async () => {
@@ -321,6 +475,38 @@ test('prompt-edit history is capped — a long tuning session does not grow the 
     0, 'this fixture only ever filed edits — nothing else was touched');
 });
 
+// …and the sidecar must not be able to CORRUPT ITSELF. A plain writeFileSync truncates the file
+// before it refills it, so a process killed (or a disk filled) mid-save left unparseable bytes —
+// which readOverrides reads as "no edits", and the next save then overwrites every edit the user
+// had. The bytes go to a temp file that is renamed into place instead, so the sidecar is either the
+// old save or the new one.
+test('a save that dies mid-write leaves the previous edit intact', async () => {
+  const runId = await plannedRun();
+  const jobId = await firstJob(runId);
+  const keep = 'The words I already saved and cannot afford to lose.';
+  assert.equal((await put(`/api/runs/${runId}/prompt`, { job: jobId, prompt: keep })).statusCode, 200);
+
+  // A disk that fills mid-write: the bytes that fit land, then the write fails.
+  const realWrite = fs.writeFileSync;
+  fs.writeFileSync = (file, data, ...rest) => {
+    if (!String(file).includes('prompt-overrides')) return realWrite(file, data, ...rest);
+    realWrite(file, String(data).slice(0, 12), ...rest);
+    throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+  };
+  let res;
+  try {
+    res = await put(`/api/runs/${runId}/prompt`, { job: jobId, prompt: 'a second thought, lost to the disk' });
+  } finally {
+    fs.writeFileSync = realWrite;
+  }
+  assert.equal(res.statusCode, 500, 'the failed save is reported, never swallowed');
+
+  assert.equal(readJson(sidecarOf(runId)).jobs[jobId].prompt, keep, 'the earlier edit is still on disk, parseable');
+  const view = (await get(`/api/runs/${runId}/prompt?job=${jobId}`)).json();
+  assert.equal(view.source, 'override', 'and still the words this job will send');
+  assert.ok(view.prompt.includes(keep));
+});
+
 test('a corrupt overrides sidecar REFUSES the render (409) rather than quietly rendering the plan', async () => {
   const planned = await plannedRun();
   const spec = readJson(specOf(planned));
@@ -337,6 +523,57 @@ test('a corrupt overrides sidecar REFUSES the render (409) rather than quietly r
   assert.equal(enqueued.length, before, 'nothing was queued — a refused render costs exactly nothing');
   assert.equal(readManifest(dir).takes.length, 0, 'and no take pretends to have happened');
   assert.ok(!fs.existsSync(path.join(dir, 'renders', 't1')), 'the reserved take dir is released, not left to burn a number');
+});
+
+// Readable JSON with a `jobs` object is NOT enough. `{"prompt":123}` or a non-string segment is a
+// shape the CLI's readPromptOverrides refuses — and the child re-reads this very file — so a
+// pre-flight that only checked the container reserved a take, wrote a cost-ledger row and queued a
+// PAID child that then died on the same bytes: a synchronous 409 turned into a failed render plus a
+// bogus take in the run's history. The pre-flight runs the CLI's OWN validator so the two cannot
+// disagree about what "malformed" means.
+test('a malformed override ENTRY is refused BEFORE the take, the ledger row and the queue', async () => {
+  const planned = await plannedRun();
+  const spec = readJson(specOf(planned));
+  const jobId = spec.kling.jobs[0].job_id;
+  const cases = [
+    ['a non-string prompt', { [jobId]: { prompt: 123 } }],
+    ['a non-string segment', { [jobId]: { segments: ['fine', 7] } }],
+    ['segments that are not an array', { [jobId]: { segments: 'one long string' } }],
+    ['an entry with neither prompt nor segments', { [jobId]: { fingerprint: 'f', updatedAt: 'now' } }],
+    ['an entry that is not an object', { [jobId]: 'just the words' }],
+  ];
+  for (const [n, [why, jobs]] of cases.entries()) {
+    const runId = `web-1999010100001${n}-badentry`;
+    const { dir, svc, enqueued } = fakeService(runId, spec);
+    fs.writeFileSync(path.join(dir, 'prompt-overrides.json'), JSON.stringify({ schema: 1, jobs }, null, 2));
+
+    assert.throws(() => svc.render(runId, { mode: 'full' }), (e) => {
+      assert.equal(e.statusCode, 409, why);
+      assert.match(String(e.message), /prompt edits are unusable/i, why);
+      return true;
+    }, why);
+    assert.throws(() => svc.rerenderJob(runId, { jobId }), (e) => e.statusCode === 409, `${why} (re-render takes the same path)`);
+    assert.equal(enqueued.length, 0, `${why}: nothing was queued — a refused render costs exactly nothing`);
+    const m = readManifest(dir);
+    assert.equal(m.takes.length, 0, `${why}: no take pretends to have happened`);
+    assert.equal(m.costLedger.length, 0, `${why}: and no cost-ledger row claims money moved`);
+    assert.ok(!fs.existsSync(path.join(dir, 'renders', 't1')), `${why}: the reserved take dir is released`);
+  }
+});
+
+// The other half of the same rule: what the CLI ACCEPTS, the server must not refuse. A sidecar that
+// parses and validates renders exactly as it always did.
+test('a valid sidecar still renders — the shared validator refuses nothing the CLI would take', async () => {
+  const planned = await plannedRun();
+  const spec = readJson(specOf(planned));
+  const jobId = spec.kling.jobs[0].job_id;
+  const runId = 'web-19990101000019-goodentry';
+  const { dir, svc } = fakeService(runId, spec);
+  fs.writeFileSync(path.join(dir, 'prompt-overrides.json'), JSON.stringify({ schema: 1, jobs: { [jobId]: { segments: ['one', 'two'] } } }, null, 2));
+
+  const { takeId } = svc.render(runId, { mode: 'full' });
+  assert.equal(readManifest(dir).takes.at(-1).promptSource, 'override');
+  assert.ok(fs.existsSync(path.join(dir, 'renders', takeId, 'prompt-overrides.json')));
 });
 
 test('a run with no edits keeps today\'s argv and records promptSource "plan"', async () => {

@@ -1,5 +1,6 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
+import type { Backend, RunDetail } from '../../../../../shared/api-types';
 import { server, http, HttpResponse } from '../../../test/msw';
 import { makeRun } from '../../../test/fixtures';
 import { renderReview, markPaidConfirmed, clearPaidState } from './test-helpers';
@@ -14,6 +15,18 @@ const withRevision = (scope: string) => {
   ];
   return run; // latest take createdAt is 10:00 — the revision is newer
 };
+
+/** Re-point the run at a backend and give every job `count` cast references — the images the
+ *  reference budget spends before it can afford a boundary pin (SEAM_PRIORITY drops the closing
+ *  one first). Mirrors SegmentRerenderDialog.test's own fixture: the rule is the same rule. */
+function withCast(run: RunDetail, backend: Backend, count: number): RunDetail {
+  run.backend = backend;
+  run.latestRender!.backend = backend;
+  const elements = Array.from({ length: count }, (_, i) => ({ id: `cast${i}`, role: 'subject', image: `elements/references/cast${i}.png` }));
+  run.spec!.kling.elements = elements;
+  for (const j of run.spec!.kling.jobs) j.elements = elements.map((e) => e.id);
+  return run;
+}
 
 describe('ChangeRequestPanel', () => {
   it('sends feedback to the engine with a job scope', async () => {
@@ -43,7 +56,7 @@ describe('ChangeRequestPanel', () => {
     expect(await screen.findByText('Change request sent — the agents take it from here.')).toBeInTheDocument();
   });
 
-  it('shows the re-render row with the seam warning once the plan is newer than the latest take', async () => {
+  it('shows the re-render row once the plan is newer than the latest take', async () => {
     const run = withRevision('K1');
     renderReview(<ChangeRequestPanel run={run} />);
 
@@ -52,17 +65,42 @@ describe('ChangeRequestPanel', () => {
     // something stay right where they were, under it (spec D30).
     expect(screen.getByRole('button', { name: /Tell the agents/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Re-render K1 only/ })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Re-render K1 \+ downstream/ })).toBeInTheDocument();
-    expect(
-      screen.getByText(/K2 was chained from K1.s last frame — re-rendering K1 alone may show a visible seam\./),
-    ).toBeInTheDocument();
-    // both buttons carry the estimate price
-    await waitFor(() => expect(screen.getAllByLabelText('estimated cost $4.16')).toHaveLength(2));
+    await waitFor(() => expect(screen.getAllByLabelText('estimated cost $4.16').length).toBeGreaterThan(0));
   });
 
-  it('posts rerender-job with cascade from the downstream button', async () => {
-    markPaidConfirmed();
+  // Both buttons here post `boundaries: 'auto'`, and Auto pins this ending: K2 is on record as
+  // opening on K1's last frame, and Kling has a native closing anchor. The solo re-render therefore
+  // lands on K2's opening frame and records the joint as intact — so the seam is not predicted, and
+  // the cascade that would rebuild untouched downstream footage is not sold. Same rule, same
+  // helper, as SegmentRerenderDialog (which owns the deeper matrix of this).
+  it('states the join Auto keeps, and withholds the cascade that would repair nothing', async () => {
     const run = withRevision('K1');
+    renderReview(<ChangeRequestPanel run={run} />);
+
+    const note = screen.getByTestId('rail-seam-note');
+    expect(note).toHaveTextContent(/keeps that join seamless/);
+    expect(note).toHaveTextContent(/K2 and everything after it can stay exactly as they are/);
+    expect(screen.queryByRole('button', { name: /Re-render K1 \+ downstream/ })).not.toBeInTheDocument();
+    // …and the cascade nobody is offered is never priced either.
+    await waitFor(() => expect(screen.getAllByLabelText('estimated cost $4.16')).toHaveLength(1));
+  });
+
+  it('a join that was never recorded is neither warned about nor cascaded', () => {
+    const run = withRevision('K1');
+    // Reconstructed, not observed: `resolveBoundaries` refuses to act on a derived verdict, so auto
+    // pins no ending — and there is no recorded join to promise anything about either.
+    run.continuity = (run.continuity ?? []).map((e) => (e.jobId === 'K2' ? { ...e, confidence: 'derived' as const } : e));
+    renderReview(<ChangeRequestPanel run={run} />);
+
+    expect(screen.queryByTestId('rail-seam-note')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Re-render K1 \+ downstream/ })).not.toBeInTheDocument();
+  });
+
+  it('offers and posts the cascade when the reference budget drops that ending pin', async () => {
+    markPaidConfirmed();
+    // 9 cast references on a 9-image model: the closing pin has no slot left, so the join really
+    // does break and re-rendering downstream is the only thing that repairs it.
+    const run = withCast(withRevision('K1'), 'seedance-2.0@fal', 9);
     let body: unknown = null;
     server.use(
       http.post('/api/runs/:id/rerender-job', async ({ request }) => {
@@ -72,8 +110,9 @@ describe('ChangeRequestPanel', () => {
     );
 
     renderReview(<ChangeRequestPanel run={run} />);
+    expect(screen.getByTestId('rail-seam-note')).toHaveTextContent(/K2.s join will break/);
     // money buttons stay disabled until their price is stated — wait for the estimate first
-    await waitFor(() => expect(screen.getAllByLabelText('estimated cost $4.16').length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getAllByLabelText('estimated cost $4.16')).toHaveLength(2));
     fireEvent.click(screen.getByRole('button', { name: /Re-render K1 \+ downstream/ }));
     await waitFor(() => expect(body).toEqual({ jobId: 'K1', boundaries: 'auto', cascade: true }));
   });

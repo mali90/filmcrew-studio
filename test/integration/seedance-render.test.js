@@ -108,6 +108,85 @@ test('take: the regen nonce reaches the prompt as an Alternate take directive', 
   } finally { cleanup(); }
 });
 
+// ── the whole-prompt clamp ships OFF, measured where it actually matters: the PAYLOAD ────────────
+// The composer's own specs (test/unit/seedance-prompt.test.js) prove nothing was clamped; they
+// cannot prove nothing DOWNSTREAM of it shortens the prompt. Between the composer and fal sit
+// buildSeedanceArgs and the transport, and a cap reintroduced in either would look exactly like a
+// passing unit suite. So these two read the bytes off the wire the mock queue received.
+
+const utf8 = (s) => Buffer.byteLength(s, 'utf8');
+const OLD_DEFAULT = 5000; // the clamp this branch removed, kept here as the number to beat
+
+/**
+ * The golden spec with prose that is DENSE in multibyte characters — every shot still inside the
+ * schema's 512-CHAR per-segment rule, so this is a spec the validator accepts and the agents could
+ * really plan. That is the point: the removed cap was counted in BYTES against prose measured in
+ * chars, so a non-Latin script hit it roughly three times sooner. Nothing here is oversized; it is
+ * an ordinary three-shot job that the 5000-byte default happened to cut.
+ */
+function denseSpec() {
+  const spec = loadGoldenSpec();
+  const unit = '灯台の光が海の上をゆっくりと回る。雨が水面から吹きつけている。';
+  for (const shot of spec.shots) {
+    let prose = '';
+    while (prose.length + unit.length <= 512) prose += unit;
+    shot.kling.content_prompt = prose;
+  }
+  return spec;
+}
+
+test('UNCAPPED: a spec-legal multibyte prompt over the old 5000 B default reaches fal whole', async () => {
+  const { dir, cleanup } = mkTmp('sd-uncapped');
+  try {
+    const spec = denseSpec();
+    const before = fal.requests.length;
+    await renderSpec(spec, { runDir: dir, probe: true });
+
+    const wire = JSON.parse(lastSubmit(before).body).prompt;
+    assert.ok(utf8(wire) > OLD_DEFAULT, `the payload is past the removed default (got ${utf8(wire)} B), so this case would have been cut`);
+    // The clamp's marker only ever lands at the END — the speech rule quotes a literal `says: "…"`,
+    // so an `includes` here would report a cut that never happened.
+    assert.ok(!wire.endsWith('…'), 'nothing was cut, so nothing marks a cut');
+    for (const shot of spec.shots) {
+      assert.ok(wire.includes(shot.kling.content_prompt), `${shot.shot_id}'s prose is on the wire verbatim`);
+    }
+    assert.ok(!wire.includes('�'), 'and no multibyte character was split on the way');
+    // The sidecar is the only record a user can read back; one that disagrees with the payload would
+    // tell them a prompt was sent that was not.
+    const sidecar = JSON.parse(fs.readFileSync(path.join(dir, 'K1', 'prompts.json'), 'utf8'));
+    assert.equal(sidecar.prompt, wire, 'the recorded prompt IS the submitted one');
+    assert.equal(sidecar.prompt_source, 'plan');
+  } finally { cleanup(); }
+});
+
+test('UNCAPPED: a ~20 KB saved prompt EDIT is submitted whole — never trimmed, never refused', async () => {
+  const { dir, cleanup } = mkTmp('sd-uncapped-override');
+  try {
+    // An override is the case with no ceiling above it at all: the 512-char rule bounds the AGENTS'
+    // per-shot prose in the spec, but a user's saved edit replaces the shot bodies wholesale, so
+    // this is where "long, rich prompt" is really reachable. With no cap, assertOverrideFits has
+    // nothing to measure and must not fire before this paid submit.
+    const mine = 'A held shot of the lamp, the beam turning slowly over the water. '.repeat(320).trim();
+    fs.writeFileSync(
+      path.join(dir, 'prompt-overrides.json'),
+      JSON.stringify({ schema: 1, jobs: { K1: { prompt: mine } } }),
+    );
+    const before = fal.requests.length;
+    await renderSpec(loadGoldenSpec(), { runDir: dir, probe: true });
+
+    const wire = JSON.parse(lastSubmit(before).body).prompt;
+    assert.ok(wire.includes(mine), 'every byte the user wrote is what was sent');
+    assert.ok(utf8(wire) > 20000, `the whole edit is on the wire (got ${utf8(wire)} B)`);
+    assert.ok(!wire.endsWith('…'));
+    // The front matter is still re-composed OVER the edit — uncapped changes what FITS, not the
+    // contract the system owns.
+    assert.match(wire, /No on-screen text/);
+    const sidecar = JSON.parse(fs.readFileSync(path.join(dir, 'K1', 'prompts.json'), 'utf8'));
+    assert.equal(sidecar.prompt_source, 'override');
+    assert.equal(sidecar.prompt, wire);
+  } finally { cleanup(); }
+});
+
 test('2-job render: seam frame becomes an extra @Image ref, prompt-pinned as the first frame', { skip: FF ? false : 'ffmpeg not installed' }, async () => {
   const { dir, cleanup } = mkTmp('sd-chain');
   try {

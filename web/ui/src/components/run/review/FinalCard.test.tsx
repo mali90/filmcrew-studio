@@ -39,6 +39,59 @@ describe('FinalCard', () => {
     expect(screen.queryByRole('button', { name: /reveal|copy path/i })).not.toBeInTheDocument();
   });
 
+  // U2c — the facts grid states what resolution was DELIVERED: the delivered file's own measured
+  // short side first, then the approved cut's record, then the latest render's dimension, and only
+  // then the run's pick as a stand-in.
+  it('states the delivered resolution from the approved cut\'s record', () => {
+    const run = makeRun('complete');
+    run.manifest!.cuts = [{ id: 'c1', take: 't1', master: '/abs/out/ocean.mp4', shortSide: 1080, createdAt: '2026-07-04T10:00:00.000Z' }];
+    renderReview(<FinalCard run={run} />);
+    expect(screen.getByText('Resolution')).toBeInTheDocument();
+    expect(screen.getByText('1080p')).toBeInTheDocument();
+  });
+
+  // The bug this pins down: approving WITH Topaz writes a bigger file than the cut it came from, so
+  // the cut's shortSide is the PRE-upscale size. Reading it here labelled a delivered 1080p master
+  // "480p" — the one number on the card the user might act on (or publish).
+  it('a cut approved with an upscale reports the UPSCALED file\'s size, not the source cut\'s', () => {
+    const run = makeRun('complete');
+    run.manifest!.cuts = [{ id: 'c1', take: 't1', master: '/abs/out/ocean.mp4', shortSide: 480, createdAt: '2026-07-04T10:00:00.000Z' }];
+    run.manifest!.approved = { cut: 'c1', final: '/abs/out/ocean-final.mp4', upscaled: true, shortSide: 1080, at: '2026-07-04T10:30:00.000Z' };
+    run.manifest!.finals = [{ id: 'final-1', cut: 'c1', final: '/abs/out/ocean-final.mp4', upscaled: true, shortSide: 1080, at: '2026-07-04T10:30:00.000Z' }];
+    renderReview(<FinalCard run={run} />);
+    expect(screen.getByText('1080p')).toBeInTheDocument();
+    expect(screen.queryByText('480p')).not.toBeInTheDocument();
+  });
+
+  it('a second delivery is measured on its own file, not on whatever was delivered first', () => {
+    const run = twiceDelivered();
+    run.manifest!.finals![0].shortSide = 480;  // the first delivery went out un-upscaled
+    run.manifest!.finals![1].shortSide = 2160; // …the replacement was lifted to 4K
+    run.manifest!.approved = { cut: 'c2', final: '/abs/out/ocean-final.mp4', upscaled: true, shortSide: 2160, at: '2026-07-04T12:00:00.000Z' };
+    renderReview(<FinalCard run={run} />);
+    expect(screen.getByText('2160p')).toBeInTheDocument();
+  });
+
+  it('a run delivered before the size was recorded still falls back to the cut', () => {
+    const run = makeRun('complete'); // approved/finals carry no shortSide
+    run.manifest!.cuts = [{ id: 'c1', take: 't1', master: '/abs/out/ocean.mp4', shortSide: 720, createdAt: '2026-07-04T10:00:00.000Z' }];
+    renderReview(<FinalCard run={run} />);
+    expect(screen.getByText('720p')).toBeInTheDocument();
+  });
+
+  it('falls back to the run\'s resolution pick when no dimension was recorded', () => {
+    const run = makeRun('complete'); // fixture cut carries no shortSide
+    run.manifest!.resolution = '720p';
+    renderReview(<FinalCard run={run} />);
+    expect(screen.getByText('720p')).toBeInTheDocument();
+  });
+
+  it('shows an em dash when neither a dimension nor a pick is on record', () => {
+    renderReview(<FinalCard run={makeRun('complete')} />);
+    const dt = screen.getByText('Resolution');
+    expect(dt.parentElement?.textContent).toBe('Resolution—');
+  });
+
   // estUsd:null means two different things in a ledger, and only one of them is "free": an assemble
   // really costs nothing, while a Segmind render spent money at a rate nobody publishes. Summing
   // them together would print a confident "$0.00" over a real bill.

@@ -31,17 +31,33 @@ const frameOf = (runId, take, job) => `/runs/${runId}/renders/${take}/${job}/las
  * `from` = [take, job] (or nothing, for a clip that started fresh). `mode` is the seam the renderer
  * actually applied — 'soft' (reference-guided pin) and 'native' (a real first/last-frame slot) both
  * share a frame; 'none' and 'unsupported' share nothing.
+ *
+ * `to` = [take, job] is the same fact from the OTHER side: this clip carried an applied END pin and
+ * was rendered to arrive on that clip's opening frame (an `--last-frame-from` re-render), recorded
+ * as `seamOut.to`. `outMode` is what the renderer applied at that end, by the same vocabulary.
  */
-const seg = (job, take, from = null, mode = from ? 'soft' : 'none') => ({ job, take, from, mode });
+const seg = (job, take, from = null, mode = from ? 'soft' : 'none', to = null, outMode = to ? 'soft' : 'none') =>
+  ({ job, take, from, mode, to, outMode });
 
 const seamInOf = (runId, s) => (s.from && s.mode !== 'none' && s.mode !== 'unsupported'
   ? { mode: s.mode, frame: frameOf(runId, s.from[0], s.from[1]), from: { take: s.from[0], job: s.from[1], clip: clipOf(runId, s.from[0], s.from[1]) } }
   : { mode: s.mode, frame: s.from ? frameOf(runId, s.from[0], s.from[1]) : null, from: s.from ? { take: s.from[0], job: s.from[1], clip: clipOf(runId, s.from[0], s.from[1]) } : null });
 
+const seamOutOf = (runId, s) => ({
+  mode: s.outMode ?? 'none',
+  frame: s.to ? frameOf(runId, s.take, s.job) : null,
+  frameSource: s.to ? 'ffmpeg' : null,
+  to: s.to ? { take: s.to[0], job: s.to[1], clip: clipOf(runId, s.to[0], s.to[1]) } : null,
+});
+
+const recOf = (runId, s) => ({
+  jobId: s.job, clip: clipOf(runId, s.take, s.job), seamIn: seamInOf(runId, s), seamOut: seamOutOf(runId, s),
+});
+
 /** The render.json shape finishRender hands readContinuity: the cut, in clip order. */
 const renderOf = (runId, segs, extra = {}) => ({
   project: runId,
-  jobs: segs.map((s) => ({ jobId: s.job, job: s.job, clip: clipOf(runId, s.take, s.job), seamIn: seamInOf(runId, s), seamOut: null })),
+  jobs: segs.map((s) => ({ ...recOf(runId, s), job: s.job })),
   ...extra,
 });
 
@@ -52,7 +68,7 @@ function runRecordOf(runId, segs) {
     runId,
     takes: takeIds.map((take) => ({
       take,
-      jobs: segs.filter((s) => s.take === take).map((s) => ({ jobId: s.job, clip: clipOf(runId, s.take, s.job), seamIn: seamInOf(runId, s), seamOut: null })),
+      jobs: segs.filter((s) => s.take === take).map((s) => recOf(runId, s)),
     })),
     cut: segs.map((s) => ({ jobId: s.job, take: s.take })),
   };
@@ -69,6 +85,11 @@ const M5JO = [seg('K1', 't4'), seg('K2', 't4', ['t4', 'K1']), seg('K3', 't4', ['
 // The mirror image of b1nx: the MIDDLE segment was re-rendered, chained onto the current K1, so the
 // joint before it survives and the joint after it (t1's K3 still naming t1's K2) is the broken one.
 const MIDDLE = [seg('K1', 't1'), seg('K2', 't2', ['t1', 'K1']), seg('K3', 't1', ['t1', 'K2'])];
+// The end-pinned re-render: K1 alone was re-rendered into t2 with the closing pin the re-render
+// dialog offers, so the NEW K1 was made to ARRIVE on the cut's K2 and records that in seamOut.to.
+// K2 was never touched, so its seamIn still names t1's K1 — the joint is intact, and only the
+// predecessor's record says so.
+const END_PIN = [seg('K1', 't2', null, 'none', ['t1', 'K2']), seg('K2', 't1', ['t1', 'K1']), seg('K3', 't1', ['t1', 'K2'])];
 
 /** Every element a real boolean, exactly one per joint — planSeamstitch rejects any other shape. */
 function assertJointArray(got, expectedJoints) {
@@ -95,6 +116,28 @@ test('an intact chain rendered in one pass is chained at every joint (the 5mjo s
   const got = readContinuity(renderOf('5mjo', M5JO), 3, CFG);
   assertJointArray(got, 2);
   assert.deepEqual(got, [true, true]);
+});
+
+test('an APPLIED end pin on the predecessor holds the joint the successor forgot', () => {
+  // The bug this pins down: a nonterminal segment re-rendered with a closing pin records the join in
+  // its OWN seamOut, while the untouched successor keeps the seamIn of a clip that is no longer in
+  // the cut. Judged by the successor alone, the stitcher hard-cuts the very joint that was paid for.
+  const got = readContinuity(renderOf('endpin', END_PIN), 3, CFG);
+  assertJointArray(got, 2);
+  assert.deepEqual(got, [true, true], 'K1 was rendered to arrive on this K2; K3 → K2 never moved');
+});
+
+test('an end pin is only evidence while it names the clip that is still there', () => {
+  // K1 was pinned to t1's K2, then K2 itself was re-rendered into t3: the pin now points at a clip
+  // the cut no longer contains, which is the b1nx case from the other side.
+  const stale = [seg('K1', 't2', null, 'none', ['t1', 'K2']), seg('K2', 't3'), seg('K3', 't1', ['t1', 'K2'])];
+  assert.deepEqual(readContinuity(renderOf('stale', stale), 3, CFG), [false, false]);
+  // And a pin the reference budget dropped records mode 'none' — a destination for a frame nothing
+  // consumed may never hold a joint open.
+  const dropped = [seg('K1', 't2', null, 'none', ['t1', 'K2'], 'none'), seg('K2', 't1', ['t1', 'K1'])];
+  assert.deepEqual(readContinuity(renderOf('dropped', dropped), 2, CFG), [false]);
+  const unsupported = [seg('K1', 't2', null, 'none', ['t1', 'K2'], 'unsupported'), seg('K2', 't1', ['t1', 'K1'])];
+  assert.deepEqual(readContinuity(renderOf('unsupported', unsupported), 2, CFG), [false]);
 });
 
 test('modes that pinned nothing are cuts, even when the source clip still matches', () => {
@@ -198,7 +241,7 @@ test('the stitcher and the UI agree on every joint of every fixture shape', asyn
   let computeLineage;
   try { ({ computeLineage } = await import('../../web/server/lib/lineage.js')); }
   catch { return; } // the server package is not part of a source-only checkout — nothing to compare
-  for (const [name, segs] of [['b1nx', B1NX], ['5mjo', M5JO], ['middle re-render', MIDDLE]]) {
+  for (const [name, segs] of [['b1nx', B1NX], ['5mjo', M5JO], ['middle re-render', MIDDLE], ['end-pinned re-render', END_PIN]]) {
     const fromStitcher = readContinuity(renderOf(name, segs), segs.length, CFG);
     const fromUi = computeLineage(runRecordOf(name, segs)).joints.map((j) => j.linked);
     assert.deepEqual(fromStitcher, fromUi, `${name}: the stitch and the badge must not disagree`);

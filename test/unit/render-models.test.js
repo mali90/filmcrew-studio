@@ -26,6 +26,7 @@ const SRC = path.join(ROOT, 'src/lib/render-models.js');
 const {
   PROVIDERS, RENDER_MODELS, BACKEND_IDS, LEGACY_BACKENDS, ALL_BACKENDS,
   normalizeBackend, capsFor, castLimitFor, aspectsFor, refLabel, demotesOpeningFrame,
+  resolutionsFor, defaultResolutionFor, resolutionEnvFor,
 } = await import('../../src/lib/render-models.js');
 
 const ASPECT_RE = /^\d+:\d+$/;
@@ -66,6 +67,18 @@ test('every RENDER_MODELS entry is well formed and every provider key is a decla
     assert.ok(Number.isInteger(m.castLimit) && m.castLimit >= 1, `${id}.castLimit is a positive integer`);
     assert.ok(Array.isArray(m.aspects) && m.aspects.length > 0, `${id}.aspects non-empty`);
     for (const a of m.aspects) assert.match(a, ASPECT_RE, `${id}.aspects entry "${a}" is numeric (no adaptive/auto)`);
+    // Resolution facts are MODEL-level (the knob is per model, never per provider). An EMPTY ladder
+    // is a declared fact too — the model has no selectable tier (Kling's endpoint renders its own
+    // fixed output) — and such a model must declare NO default and NO env knob: half-declared facts
+    // are how a decorative KLING_RESOLUTION got displayed and priced without ever being sent.
+    assert.ok(Array.isArray(m.resolutions), `${id}.resolutions is an array`);
+    if (m.resolutions.length > 0) {
+      assert.ok(m.resolutions.includes(m.defaultResolution), `${id}.defaultResolution is on its own ladder`);
+      assert.match(m.resolutionEnv ?? '', /^[A-Z][A-Z0-9]*_RESOLUTION$/, `${id}.resolutionEnv names a .env knob`);
+    } else {
+      assert.equal(m.defaultResolution, undefined, `${id}: no ladder ⇒ no default`);
+      assert.equal(m.resolutionEnv, undefined, `${id}: no ladder ⇒ no knob`);
+    }
     assert.equal(typeof m.providers, 'object', `${id}.providers`);
     for (const [pid, entry] of Object.entries(m.providers ?? {})) {
       assert.ok(PROVIDERS[pid], `${id}.providers.${pid} is a declared provider`);
@@ -195,6 +208,36 @@ test('seedance-2.0@segmind: the same queue, a smaller model — 9 images, 3 audi
 test('demotesOpeningFrame stays FALSE only where a native slot coexists with refs (kling)', () => {
   assert.equal(demotesOpeningFrame(capsFor('kling-o3@fal')), false);
   assert.equal(demotesOpeningFrame(capsFor('seedance-2.0@fal')), true); // no anchor at all
+});
+
+// ── Resolution facts: the ladder, its default, and the knob the render child reads ──────────────
+// These are what lets every surface (wizard, Settings, POST /api/runs, the estimator, run-service's
+// per-run env override) agree on resolutions without restating them. The knob name is per MODEL:
+// the wizard writing KLING_RESOLUTION for a Seedance default backend was exactly the silent
+// divergence `resolutionEnv` exists to prevent.
+test('resolution ladder, default and env knob per model — for bare model ids AND backend ids', () => {
+  // Kling has NO selectable tier: fal's o3 endpoint takes no resolution parameter at all, so the
+  // registry declares an empty ladder and every surface hides the control instead of selling one.
+  assert.deepEqual(resolutionsFor('kling-o3'), []);
+  assert.equal(defaultResolutionFor('kling-o3'), undefined);
+  assert.equal(resolutionEnvFor('kling-o3'), undefined);
+  assert.deepEqual(resolutionsFor('seedance-2.0'), ['480p', '720p', '1080p', '4k']);
+  assert.equal(defaultResolutionFor('seedance-2.0'), '480p');
+  assert.equal(resolutionEnvFor('seedance-2.0'), 'SEEDANCE_RESOLUTION');
+  assert.deepEqual(resolutionsFor('seedance-2.5'), ['480p', '720p']);
+  assert.equal(defaultResolutionFor('seedance-2.5'), '720p');
+  assert.equal(resolutionEnvFor('seedance-2.5'), 'SEEDANCE25_RESOLUTION');
+  // backend ids and legacy aliases answer identically to their model (capsFor precedence)
+  for (const id of [...BACKEND_IDS, ...LEGACY_BACKENDS]) {
+    const { id: canonical, model } = normalizeBackend(id);
+    assert.deepEqual(resolutionsFor(id), resolutionsFor(model), id);
+    assert.equal(resolutionEnvFor(id), resolutionEnvFor(model), id);
+    // and the merged caps carry all three, so caps consumers (engine, spec-schema) need no second lookup
+    const caps = capsFor(canonical);
+    assert.deepEqual(caps.resolutions, resolutionsFor(model), id);
+    assert.equal(caps.defaultResolution, defaultResolutionFor(model), id);
+    assert.equal(caps.resolutionEnv, resolutionEnvFor(model), id);
+  }
 });
 
 // ── 3. Derived id lists ─────────────────────────────────────────────────────

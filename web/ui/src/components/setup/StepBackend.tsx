@@ -4,41 +4,41 @@
 // puts a card here with no edit to this file (StepBackend.test.tsx pins that).
 import type { Dispatch } from 'react';
 import clsx from 'clsx';
-import type { Backend } from '../../../../shared/api-types';
+import type { Backend, Resolution } from '../../../../shared/api-types';
 import {
-  MODEL_IDS, aspectsFor, backendIdFor, canonicalBackendFor, castLimitFor, modelLabelFor, providersFor,
+  MODEL_IDS, aspectsFor, backendIdFor, canonicalBackendFor, castLimitFor, defaultResolutionFor,
+  modelLabelFor, providersFor, resolutionsFor,
 } from '../../../../shared/render-models';
+import { perSecondUsdFor } from '../../../../shared/render-rates';
+import { usd } from '../../lib/format';
 import { FixFooter } from './FixFooter';
 import type { WizardAction, WizardState } from './wizard';
 
-// Rates somebody PUBLISHES, keyed by the pair that is billed — the price is a property of the PAIR,
-// not the model: the same Seedance costs about half as much on Segmind as on fal. A pair missing here
-// has no published per-second rate: it says so — it never inherits a sibling's figure, and it is never
-// called free, because the render does cost money. Every pair the registry ships is priced today, so
+// No rate is written here. Every figure on a card is read from the estimator's own table
+// (web/shared/render-rates.ts → web/server/lib/prices.json), at the tier that card would render at,
+// for two reasons: the price is a property of the PAIR (the same Seedance costs about half as much
+// on Segmind as on fal) AND of the TIER (Seedance bills per pixel, so 4k is eleven times 480p), and
+// a hand-copied figure is wrong the day a vendor moves a price with nothing to catch it. A pair the
+// table does not price says so — it never inherits a sibling's figure, and it is never called free,
+// because the render does cost money. Every pair the registry ships is priced today, so
 // RATE_UNKNOWN is the fallback for the NEXT provider added, not dead code.
-const RATE: Record<string, string> = {
-  'kling-o3@fal': '≈ $0.11/s est',
-  'seedance-2.0@fal': '≈ $0.14/s est at 480p',
-  'seedance-2.5@fal': '≈ $0.47/s est at 720p',
-  'seedance-2.0@segmind': '≈ $0.07/s est at 480p',
-  'seedance-2.5@segmind': '≈ $0.24/s est at 720p',
-};
 const RATE_UNKNOWN = 'rate not on file yet — the render still costs money';
 
-// What each MODEL is good at, in plain words. Numbers never live here: the cap and the ratio count on
-// each card are read from the registry below.
+// What each MODEL is good at, in plain words. Numbers never live here: the cap, the ratio count and
+// the tier ladder on each card are read from the registry below.
 const POINTS: Record<string, string> = {
   'kling-o3': 'Multi-shot storyboards from one plan, per-character minted voices',
-  'seedance-2.0': 'One rich prompt per job, lip-sync from your voice clips — renders 480p',
-  'seedance-2.5': 'Longer jobs and richer reference sets — renders 480p or 720p',
+  'seedance-2.0': 'One rich prompt per job, lip-sync from your voice clips',
+  'seedance-2.5': 'Longer jobs and richer reference sets',
 };
 
-interface Card { id: Backend; model: string; name: string; provider: string; points: string[]; rate: string }
+interface Card { id: Backend; model: string; name: string; provider: string; points: string[] }
 
 const CARDS: Card[] = MODEL_IDS.flatMap((model) =>
   providersFor(model).map((p) => {
     const id = backendIdFor(model, p.id);
     const cap = castLimitFor(model);
+    const tiers = resolutionsFor(id);
     return {
       id,
       model,
@@ -46,11 +46,24 @@ const CARDS: Card[] = MODEL_IDS.flatMap((model) =>
       provider: p.label,
       points: [
         POINTS[model] ?? `Renders on ${p.label}`,
-        `Stars up to ${cap} character${cap > 1 ? 's' : ''} · ${aspectsFor(id).length} aspect ratios · approve upscales to 1080p`,
+        `Stars up to ${cap} character${cap > 1 ? 's' : ''} · ${aspectsFor(id).length} aspect ratios · `
+          + (tiers.length ? `renders ${tiers.join(' / ')}` : 'renders the endpoint’s own output'),
       ],
-      rate: RATE[id] ?? RATE_UNKNOWN,
     };
   }));
+
+/** The tier this card would render at if it were picked — the SAME precedence its click applies
+ *  below (keep a tier the model offers, else fall to that model's own default). The quoted rate and
+ *  the patch therefore cannot describe different renders. */
+const tierFor = (id: Backend, picked: Resolution | null): Resolution | null =>
+  (picked && resolutionsFor(id).includes(picked) ? picked : defaultResolutionFor(id) ?? null);
+
+/** What a card says about money: the estimate's own rate at the tier above, naming that tier so the
+ *  figure can never be read as applying to another one. */
+const rateLabel = (id: Backend, tier: Resolution | null): string => {
+  const rate = perSecondUsdFor(id, tier);
+  return rate === null ? RATE_UNKNOWN : `≈ ${usd(rate)}/s est${tier ? ` at ${tier}` : ''}`;
+};
 
 // The shipped default: RENDER_BACKEND unset means the first model on its first provider (config.js).
 const DEFAULT_BACKEND = CARDS[0]!.id;
@@ -70,6 +83,8 @@ export function StepBackend({ state, dispatch }: { state: WizardState; dispatch:
       <div role="radiogroup" aria-label="Render backend" className="mt-5 grid grid-cols-2 gap-2">
         {CARDS.map((b) => {
           const selected = current === b.id;
+          // Resolved once per card and used by BOTH the quote and the patch below.
+          const tier = tierFor(b.id, state.resolution);
           return (
             <button
               key={b.id}
@@ -80,8 +95,17 @@ export function StepBackend({ state, dispatch }: { state: WizardState; dispatch:
                 type: 'patch',
                 // A Segmind validation is MODEL-scoped (validate-segmind probes the picked model's
                 // configured slug), so switching cards resets it — a check that passed for the 2.5
-                // slug says nothing about a bad SEGMIND_SEEDANCE20_SLUG.
-                patch: { backend: b.id, ...(b.id !== state.backend ? { segmindCheck: { state: 'idle' as const } } : {}) },
+                // slug says nothing about a bad SEGMIND_SEEDANCE20_SLUG. A resolution off the new
+                // model's ladder trims to that model's default, and a ratio the new pair cannot
+                // render trims to its first — the presets step must never carry (and buildUpdates
+                // never write) a tier or an aspect the chosen backend cannot render. Same rule the
+                // create hero and the Settings defaults card apply on their own model switch.
+                patch: {
+                  backend: b.id,
+                  ...(b.id !== state.backend ? { segmindCheck: { state: 'idle' as const } } : {}),
+                  ...(aspectsFor(b.id).includes(state.aspect) ? {} : { aspect: aspectsFor(b.id)[0]! }),
+                  ...(tier === state.resolution ? {} : { resolution: tier }),
+                },
               })}
               className={clsx(
                 'flex flex-col items-start rounded-r2 border p-4 text-left transition-colors duration-[120ms]',
@@ -100,7 +124,7 @@ export function StepBackend({ state, dispatch }: { state: WizardState; dispatch:
                   <li key={p} className="text-caption text-ink-secondary">{p}</li>
                 ))}
               </ul>
-              <span className="tnum mt-3 text-caption text-ink-muted">{b.rate}</span>
+              <span className="tnum mt-3 text-caption text-ink-muted">{rateLabel(b.id, tier)}</span>
             </button>
           );
         })}

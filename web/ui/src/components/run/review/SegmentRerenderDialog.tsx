@@ -17,19 +17,14 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { AlertTriangle, ArrowLeft, ArrowRight } from 'lucide-react';
 import type { Aspect, BoundaryMode, ContinuityEntry, JobView, RunDetail } from '../../../../../shared/api-types';
-import { capsFor, castRefCountFor, pinStrengthFor, pinStrengthsFor, type PinStrength } from '../../../../../shared/render-models';
+import { capsFor, castRefCountFor } from '../../../../../shared/render-models';
 import { api, ApiClientError } from '../../../api/client';
 import { Button } from '../../ui/Button';
 import { Dialog } from '../../ui/Dialog';
 import { SegmentedControl } from '../../ui/SegmentedControl';
 import { useToast } from '../../ui/Toast';
-import { boundaryPlanSentence, seamStrengthWords, type BoundaryChoice } from './lib';
+import { boundaryPlanSentence, downstreamSeamSentence, segmentJoins, type BoundaryChoice } from './lib';
 import { PaidButton } from './PaidButton';
-
-/** Both ends pinned but not equally strongly? Say the weaker one — a plan is only as good as its
- *  worst join. */
-const RANK: Record<PinStrength, number> = { none: 0, soft: 1, native: 2 };
-const weaker = (a: PinStrength, b: PinStrength) => (RANK[a] <= RANK[b] ? a : b);
 
 /** The neighbour's still, next to its clip: `…/K1/clip.mp4` → `…/K1/last_frame.png`. */
 const frameUrl = (clipUrl: string | null | undefined, file: string) =>
@@ -107,12 +102,22 @@ export function SegmentRerenderDialog({ run, jobId, open, onClose }: {
   const entryOf = (id: string | null): ContinuityEntry | null =>
     (id ? (run.continuity ?? []).find((e) => e.jobId === id) ?? null : null);
 
-  // What `boundaries:'auto'` will resolve to on the server, mirrored from resolveBoundaries: a
-  // RECORDED verdict decides, and anything reconstructed keeps the historical default (chain the
-  // opening frame, pin no ending) rather than acting on a guess.
-  const recorded = (e: ContinuityEntry | null) => e?.confidence === 'recorded';
-  const autoStart = Boolean(prevId) && (recorded(entryOf(jobId)) ? Boolean(entryOf(jobId)?.continuesFromPrev) : true);
-  const autoEnd = Boolean(nextId) && (recorded(entryOf(nextId)) ? Boolean(entryOf(nextId)?.continuesFromPrev) : false);
+  const backend = run.latestRender?.backend ?? run.backend ?? 'kling';
+  const castRefCount = castRefCountFor(run.spec, jobId);
+  // What `boundaries:'auto'` will resolve to on the server, and what the re-render it starts does to
+  // this segment's two joins. One derivation, shared with the rail's "the plan changed" block
+  // (./lib segmentJoins) — both post to the same endpoint, so both must offer the same things.
+  const joinsFor = (over?: { pinStart: boolean; pinEnd: boolean }) => segmentJoins({
+    backend,
+    castRefCount,
+    otherRefCount: run.voiceRefs?.[jobId] ?? 0,
+    hasPrev: Boolean(prevId),
+    hasNext: Boolean(nextId),
+    entry: entryOf(jobId),
+    nextEntry: entryOf(nextId),
+    ...over,
+  });
+  const { autoStart, autoEnd } = joinsFor();
 
   const [pinStart, setPinStart] = useState(autoStart);
   const [pinEnd, setPinEnd] = useState(autoEnd);
@@ -124,8 +129,11 @@ export function SegmentRerenderDialog({ run, jobId, open, onClose }: {
     [jobId, open], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
-  const wantStart = Boolean(prevId) && (plan === 'auto' ? autoStart : pinStart);
-  const wantEnd = Boolean(nextId) && (plan === 'auto' ? autoEnd : pinEnd);
+  // The Custom plan re-asks the same question with the boxes as they stand; Auto keeps the answer
+  // the cut already gave. Strengths are budget-aware and per end (the budget can preserve one pin
+  // and drop the other), which is what the sentence and the warning below are built from.
+  const { wantStart, wantEnd, startStrength, endStrength, showSeamWarning, offerCascade } =
+    plan === 'custom' ? joinsFor({ pinStart, pinEnd }) : joinsFor();
 
   // What gets POSTed. `auto` is sent as `auto` — the server owns the mirroring, and re-deriving it
   // here into 'both'/'start' would freeze a stale reading of the cut into the request.
@@ -133,34 +141,18 @@ export function SegmentRerenderDialog({ run, jobId, open, onClose }: {
     ? 'auto'
     : wantStart && wantEnd ? 'both' : wantStart ? 'start' : wantEnd ? 'end' : 'none';
 
-  const backend = run.latestRender?.backend ?? run.backend ?? 'kling';
-  const castRefCount = castRefCountFor(run.spec, jobId);
-  // Both ends at once, and through the BUDGET-aware helper: the two pins compete for the same image
-  // slots, and at a full cast SEAM_PRIORITY drops the closing one (then the opening one) before it
-  // drops a paid identity reference. Asking per end, budget-free, is how a dropped pin gets sold as
-  // "near-seamless (reference-guided)" and delivered as a scene cut.
-  const strengths = pinStrengthsFor(backend, { castRefCount, hasSeamIn: wantStart, hasSeamOut: wantEnd });
-  const startStrength: PinStrength = wantStart ? strengths.in : 'none';
-  const endStrength: PinStrength = wantEnd ? strengths.out : 'none';
-  const pinStrength: PinStrength = wantStart && wantEnd
-    ? weaker(startStrength, endStrength)
-    : wantStart ? startStrength : endStrength;
-
   const resolved: BoundaryChoice = wantStart && wantEnd ? 'both' : wantStart ? 'start' : wantEnd ? 'end' : 'none';
   const sentence = boundaryPlanSentence({
     jobId,
     prev: prevId ? { jobId: prevId } : null,
     next: nextId ? { jobId: nextId } : null,
     boundaries: resolved,
-    pinStrength,
+    pinStrength: { in: startStrength, out: endStrength },
   });
 
-  // Can this backend end a segment on a given frame at all? A model with no closing anchor and no
-  // reference slot for one (Kling text-to-video) cannot, and then the downstream join is nobody's
-  // choice — so the warning that offers to fix it stays away (plan P5: supportsEndFrame && feedsNext).
-  const supportsEndFrame = pinStrengthFor(backend, { castRefCount, end: 'out' }) !== 'none';
-  const feedsNext = Boolean(nextId) && recorded(entryOf(nextId)) && Boolean(entryOf(nextId)?.continuesFromPrev);
-  const showSeamWarning = supportsEndFrame && feedsNext;
+  // Derived, never stored: ticking the box and THEN pinning the ending (Custom) must not post a
+  // cascade this screen has stopped offering.
+  const willCascade = cascade && offerCascade;
 
   // Segmind's native frame slots are mutually exclusive with reference_images, so a segment that
   // carries cast references is pinned by reference instead. We do not silently swallow that: the
@@ -175,13 +167,13 @@ export function SegmentRerenderDialog({ run, jobId, open, onClose }: {
   const refsTradeoff = excludesRefs && castRefCount > 0 && (wantStart || wantEnd);
 
   const estimate = useQuery({
-    queryKey: ['estimate', run.id, 'job', jobId, cascade],
-    queryFn: () => api.estimate(run.id, { mode: 'job', jobId, ...(cascade ? { cascade: true } : {}) }),
+    queryKey: ['estimate', run.id, 'job', jobId, willCascade],
+    queryFn: () => api.estimate(run.id, { mode: 'job', jobId, ...(willCascade ? { cascade: true } : {}) }),
     enabled: open,
   });
 
   const rerender = useMutation({
-    mutationFn: () => api.rerenderJob(run.id, { jobId, boundaries, ...(cascade ? { cascade: true } : {}) }),
+    mutationFn: () => api.rerenderJob(run.id, { jobId, boundaries, ...(willCascade ? { cascade: true } : {}) }),
     // No success toast: the strip's tile starts sweeping, and a toast for a change already on
     // screen is noise (spec D17). A failure has nothing on screen to show, so it still toasts.
     onSuccess: () => onClose(),
@@ -303,7 +295,9 @@ export function SegmentRerenderDialog({ run, jobId, open, onClose }: {
           </div>
         )}
 
-        {pinStrength === 'soft' && (
+        {/* Either end being reference-guided earns the caveat: a plan that pins one end softly and
+            leaves the other to the budget is still selling a pin that is not frame-exact. */}
+        {(startStrength === 'soft' || endStrength === 'soft') && (
           <WarnRow testId="soft-pin-warning">
             Frame pinning here is reference-guided — close, but not guaranteed frame-perfect.
           </WarnRow>
@@ -322,21 +316,18 @@ export function SegmentRerenderDialog({ run, jobId, open, onClose }: {
 
         {showSeamWarning && (
           <WarnRow testId="downstream-seam-warning">
-            <p>
-              {nextId} starts on {jobId}&rsquo;s current last frame.{' '}
-              {wantEnd
-                ? `Ending ${jobId} on ${nextId}'s opening frame keeps that join ${seamStrengthWords(endStrength)} — re-rendering ${nextId} too is the exact fix.`
-                : `Re-rendering ${jobId} changes that frame, so ${nextId}'s join will break.`}
-            </p>
-            <label className="mt-2 flex items-center gap-2 text-dense text-ink-secondary">
-              <input
-                type="checkbox"
-                checked={cascade}
-                onChange={(e) => setCascade(e.target.checked)}
-                className="h-4 w-4 accent-[var(--accent)]"
-              />
-              Also re-render {nextId} and everything after it
-            </label>
+            <p>{downstreamSeamSentence({ jobId, nextId: nextId!, endStrength })}</p>
+            {offerCascade && (
+              <label className="mt-2 flex items-center gap-2 text-dense text-ink-secondary">
+                <input
+                  type="checkbox"
+                  checked={cascade}
+                  onChange={(e) => setCascade(e.target.checked)}
+                  className="h-4 w-4 accent-[var(--accent)]"
+                />
+                Also re-render {nextId} and everything after it
+              </label>
+            )}
           </WarnRow>
         )}
 

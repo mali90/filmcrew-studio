@@ -5,12 +5,15 @@
 // A leading glyph column marks the rows that are not routine work (spec D27): a delivery, a reopen,
 // a prompt edit. The ordinary take/cut/revision rows keep the column's width and stay blank — the
 // marked rows are the ones a reader scans for, and giving every row an icon would hide them again.
-import { useMemo, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { BadgeCheck, PenLine } from 'lucide-react';
 import type { RunDetail } from '../../../../../shared/api-types';
 import { AGENTS } from '../../../../../shared/api-types';
-import { usd, timeAgo } from '../../../lib/format';
+import { usd, spendLabel, timeAgo } from '../../../lib/format';
 import { truncate } from './lib';
+
+/** How many rows the rail shows before the list folds behind "Show all" (U13). */
+const VISIBLE_ROWS = 8;
 
 interface HistoryItem { key: string; text: string; at: string; glyph?: ReactNode }
 
@@ -80,23 +83,49 @@ export function TakesHistory({ run }: { run: RunDetail }) {
     return all.sort((a, b) => a.at.localeCompare(b.at));
   }, [run.manifest]);
 
+  // Long runs fold to the newest rows (U13): the rail stays scannable, the lineage stays one
+  // quiet click away. Items are chronological, so the newest live at the tail.
+  const [showAll, setShowAll] = useState(false);
+  const visible = showAll ? items : items.slice(-VISIBLE_ROWS);
+
+  const ledger = run.manifest?.costLedger ?? [];
+
   return (
     <section className="rounded-r3 border border-line bg-surface-1 p-4">
-      <h2 className="text-heading text-ink">History</h2>
+      <div className="flex items-baseline justify-between gap-3">
+        <h2 className="text-heading text-ink">History</h2>
+        {/* the cumulative spend must not vanish at the stage that offers more paid actions (U6) —
+            spendLabel already words an unpriced ledger honestly */}
+        {ledger.length > 0 && (
+          <span className="tnum text-caption text-ink-muted">≈{spendLabel(ledger)} so far</span>
+        )}
+      </div>
       {items.length === 0 ? (
         <p className="mt-2 text-caption text-ink-muted">No takes yet.</p>
       ) : (
-        <ul className="mt-2 flex flex-col gap-1.5">
-          {items.map((item) => (
-            <li key={item.key} className="flex items-baseline justify-between gap-3 text-dense text-ink-secondary">
-              <span className="flex min-w-0 items-baseline gap-1.5">
-                <span className="flex w-[11px] shrink-0 justify-center self-center">{item.glyph}</span>
-                <span className="min-w-0 truncate font-mono">{item.text}</span>
-              </span>
-              <span className="tnum shrink-0 text-caption text-ink-muted">{timeAgo(item.at)}</span>
-            </li>
-          ))}
-        </ul>
+        <>
+          <ul className="mt-2 flex flex-col gap-1.5">
+            {visible.map((item) => (
+              <li key={item.key} className="flex items-baseline justify-between gap-3 text-dense text-ink-secondary">
+                <span className="flex min-w-0 items-baseline gap-1.5">
+                  <span className="flex w-[11px] shrink-0 justify-center self-center">{item.glyph}</span>
+                  <span className="min-w-0 truncate font-mono">{item.text}</span>
+                </span>
+                <span className="tnum shrink-0 text-caption text-ink-muted">{timeAgo(item.at)}</span>
+              </li>
+            ))}
+          </ul>
+          {items.length > VISIBLE_ROWS && (
+            <button
+              type="button"
+              aria-expanded={showAll}
+              onClick={() => setShowAll((v) => !v)}
+              className="mt-1.5 text-caption text-accent hover:text-accent-hover"
+            >
+              {showAll ? `Show newest ${VISIBLE_ROWS}` : `Show all (${items.length})`}
+            </button>
+          )}
+        </>
       )}
     </section>
   );

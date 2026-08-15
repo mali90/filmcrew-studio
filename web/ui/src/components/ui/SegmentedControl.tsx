@@ -3,7 +3,9 @@
 import { useRef } from 'react';
 import clsx from 'clsx';
 
-export interface Segment<T extends string> { value: T; label: string; hint?: string; count?: number }
+/** `disabled` greys ONE option out (a keyless upscale provider) — put the reason in `hint`, and the
+ *  arrow keys skip it so keyboard users can never land on a choice the click could not honor. */
+export interface Segment<T extends string> { value: T; label: string; hint?: string; count?: number; disabled?: boolean }
 
 export function SegmentedControl<T extends string>({
   value, onChange, segments, label, disabled = false, className,
@@ -21,8 +23,11 @@ export function SegmentedControl<T extends string>({
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
     e.preventDefault();
-    const next = segments[(idx + (e.key === 'ArrowRight' ? 1 : segments.length - 1)) % segments.length];
-    onChange(next.value);
+    // walk past disabled segments (at most one full loop) so the arrow never selects one
+    const step = e.key === 'ArrowRight' ? 1 : segments.length - 1;
+    for (let i = (idx + step) % segments.length; i !== idx; i = (i + step) % segments.length) {
+      if (!segments[i].disabled) { onChange(segments[i].value); return; }
+    }
   };
 
   return (
@@ -41,10 +46,12 @@ export function SegmentedControl<T extends string>({
           aria-checked={s.value === value}
           tabIndex={s.value === value ? 0 : -1}
           title={s.hint}
+          disabled={s.disabled}
           onClick={() => onChange(s.value)}
           className={clsx(
             'h-7 rounded-[5px] px-2.5 text-label transition-colors duration-[120ms]',
             s.value === value ? 'bg-surface-1 text-ink border border-line-strong' : 'text-ink-muted hover:text-ink-secondary',
+            s.disabled && 'opacity-45 cursor-not-allowed hover:text-ink-muted',
           )}
         >
           {s.label}

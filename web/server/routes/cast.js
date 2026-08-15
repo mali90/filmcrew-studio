@@ -95,8 +95,24 @@ export async function registerCastRoutes(app) {
     if (!SLUG_FILE.test(slugName)) throw Object.assign(new Error('not a character id'), { statusCode: 400, hint: 'lowercase letters, digits and dashes' });
     return path.join(profilesDir, `${slugName}.md`);
   };
-  /** A reference belongs to a character when its id is the slug or is prefixed "<slug>-". */
-  const refLinked = (refId, cslug) => refId === cslug || refId.startsWith(`${cslug}-`);
+  /**
+   * The engine's OWN ownership rule (src/lib/cast-refs.js), loaded through app.ctx.root like every
+   * other host helper here, so the cast page and a render can never disagree about whose image a
+   * file is. It is asked against the whole roster, never one name at a time: slugs prefix one
+   * another (ann / ann-marie), and the longest match owns the file — otherwise "ann-marie-01" is
+   * Ann's too, on her card here and on the paid render the engine builds from the same filenames.
+   * Read fresh per request: a profile created, renamed or deleted changes the roster.
+   */
+  const ownership = async () => {
+    const [{ slug }, { refBelongsTo, refOwner }] = await Promise.all([host('util.js'), host('cast-refs.js')]);
+    const roster = listProfiles().map((f) => slug(f.replace(/\.md$/, '')));
+    return {
+      slug,
+      roster,
+      linked: (refId, cslug) => refBelongsTo(refId, cslug, roster),
+      owner: (refId) => refOwner(refId, roster),
+    };
+  };
 
   // ——— references ———
 
@@ -105,7 +121,7 @@ export async function registerCastRoutes(app) {
   app.post('/api/cast/references', async (req, reply) => {
     const part = await req.file();
     if (!part) throw Object.assign(new Error('no file uploaded'), { statusCode: 400, hint: 'send multipart form data with an image file' });
-    const { slug } = await host('util.js');
+    const { slug, linked: refLinked } = await ownership();
     let name = path.basename(part.filename ?? 'reference.png');
     if (!IMAGE_EXT.test(name) || !SAFE_NAME.test(name.replace(IMAGE_EXT, ''))) {
       throw Object.assign(new Error('not an acceptable image name'), { statusCode: 400, hint: 'png/jpg/webp with a simple filename' });
@@ -141,13 +157,14 @@ export async function registerCastRoutes(app) {
   // Link/unlink an existing reference by RENAMING it — the engine matches by filename, so the
   // disk artifact stays exactly what a CLI user would have produced.
   app.post('/api/cast/references/:id/assign', async (req) => {
-    const { slug } = await host('util.js');
+    const { slug, linked: refLinked, owner: refOwner } = await ownership();
     const hit = (await scanRefs()).find((e) => e.id === req.params.id);
     if (!hit) throw Object.assign(new Error('no such reference'), { statusCode: 404, hint: 'GET /api/cast/references lists ids' });
     const character = req.body?.character ? slug(String(req.body.character)) : null;
     const ext = path.extname(hit.abs).toLowerCase();
-    const charSlugs = listProfiles().map((f) => slug(f.replace(/\.md$/, '')));
-    const owner = charSlugs.find((c) => refLinked(hit.id, c));
+    // Whose prefix comes OFF: the character the roster actually awards this file to, so re-linking
+    // "ann-marie-01" strips Ann Marie's name and not Ann's (which would leave "marie-01" behind).
+    const owner = refOwner(hit.id);
     let base;
     if (character) {
       if (!fs.existsSync(profilePath(character))) throw Object.assign(new Error('no such character'), { statusCode: 404, hint: 'create the character first' });
@@ -266,7 +283,7 @@ export async function registerCastRoutes(app) {
   // ——— characters: the assembled, character-first view of profiles + refs + voices ———
 
   app.get('/api/cast/characters', async () => {
-    const { slug } = await host('util.js');
+    const { slug, linked: refLinked } = await ownership();
     const refs = await scanRefs();
     const voices = voiceRows(voicesWithClips());
     const claimedRefs = new Set();
@@ -322,6 +339,10 @@ export async function registerCastRoutes(app) {
     // refs/voice are UNLINKED (they fall back to the Unassigned pool), never deleted — unless asked.
     let refsDeleted = 0;
     if (req.query?.deleteRefs === '1') {
+      // Read AFTER the profile is gone, so the roster is the characters that remain — and the one
+      // being deleted still owns its own prefix (refBelongsTo counts the subject as known). Deleting
+      // "ann" therefore takes ann-01 and leaves ann-marie-01 with the character who still exists.
+      const { linked: refLinked } = await ownership();
       for (const e of await scanRefs()) {
         if (refLinked(e.id, req.params.slug)) {
           fs.rmSync(e.abs, { force: true });

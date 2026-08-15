@@ -32,7 +32,7 @@ import config from '../../config.js';
 import log from './logger.js';
 import { fetchRetry, pollUntil, sleep, debugBody } from './util.js';
 import {
-  fileToDataUri, downloadResultFiles,
+  fileToDataUri, downloadResultFiles, paidClipOf,
   isContentPolicyError, contentPolicyError,
 } from './queue-transport.js';
 
@@ -261,8 +261,12 @@ export async function awaitSegmind(job, { timeoutMs, intervalMs } = {}) {
  * owns every retry that could start a job, `awaitSegmind` owns everything after, and nothing in
  * `awaitSegmind` can loop back into a POST.
  */
-export async function runSegmind(slug, args, { timeoutMs, intervalMs } = {}) {
+export async function runSegmind(slug, args, { timeoutMs, intervalMs, onSubmit } = {}) {
   const job = await submitSegmind(slug, args);
+  // ACCEPTED — Segmind owns a request id now, and the poll below can run for twenty minutes. This
+  // is the moment a caller may record as "sent"; the completion receipt (`onMeta`) is a different
+  // fact. Best-effort: a bookkeeping failure must not sink a job the provider is already billing.
+  try { onSubmit?.({ requestId: job.requestId, slug: job.slug }); } catch { /* a record, not a dependency */ }
   return awaitSegmind(job, { timeoutMs, intervalMs });
 }
 
@@ -270,12 +274,14 @@ export async function runSegmind(slug, args, { timeoutMs, intervalMs } = {}) {
  * Run one Segmind generation and download its output(s) to destDir. `args` is the model's own
  * argument object, built by seedance-args.js from the registry caps (Segmind's key names:
  * `reference_images`, integer `duration`, …). `onMeta` receives the receipt — request id, what the
- * job cost, and the credits left — so the caller can record it in the run's sidecar.
+ * job cost, and the credits left — so the caller can record it in the run's sidecar. `onSubmit`
+ * fires much earlier, the instant Segmind ACCEPTS the request: on a job that polls for twenty
+ * minutes those are twenty minutes apart, and "when was this sent" is the first of the two.
  * Segmind's result urls are public CDN links that expire with the record (~1h), so they are fetched
  * immediately and with NO api key (downloadResultFiles sends no headers).
  */
-export async function generateSegmind(args, { slug = SG.seedance25Slug, destDir, timeoutMs, onMeta } = {}) {
-  const { requestId, result, metrics } = await runSegmind(slug, args, { timeoutMs: timeoutMs ?? 1200000 });
+export async function generateSegmind(args, { slug = SG.seedance25Slug, destDir, timeoutMs, onMeta, onSubmit } = {}) {
+  const { requestId, result, metrics } = await runSegmind(slug, args, { timeoutMs: timeoutMs ?? 1200000, onSubmit });
   onMeta?.({ requestId, cost: metrics.cost, remainingCredits: metrics.remainingCredits });
   return downloadResultFiles(result, destDir, `Segmind ${slug}`);
 }
@@ -294,9 +300,10 @@ export async function generateSegmind(args, { slug = SG.seedance25Slug, destDir,
  */
 export async function topazUpscaleSegmind(args, { destDir, slug = SG.topazSlug, timeoutMs, onMeta } = {}) {
   const outs = await generateSegmind(args, { slug, destDir, timeoutMs: timeoutMs ?? 1800000, onMeta });
-  const mp4 = outs.find((p) => /\.mp4$/i.test(p)) ?? outs[0];
-  if (!mp4) throw new Error(`Segmind ${slug}: the upscale produced no output file.`);
-  return mp4;
+  // By ROLE, not by suffix — Segmind serves outputs off a CDN path that need not end in .mp4.
+  const upscaled = paidClipOf(outs);
+  if (!upscaled) throw new Error(`Segmind ${slug}: the upscale produced no output file.`);
+  return upscaled;
 }
 
 /**

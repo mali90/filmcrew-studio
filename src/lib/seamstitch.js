@@ -14,6 +14,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import config from '../../config.js';
 import log from './logger.js';
+import { jointPinned } from './seam-rule.js';
 
 /** Absolute path of the directory that must be on PYTHONPATH for `-m seamstitch` to resolve. */
 export const toolsDir = (root = config.root) => path.join(root, 'tools');
@@ -67,36 +68,18 @@ function pythonPath(root) {
 /** A non-empty string, or null — ids and paths arriving from JSON may be anything. */
 const str = (v) => (typeof v === 'string' && v.length ? v : null);
 
-/** Seam modes that pinned NOTHING: the clip opened fresh, so the joint before it is a real cut.
- *  'unsupported' is the provider having rejected the anchor we sent — no frame was shared. */
-const UNPINNED_SEAM_MODES = new Set(['none', 'unsupported']);
-
-/**
- * Did `next` really open on `prev`'s closing frame? Clip identity is the authoritative test, the same
- * rule as web/server/lib/lineage.js: a seam recorded against a clip that is no longer in this cut is
- * exactly the false continuation claim the check exists to catch (run b1nx — K1 re-rendered into a
- * new take, the cut still using the old take's K2, which opens on a frame nothing here contains).
- */
-function jointChained(prev, next) {
-  const seam = next?.seamIn;
-  if (!seam || typeof seam !== 'object') return false;
-  if (UNPINNED_SEAM_MODES.has(str(seam.mode) ?? 'none')) return false;
-  const source = str(seam.from?.clip);
-  const current = str(prev?.clip);
-  return Boolean(source && current && source === current);
-}
-
 /**
  * Which joints of a finished run are CHAINED, from what the run recorded. Returns one flag per joint,
  * or null when the run cannot say — null is "unknown", and planSeamstitch declines on it rather than
  * guessing (guessing wrong drops a real frame at a scene cut).
  *
  * `render.jobs[]` is the cut in clip order, each entry the renderer's own record (schema:2) of the
- * seam it opened on. When those seams are present they are the answer, PER JOINT: joint j is chained
- * iff clip j+1 was pinned to a boundary frame at all AND the clip that frame came off is the clip
- * sitting at position j right now. That is what lets a mixed timeline — one segment re-rendered,
- * the rest untouched — stitch its intact joints and hard-cut the broken one, where the older
- * all-or-nothing `chained` flag could only claim everything or nothing.
+ * seams it opened and closed on. When those seams are present they are the answer, PER JOINT, by the
+ * shared rule in seam-rule.js (jointPinned): joint j is chained iff either side recorded the join —
+ * clip j+1 opened on a boundary frame off the clip sitting at position j, or clip j was rendered to
+ * arrive on the opening frame of the clip sitting at position j+1. That is what lets a mixed
+ * timeline — one segment re-rendered, the rest untouched — stitch its intact joints and hard-cut the
+ * broken one, where the older all-or-nothing `chained` flag could only claim everything or nothing.
  *
  * Runs made before the sidecar existed carry no per-job seams. For them the run-level `chained` flag
  * is the only record there is, and it still means exactly what it always did: renderSpec seeded every
@@ -118,11 +101,13 @@ export function readContinuity(render, clipCount, cfg = config.stitch) {
   // Only the clip-BEARING jobs, in the order they were handed over: a job that errored contributes
   // no clip and therefore no joint, so including it would shift every verdict by one.
   const jobs = (Array.isArray(render?.jobs) ? render.jobs : []).filter((j) => str(j?.clip));
-  const recorded = jobs.some((j) => j?.seamIn && typeof j.seamIn === 'object');
+  // EITHER sidecar field marks a schema:2 record — a joint can be recorded from either side, so a
+  // run whose only seam note is a predecessor's end pin is still lineage, not a pre-sidecar run.
+  const recorded = jobs.some((j) => (j?.seamIn && typeof j.seamIn === 'object') || (j?.seamOut && typeof j.seamOut === 'object'));
   // The count guard is not paranoia: if the job list and the clip list disagree we cannot say WHICH
   // pair each joint describes, and a misaligned answer is worse than no answer.
   if (recorded && jobs.length === clipCount) {
-    return Array.from({ length: joints }, (_, j) => jointChained(jobs[j], jobs[j + 1]));
+    return Array.from({ length: joints }, (_, j) => jointPinned(jobs[j], jobs[j + 1]));
   }
 
   return render?.chained === true ? Array(joints).fill(true) : null;

@@ -92,7 +92,7 @@ npm run engine -- --brief "your idea here" --render --probe   # long multi-job v
 | `npm run revise -- --from runs/<id> --feedback "..."` | Send director feedback back through the owning agents. |
 | `npm run render-job -- --from runs/<id> --job K2` | Re-render one job as a new take (seam-chained). Pin either end to a neighbour with `--first-frame-from` / `--last-frame-from`, and send edited words with `--prompt-overrides`. |
 | `npm run render -- --spec <spec.json>` | Render an existing plan. |
-| `npm run assemble -- --from runs/<id>/renders/<take>` | Finish or re-stitch a prior render — free, no API calls. |
+| `npm run assemble -- --from runs/<id>/renders/<take>` | Finish or re-stitch a prior render — free, no API calls (unless you pass `--upscale`, or have `UPSCALE_ENABLED=true` in your `.env`: either one adds a paid Topaz pass over every sub-1080p clip in it). |
 | `npm run mint-voice -- <name> <clip.mp3>` | Give a character a persistent voice (once per character). |
 
 Three video models across two providers: **Kling 3.0** (default, fal-only), **Seedance 2.0** and **Seedance 2.5** — the two Seedance models render on **fal.ai or Segmind**, your choice. Pick per run with `--backend`, or set the default in Settings. Backends are named `<model>@<provider>` (`kling-o3@fal`, `seedance-2.0@fal`, `seedance-2.5@fal`, `seedance-2.0@segmind`, `seedance-2.5@segmind`); the old one-word `kling`/`seedance` names still work everywhere, including in specs already on disk. You only need a key for the provider you render on — a **Segmind-only install needs no fal account at all**. How they differ, and what a Segmind-only setup can and can't do: [docs/PROVIDERS.md](docs/PROVIDERS.md). Slow, hand-held setup (including editing `.env` yourself): [docs/SETUP.md](docs/SETUP.md).
@@ -155,7 +155,7 @@ Rendering is **paid, pay-as-you-go** at your render provider — every render sp
 | **Seedance 2.0** · 1080p | 1080p | $0.68/s | ≈ $10.20 |
 | **Seedance 2.5** · 480p | 480p | $0.2205/s | ≈ $3.31 |
 | **Seedance 2.5** · 720p (default) | 720p | $0.473/s | ≈ $7.10 |
-| **Topaz upscale** · `--upscale` | → 1080p | $0.12/s · one job per sub-1080p clip | ≈ $1.80 |
+| **Topaz upscale** · `--upscale` | → 1080p | $0.08/s at 9:16 · tiered by output frame · one job per sub-1080p clip | ≈ $1.20 |
 | **Voice mint** · `mint-voice` | one voice / character | ≈ $0.007 once | — |
 | **Seedance 2.0 on Segmind** · 480p (default) | 480p | $0.0703/s | ≈ $1.05 |
 | **Seedance 2.5 on Segmind** · 720p (default) | 720p | $0.2389/s | ≈ $3.58 |

@@ -18,6 +18,17 @@
 //     silently overridden by the developer's real keys.
 import fs from 'node:fs';
 import path from 'node:path';
+import { isSafeSegment } from './paths.js';
+import { writeFileAtomic } from './atomic-file.js';
+// Config-free siblings (no host import, so the lazy-import idiom above still holds): the voices
+// registry and the two voice knobs are read the same way here and by the seam budget in
+// run-service.js — a second reader is how a preview and a paid render start disagreeing.
+import { voiceClipLookup, voiceKnobs, voicesDirFor } from './voice-refs.js';
+// config.js's own boolean coercion, imported as a PURE RULE (the same standing this file's siblings
+// give prompt-settings.js's audioFlag): rules come from the tree, DATA and paths still come from the
+// run's `root` below. A trimmed copy here is how a preview and a paid render start disagreeing about
+// a flag — the one thing this module exists to prevent.
+import { envBool } from '../../../src/lib/env-file.js';
 
 /**
  * The prompt-relevant knobs, mirrored from config.js (the `kling`, `seedance` and `seedance25`
@@ -27,8 +38,15 @@ import path from 'node:path';
  * in prompt-read.test.js catches.
  */
 function promptDefaults(get) {
+  // Mirrors config.js's numEnv exactly, NaN included: a knob that does not parse must reach the
+  // preview as the same unreadable value it reaches the render as, and be refused by the same rule
+  // (promptCapOf) — a fallback to the default here would preview a cap the render never applies.
   const num = (key, dflt) => { const v = get(key); return v === '' ? dflt : Number(v); };
-  const bool = (key, dflt) => { const v = get(key); return v === '' ? dflt : /^(1|true|yes|on)$/i.test(v); };
+  // Mirrors config.js's boolEnv by CALLING it — the same function, not a second regex. The trim it
+  // applies is load-bearing: dotenv keeps padding inside a quoted value, so `KLING_CHAIN_FRAMES=
+  // " true "` is ON in the render child, and a raw test here would preview an unchained plan for a
+  // render that chains.
+  const bool = (key, dflt) => envBool(get(key), dflt);
   const kling = {
     model: get('KLING_MODEL') || 'kling-v3-omni',
     aspectRatio: get('KLING_ASPECT') || '9:16',
@@ -40,11 +58,19 @@ function promptDefaults(get) {
     defaultShotSeconds: num('KLING_DEFAULT_SHOT_SECONDS', 5),
     chainFrames: bool('KLING_CHAIN_FRAMES', true),
   };
+  // The two knobs that decide whether a voice clip rides come from voice-refs.js: the seam budget
+  // in run-service.js asks the same question of the same .env, and one mirror cannot drift.
+  const voices = voiceKnobs(get);
   const seedance = {
     resolution: get('SEEDANCE_RESOLUTION') || '480p',
-    generateAudio: bool('SEEDANCE_GENERATE_AUDIO', true),
-    voiceMode: get('SEEDANCE_VOICE_MODE') || 'reference',
-    promptMaxBytes: num('SEEDANCE_PROMPT_MAX_BYTES', 5000),
+    generateAudio: voices.audioOn,
+    voiceMode: voices.voiceMode,
+    // 0 = uncapped, mirroring config.js's own default: Segmind's 2.0/2.5 API pages declare no
+    // prompt-length limit and fal's published Seedance schemas declare no maxLength on `prompt`, so
+    // the knob only clamps for a user who sets one (a provider 422 is the reason to). A number here
+    // that config.js does not share would meter an edit — and refuse a save — against a budget the
+    // render never applies.
+    promptMaxBytes: num('SEEDANCE_PROMPT_MAX_BYTES', 0),
     style: get('SEEDANCE_STYLE') || '',
     avoid: get('SEEDANCE_AVOID') || '',
     textRule: get('SEEDANCE_TEXT_RULE') || '',
@@ -68,46 +94,21 @@ function promptDefaults(get) {
  * variable; otherwise the value comes from <envRoot>/.env.
  */
 async function envLookup({ root, envRoot, childEnv }) {
-  const { readEnvFileOrExample, parseEnv, getEnvValue } = await import(path.join(root, 'src/lib/env-file.js'));
+  const { readEnvFileOrExample, dotenvValues } = await import(path.join(root, 'src/lib/env-file.js'));
   const { text, source } = readEnvFileOrExample(envRoot);
   // ONLY a real .env counts. dotenv loads <envRoot>/.env and nothing else, so quoting
   // .env.example's placeholder values here would preview a prompt no child would ever send.
-  const entries = source === '.env' ? parseEnv(text) : [];
+  //
+  // Read with DOTENV's grammar, not the wizard's line editor (parseEnv/getEnvValue): the editor
+  // keeps a trailing `# comment` inside the value, ignores an `export ` prefix and reports the
+  // FIRST assignment, while the child's dotenv strips the comment, accepts the prefix and keeps the
+  // LAST — three ways for an ordinary .env to preview one prompt and pay for another.
+  const values = source === '.env' ? dotenvValues(text) : Object.create(null);
   return (key) => {
     if (childEnv && Object.hasOwn(childEnv, key)) return String(childEnv[key] ?? '').trim();
-    const raw = getEnvValue(entries, key);
-    if (raw === undefined) return '';
-    // parseEnv keeps a value verbatim (quotes included); dotenv strips a matching pair.
-    return String(raw).trim().replace(/^(['"])([\s\S]*)\1$/, '$2');
-  };
-}
-
-const CLIP_EXT = /\.(mp3|wav|mp4|mov)$/i;
-
-/**
- * `(speaker) => clipPath|null`, mirroring src/lib/voices.js `getVoiceRefClip` (bundled clips on
- * disk, overridden by voices.json entries) without importing it — that module reads config.js.
- * Seedance cites a voiced character as `@AudioN` IN THE PROMPT, so whether a clip exists changes
- * the bytes; a preview that guessed would be wrong exactly for the cast that has voices.
- */
-function voiceClipLookup(voicesDir, root, slug) {
-  const dir = path.isAbsolute(voicesDir) ? voicesDir : path.resolve(root, voicesDir);
-  const map = new Map();
-  try {
-    for (const f of fs.readdirSync(dir)) if (CLIP_EXT.test(f)) map.set(slug(f.replace(CLIP_EXT, '')), path.join(dir, f));
-  } catch { /* no voices dir — nothing is voiced */ }
-  try {
-    const reg = JSON.parse(fs.readFileSync(path.join(dir, 'voices.json'), 'utf8'));
-    // A real registry entry always wins over the shipped-clip fallback — including one with no
-    // ref_clip at all, which is how a minted-but-clipless voice falls back to native audio.
-    for (const [key, v] of Object.entries(reg ?? {})) {
-      const clip = v?.ref_clip;
-      map.set(slug(key), clip ? (path.isAbsolute(clip) ? clip : path.resolve(root, clip)) : null);
-    }
-  } catch { /* no registry */ }
-  return (name) => {
-    const clip = map.get(slug(name ?? '')) ?? null;
-    return clip && fs.existsSync(clip) ? clip : null;
+    // No trim, no unquoting here: dotenv already did both, and its rule is the one the child got —
+    // a QUOTED value keeps the padding inside its quotes, and trimming it away is a second reading.
+    return values[key] ?? '';
   };
 }
 
@@ -121,29 +122,47 @@ const utf8 = (s) => Buffer.byteLength(String(s ?? ''), 'utf8');
 const OVERRIDES_FILE = 'prompt-overrides.json';
 const OVERRIDES_SCHEMA = 1;
 
+/**
+ * A map keyed by JOB ID — with no prototype, because a job id is arbitrary validated text and
+ * `{}` inherits members that behave like keys. `jobs['__proto__'] = edit` on a plain object hits
+ * Object.prototype's SETTER: no own key appears, `Object.keys` stays empty, writeOverrides then
+ * deletes the sidecar as "no edits left" and the user's words are gone. The reads are just as
+ * wrong the other way — `jobs['toString']` on a plain object answers with an inherited function,
+ * i.e. "yes, this job has an edit". Object spread would put the prototype back, so every copy goes
+ * through here too.
+ */
+const jobMap = (from) => Object.assign(Object.create(null), from);
+
 /** The run's saved edits, or an empty set. A corrupt sidecar reads as empty HERE (the preview must
  *  still render) — the renderers throw on it instead, before anything is submitted. */
 function readOverrides(runDir) {
   try {
     const raw = JSON.parse(fs.readFileSync(path.join(runDir, OVERRIDES_FILE), 'utf8'));
     const jobs = raw?.jobs;
-    return { schema: OVERRIDES_SCHEMA, jobs: jobs && typeof jobs === 'object' && !Array.isArray(jobs) ? jobs : {} };
+    // JSON.parse defines `__proto__` as an ORDINARY own key, so a hand-written sidecar naming one
+    // survives this copy intact — it is only assignment onto a plain object that loses it.
+    return { schema: OVERRIDES_SCHEMA, jobs: jobMap(jobs && typeof jobs === 'object' && !Array.isArray(jobs) ? jobs : null) };
   } catch {
-    return { schema: OVERRIDES_SCHEMA, jobs: {} };
+    return { schema: OVERRIDES_SCHEMA, jobs: jobMap(null) };
   }
 }
 
 /** Read-modify-write the sidecar. An empty result removes the file, so nothing downstream ever has
- *  to distinguish "no edits" from "a file full of nothing". */
+ *  to distinguish "no edits" from "a file full of nothing".
+ *
+ *  Written atomically (tmp + rename, the same helper web.json uses): truncating this file in place
+ *  means a save killed halfway leaves bytes that do not parse, `readOverrides` above reads that as
+ *  NO edits, and the next save writes a sidecar with every earlier edit missing — the user's words
+ *  lost by a crash they never saw. */
 function writeOverrides(runDir, mutate) {
   const file = path.join(runDir, OVERRIDES_FILE);
   const current = readOverrides(runDir);
-  const next = mutate({ schema: OVERRIDES_SCHEMA, jobs: { ...current.jobs } });
+  const next = mutate({ schema: OVERRIDES_SCHEMA, jobs: jobMap(current.jobs) });
   if (!Object.keys(next.jobs).length) {
     try { fs.rmSync(file, { force: true }); } catch { /* already gone */ }
     return next;
   }
-  fs.writeFileSync(file, JSON.stringify(next, null, 2) + '\n');
+  writeFileAtomic(file, JSON.stringify(next, null, 2) + '\n');
   return next;
 }
 
@@ -152,15 +171,17 @@ function writeOverrides(runDir, mutate) {
  * @returns {Promise<{caps:object, jobs:object[], viewFor:(jobId:string)=>object}>}
  */
 async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, voicesDir }) {
-  const [models, compose, promptSettings, castGroups, text] = await Promise.all([
+  const [models, compose, promptSettings, castGroups, text, seedanceArgs] = await Promise.all([
     import(path.join(root, 'src/lib/render-models.js')),
     import(path.join(root, 'src/lib/prompt-compose.js')),
     import(path.join(root, 'src/lib/prompt-settings.js')),
     import(path.join(root, 'src/lib/cast-groups.js')),
     import(path.join(root, 'src/lib/text.js')),
+    import(path.join(root, 'src/lib/seedance-args.js')),
   ]);
   const { capsFor, normalizeBackend, refLabel } = models;
-  const { composeKlingStoryboard, composeSeedanceJobPrompt, applyOverride, pinBytesOf, promptFingerprint, chooseSeamMode, planSeamRefs, appliedSeamModes } = compose;
+  const { cappedAudioRefs, cappedCombinedRefs, fitAudioRef, voiceRefSpeakers } = seedanceArgs;
+  const { composeKlingStoryboard, composeSeedanceJobPrompt, applyOverride, pinBytesOf, promptCapOf, promptFingerprint, chooseSeamMode, planSeamRefs, appliedSeamModes } = compose;
   const { klingPromptSettings, seedancePromptSettings } = promptSettings;
   const { characterGroups, jobSpeakers } = castGroups;
   const { slug } = text;
@@ -173,9 +194,28 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
   }
   const get = await envLookup({ root, envRoot, childEnv });
   const defaults = promptDefaults(get);
-  // Wherever the render CHILD will look for voices: its own VOICES_DIR (childEnv when the caller
-  // isolated the cast roots, else the .env), falling back to the dir this server serves.
-  const voiceClipFor = voiceClipLookup(get('VOICES_DIR') || voicesDir || path.join(root, 'voices'), root, slug);
+  // Wherever the render CHILD will look for voices — through the one resolution the seam budget
+  // uses too, so a preview and the money question it feeds can never name different dirs.
+  const voiceClipFor = voiceClipLookup(voicesDirFor({ get, root, voicesDir }), root, slug);
+  // Renderer parity needs each clip's DURATION: fitAudioRef drops a clip under the model's
+  // per-clip minimum before the paid submit, and a preview counting a doomed @AudioN would differ
+  // from the wire prompt (the exactness this whole module exists for). Probed once here — the view
+  // functions stay sync — and an unprobeable clip stays IN, exactly as the renderer sends it as-is.
+  //
+  // The BINARY comes from the run's environment, not from assemble.js: that module's probe is bound
+  // to config.video.ffprobe, i.e. to whatever FFPROBE_BIN this SERVER process started with, and
+  // importing it would drag `import 'dotenv/config'` in here besides (the rule at the top of this
+  // file). Where only the configured binary can read a clip, that server-side probe fails, the
+  // preview keeps a clip the child successfully probes and DROPS, and the labels, the prompt bytes
+  // and the reference budget all differ from the render that gets paid for.
+  const { ffprobeBinFor, probeClipWith } = await import(path.join(root, 'src/lib/ffprobe.js'));
+  const ffprobeBin = ffprobeBinFor(get('FFPROBE_BIN'), root);
+  const voiceDurS = new Map();
+  for (const sp of new Set((spec?.audio?.voice?.lines ?? []).map((l) => l?.speaker).filter(Boolean))) {
+    const clip = voiceClipFor(sp);
+    if (!clip) continue;
+    try { voiceDurS.set(slug(sp), (await probeClipWith(ffprobeBin, clip)).duration); } catch { /* unprobeable — kept */ }
+  }
   const jobs = spec?.kling?.jobs ?? [];
   const overrides = readOverrides(runDir);
   // A Kling render with no elements at all is text-to-video: no reference to seed a frame from, so
@@ -192,6 +232,20 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
   function boundariesFor(job, index) {
     const chain = defaults.kling.chainFrames && jobs.length > 1 && !textToVideoKling;
     return { hasSeamIn: Boolean(job.first_frame || (chain && index > 0)), hasSeamOut: Boolean(job.last_frame) };
+  }
+
+  /**
+   * Every boundary pairing a render of this job could REALLY apply — what the meter has to survive.
+   * The full render's own (above) is one of them; `rerender-job` resolves the rest over the cut
+   * (web/server/lib/lineage.js resolveBoundaries), and it may pin either end wherever a neighbour
+   * exists: `boundaries:'auto'` ends a nonterminal segment on its successor's opening frame the
+   * moment that join is on record, and `'both'`/`'start'`/`'end'` force one outright.
+   */
+  function boundaryCandidates(job, index) {
+    const plan = boundariesFor(job, index);
+    const ends = (planned, hasNeighbour) => [...new Set([planned, hasNeighbour])];
+    return ends(plan.hasSeamIn, index > 0).flatMap((hasSeamIn) =>
+      ends(plan.hasSeamOut, index < jobs.length - 1).map((hasSeamOut) => ({ hasSeamIn, hasSeamOut })));
   }
 
   /** The Kling storyboard: one ≤500-byte segment per shot, `@Element1` leading each. */
@@ -281,33 +335,76 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
       }
       refGroups.push({ name: g.name, refs });
     }
-    const { hasSeamIn, hasSeamOut } = boundariesFor(job, index);
     const audioOn = !!settings.audioOn;
-    // Voice references (@AudioN) ride the same gate as the renderer's: something to attach them to,
-    // audio on, and a voiceMode that keeps the clip.
-    const voiced = (castCount > 0 || hasSeamIn) && audioOn && defaults.seedance.voiceMode !== 'native'
-      ? jobSpeakers(job, spec).filter((sp) => voiceClipFor(sp)).slice(0, caps.maxAudioRefs)
-      : [];
-    const audioLabels = new Map(voiced.map((sp, i) => [slug(sp), refLabel(caps, 'Audio', i + 1)]));
-    const audioRefFor = (sp) => audioLabels.get(slug(sp ?? '')) ?? null;
 
-    const seam = chooseSeamMode({ caps, castRefCount: castCount, hasSeamIn, hasSeamOut });
-    const plan = planSeamRefs({
-      caps,
-      castRefs: Array.from({ length: castCount }, (_, i) => `cast:${i}`), // only ORDER and COUNT reach the prompt
-      seamIn: seam.in.mode === 'soft' ? 'seam:in' : null,
-      seamOut: seam.out.mode === 'soft' ? 'seam:out' : null,
-      otherRefCount: caps.maxCombinedRefs != null ? voiced.length : 0,
-    });
-    const startFrameRef = plan.imageRefs.find((r) => r.kind === 'seamIn')?.label ?? null;
-    const endFrameRef = plan.imageRefs.find((r) => r.kind === 'seamOut')?.label ?? null;
+    /**
+     * Everything about this job that MOVES when the boundary frames move: which voice clips ride,
+     * how the reference budget lays the images out, and therefore which pin sentences the front
+     * matter carries. One function, called once for the render this view describes and again for
+     * every render its byte meter has to survive — two copies of this layout is how a preview and a
+     * paid render start disagreeing.
+     */
+    function layoutFor(hasSeamIn, hasSeamOut) {
+      // Voice references (@AudioN) ride the renderer's gate itself, not a copy of it: something for
+      // the clips to ride on (cast refs or a boundary frame at EITHER end), audio on, and a voiceMode
+      // that keeps the clip.
+      const candidates = voiceRefSpeakers({
+        speakers: jobSpeakers(job, spec), hasClip: voiceClipFor,
+        castRefCount: castCount, hasSeamIn, hasSeamOut, audioOn, voiceMode: defaults.seedance.voiceMode,
+      });
+      // …and the same REFUSAL. More voiced speakers than the model has @Audio slots is a hard error in
+      // the renderer (before it fits a single clip), so slicing the list to fit here would present a
+      // ready-looking preview for a job that can never be sent. viewFor turns the throw into the job's
+      // `error` — the same shape an unbuildable prompt already reports, and the sheet already words it
+      // as "the render would fail on the same message".
+      cappedAudioRefs(caps, job.job_id, candidates.length);
+      // The renderer's own drop rule, same inputs: window sized by the PRE-drop candidate count, a
+      // clip under the per-clip minimum never reaches the wire — so it never reaches the preview.
+      const fitCaps = { ...caps, audioBudgetS: caps.audioBudgetS ?? 15 };
+      const voiced = candidates.filter((sp) => {
+        const dur = voiceDurS.get(slug(sp));
+        return dur == null || fitAudioRef(dur, fitCaps, { refCount: candidates.length || 1 }) !== 'drop';
+      });
+      const audioLabels = new Map(voiced.map((sp, i) => [slug(sp), refLabel(caps, 'Audio', i + 1)]));
+      const audioRefFor = (sp) => audioLabels.get(slug(sp ?? '')) ?? null;
 
-    // `feedback`/`nonce` are the RE-RENDER knobs (a director note, "Alternate take N"); a full
-    // render from the plan sends neither, so a plan preview must not add them.
-    const opts = { refGroups, audioRefFor, startFrameRef, endFrameRef, feedback: '', nonce: 0, shotSyntax: caps.shotSyntax };
+      // The combined budget (fal 2.5 counts images + audio + video against one cap), checked BEFORE
+      // the seam layout for the same reason the renderer checks it before uploading anything: only the
+      // CAST and the surviving voice clips count, because planSeamRefs drops a soft-pinned boundary
+      // frame rather than overrun. Without this the preview happily drops cast refs the renderer would
+      // never get to drop — it throws first — and `refs` below would cite labels no render can send.
+      cappedCombinedRefs(caps, { images: castCount, audio: voiced.length });
+
+      const seam = chooseSeamMode({ caps, castRefCount: castCount, hasSeamIn, hasSeamOut });
+      const plan = planSeamRefs({
+        caps,
+        castRefs: Array.from({ length: castCount }, (_, i) => `cast:${i}`), // only ORDER and COUNT reach the prompt
+        seamIn: seam.in.mode === 'soft' ? 'seam:in' : null,
+        seamOut: seam.out.mode === 'soft' ? 'seam:out' : null,
+        otherRefCount: caps.maxCombinedRefs != null ? voiced.length : 0,
+      });
+      const startFrameRef = plan.imageRefs.find((r) => r.kind === 'seamIn')?.label ?? null;
+      const endFrameRef = plan.imageRefs.find((r) => r.kind === 'seamOut')?.label ?? null;
+
+      // `feedback`/`nonce` are the RE-RENDER knobs (a director note, "Alternate take N"); a full
+      // render from the plan sends neither, so a plan preview must not add them.
+      return {
+        voiced,
+        audioRefFor,
+        seam,
+        plan,
+        opts: { refGroups, audioRefFor, startFrameRef, endFrameRef, feedback: '', nonce: 0, shotSyntax: caps.shotSyntax },
+      };
+    }
+
+    // The FULL render from the plan: the prompt, the references and the seam verdicts this view
+    // reports are that render's, byte for byte (a refusal here is still the job's `error`).
+    const { hasSeamIn, hasSeamOut } = boundariesFor(job, index);
+    const { voiced, audioRefFor, seam, plan, opts } = layoutFor(hasSeamIn, hasSeamOut);
     const planned = composeSeedanceJobPrompt(job, spec, settings, opts);
     // The renderer's own call (seedance.js → applyOverride): the user's words with THIS render's
-    // front matter and seam pins re-composed over them, then clamped. Preview === wire, still.
+    // front matter and seam pins re-composed over them, and clamped only where a cap is set —
+    // Seedance ships uncapped, and a user's words are never clamped either way. Preview === wire, still.
     const { prompt, shotPrompts } = override ? applyOverride(planned, override, settings) : planned;
     // The editable body: the composed prompt with the SYSTEM front matter taken back off, which is
     // precisely what `applyOverride` re-composes over. Saving it untouched yields the same bytes.
@@ -329,15 +426,31 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
     ));
     for (const sp of voiced) refs.push({ ref: audioRefFor(sp), character: sp, role: 'voice' });
 
+    // The meter's denominator is not THIS render's pins but the widest pin set any render of this
+    // segment can apply (boundaryCandidates): the saved words are re-composed under whichever
+    // boundaries the re-render resolves, and `applyOverride` MEASURES the result against the cap —
+    // `assertOverrideFits` then refuses the render rather than trimming words somebody is paying to
+    // send. Metering the plan's pins alone accepted an edit a `boundaries:'auto'` re-render could
+    // not fit — once by truncating it from the end mid-paid-render, now by refusing to send at all —
+    // with nothing on screen having said so. A pairing the renderer would REFUSE (more
+    // voiced speakers than @Audio slots once a frame makes the job reference-to-video) reserves
+    // nothing: that render throws before it spends, so it can never cut anybody's words.
+    const pinBytes = Math.max(...boundaryCandidates(job, index).map((b) => {
+      try { return pinBytesOf('seedance', job, spec, settings, layoutFor(b.hasSeamIn, b.hasSeamOut).opts); } catch { return 0; }
+    }));
+
     return {
       prompt,
       segments: null,
       shotPrompts,
       refs,
       bytes: utf8(prompt),
-      maxBytes: Number(settings.promptMaxBytes),
+      // "No cap" travels as null, never 0: the editor's denominator is `maxBytes − pinBytes`, and a
+      // 0 there goes negative and meters every draft as instantly over — refusing saves the renderer
+      // would happily accept. The wire shape already carries null for a past take's unrecorded budget.
+      maxBytes: promptCapOf(settings) || null,
       segmentMaxBytes: null,
-      pinBytes: pinBytesOf('seedance', job, spec, settings, opts),
+      pinBytes,
       // What the render will really APPLY, not what it wished for: a soft pin whose reference lost
       // its slot to the image budget (a full cast at maxImages) pins nothing, and the sheet must say
       // so — this is the pre-flight signal that a joint is going to be a scene cut.
@@ -383,7 +496,9 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
     } catch (e) {
       // One unbuildable job (a shot id the plan lost, a missing content_prompt) must not take the
       // whole prompt sheet down — the render would fail on exactly this message, so show it.
-      return { ...head, prompt: '', segments: null, shotPrompts: null, refs: [], bytes: 0, maxBytes: 0, segmentMaxBytes: null, pinBytes: 0, error: e.message };
+      // No budget is on RECORD for a job that cannot be composed, and null is how every other
+      // absence travels — a 0 would read as "your words have no room", which is a different claim.
+      return { ...head, prompt: '', segments: null, shotPrompts: null, refs: [], bytes: 0, maxBytes: null, segmentMaxBytes: null, pinBytes: 0, error: e.message };
     }
   }
 
@@ -405,7 +520,13 @@ async function createComposer({ root, envRoot, childEnv, runDir, spec, backend, 
 }
 
 const TAKE_DIR_RE = /^(t\d+|render)$/;
-const JOB_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+// A job id is whatever the PLAN called it, and a take's sidecar sits in a directory of that name, so
+// the only question worth asking here is whether it is safe to join onto a path (isSafeSegment). It
+// used to be asked as a charset whitelist, which quietly answered a different one: `__proto__` is a
+// job id this build supports end to end — the spec accepts it, the override maps are null-prototype
+// so an edit for it saves, the renderers write its prompts.json — yet a leading underscore made its
+// version picker permanently empty and its as-sent prompt unreachable.
+const isJobId = (jobId) => isSafeSegment(String(jobId));
 
 /** Newest take first: t12 before t3, and the legacy unnumbered `render` dir last. */
 function byTakeNewestFirst(a, b) {
@@ -413,12 +534,35 @@ function byTakeNewestFirst(a, b) {
   return n(b) - n(a);
 }
 
+// The sidecar schema that first recorded `submitted_at`. Older sidecars could not say whether their
+// job ever left the machine, so they are read exactly as they always were — a run's history is not
+// something to erase because a later build learned to ask a better question.
+const SUBMITTED_AT_SCHEMA = 3;
+
 /**
- * The takes that really kept a `prompts.json` for this job, newest first — the version picker's
- * options, and the only take ids `?take=` will answer for. Ids only: no path leaves this function.
+ * Did a provider ever ACCEPT this take's job? The renderers write the sidecar BEFORE they submit —
+ * that is deliberate, so a render that dies still leaves the prompt behind — which makes the file's
+ * existence proof only that we composed something. A take that never reached a provider (no
+ * SEGMIND_API_KEY, no FAL_KEY, a payload the endpoint rejected) must not be offered as a version and
+ * labelled "sent": that is the sheet claiming to show what was sent when nothing was.
+ */
+const wasSubmitted = (sidecar) =>
+  Boolean(sidecar) && (Boolean(sidecar.submitted_at) || Boolean(sidecar.request_id)
+    || Number(sidecar.schema ?? 0) < SUBMITTED_AT_SCHEMA);
+
+/** One take's sidecar for this job, parsed, or null (absent, unreadable, or never submitted). */
+function submittedSidecarAt(file) {
+  let sidecar;
+  try { sidecar = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
+  return wasSubmitted(sidecar) ? sidecar : null;
+}
+
+/**
+ * The takes that really SENT a prompt for this job, newest first — the version picker's options,
+ * and the only take ids `?take=` will answer for. Ids only: no path leaves this function.
  */
 function takesWithPrompts(runDir, jobId) {
-  if (!runDir || !JOB_ID_RE.test(String(jobId))) return [];
+  if (!runDir || !isJobId(jobId)) return [];
   const found = new Set();
   // Web runs keep takes under renders/; a CLI run keeps them beside the spec (takeView reads both).
   for (const base of [path.join(runDir, 'renders'), runDir]) {
@@ -426,9 +570,15 @@ function takesWithPrompts(runDir, jobId) {
     try { names = fs.readdirSync(base); } catch { continue; } // no renders/ yet — nothing was sent
     for (const name of names) {
       if (!TAKE_DIR_RE.test(name)) continue;
-      if (fs.existsSync(path.join(base, name, String(jobId), 'prompts.json'))) found.add(name);
+      if (submittedSidecarAt(path.join(base, name, String(jobId), 'prompts.json'))) found.add(name);
     }
   }
+  // …and a CLI render given the run dir itself (`render.js --out <runDir>`) has no take dir at all:
+  // renderSpec writes <runDir>/<jobId>/prompts.json beside the run's own render.json, the layout
+  // run-scan reads that run's status from. It is the unnumbered take under a third spelling, so it
+  // answers to the same id — and a nested `render/` take, being the more specific one, wins the id
+  // in takeView below.
+  if (submittedSidecarAt(path.join(runDir, String(jobId), 'prompts.json'))) found.add('render');
   return [...found].sort(byTakeNewestFirst);
 }
 
@@ -447,25 +597,35 @@ async function labelForRecordedBackend(root, backend, endpoint) {
 /**
  * A past take's prompt, verbatim from its `prompts.json` — immutable, and the only honest answer to
  * "what was actually sent for this clip". Never recomposed: the settings may have moved since.
- * Returns null when that take never wrote a sidecar for this job.
+ * Returns null when that take never wrote a sidecar for this job — or wrote one it never sent.
  */
 async function takeView({ root, runDir, take, jobId }) {
-  if (!TAKE_DIR_RE.test(String(take)) || !JOB_ID_RE.test(String(jobId))) return null;
+  if (!TAKE_DIR_RE.test(String(take)) || !isJobId(jobId)) return null;
   const candidates = [
     path.join(runDir, 'renders', String(take), String(jobId), 'prompts.json'),
     path.join(runDir, String(take), String(jobId), 'prompts.json'), // CLI runs keep their take beside the spec
+    // …and a CLI render pointed at the run dir has no take dir: <runDir>/<jobId>/prompts.json. Only
+    // the unnumbered id can mean it (takesWithPrompts offers it under that name), and it is read
+    // LAST so a run that also has a real `render/` take keeps answering with the take dir.
+    ...(String(take) === 'render' ? [path.join(runDir, String(jobId), 'prompts.json')] : []),
   ];
   const file = candidates.find((p) => fs.existsSync(p));
   if (!file) return null;
-  let sidecar;
-  try { sidecar = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
+  // Same gate as the version picker, so a take id that is not offered cannot be reached by hand
+  // either: this view labels its text "sent", and a take that never left must not wear that.
+  const sidecar = submittedSidecarAt(file);
+  if (!sidecar) return null;
 
   const segments = Array.isArray(sidecar.segments) ? sidecar.segments : null;
   const prompt = typeof sidecar.prompt === 'string'
     ? sidecar.prompt
     : (segments ?? []).map((s) => String(s?.prompt ?? '')).join('\n\n');
-  let sentAt = null;
-  try { sentAt = fs.statSync(file).mtime.toISOString(); } catch { /* raced */ }
+  // The recorded SUBMISSION time, which is the answer to "when was this sent". The file's mtime is
+  // only a fallback for sidecars written before that was recorded, and it is a poor one: the
+  // renderer rewrites the sidecar when the receipt lands, so on Segmind it dates a long job to the
+  // moment it FINISHED.
+  let sentAt = sidecar.submitted_at ?? null;
+  if (!sentAt) { try { sentAt = fs.statSync(file).mtime.toISOString(); } catch { /* raced */ } }
   // Ids and labels only — `audio_refs[].clip` and `seam_*.frame` are absolute host paths and must
   // never leave the server (the same contract serializeRun/serializeContinuity keep).
   const refs = [
@@ -530,14 +690,17 @@ const badRequest = (message, hint) => Object.assign(new Error(message), { status
 /**
  * How many bytes of a job's budget the user's own words may spend: the model's cap minus what the
  * SYSTEM already owns. Measured from the same composer the render uses, so the meter in the editor
- * and the check here can never disagree.
- * @returns {{perSegment:number[]}|{whole:number}}
+ * and the check here can never disagree — which is why BOTH branches read a missing cap the way
+ * PromptEditor's `roomFor` reads it (no limit), not as a limit of zero that refuses every save.
+ * @returns {{perSegment:(number|null)[]}|{whole:number|null}} `null` where the model has no cap
+ *   (Seedance ships uncapped) — there is nothing to be over, so nothing to refuse.
  */
 function budgetOf(view) {
   if (Array.isArray(view.segments)) {
-    return { perSegment: view.segments.map((s) => Math.max(0, Number(s.maxBytes ?? 0) - Number(s.pinBytes ?? 0))) };
+    return { perSegment: view.segments.map((s) => (s.maxBytes == null ? null : Math.max(0, Number(s.maxBytes) - Number(s.pinBytes ?? 0)))) };
   }
-  return { whole: Math.max(0, Number(view.maxBytes ?? 0) - Number(view.pinBytes ?? 0)) };
+  if (view.maxBytes == null) return { whole: null };
+  return { whole: Math.max(0, Number(view.maxBytes) - Number(view.pinBytes ?? 0)) };
 }
 
 /**
@@ -574,14 +737,17 @@ export async function savePromptOverride({ root, envRoot, childEnv, runDir, spec
       throw badRequest(`expected ${view.segments.length} segment(s), got ${segments.length}`, 'one entry per shot, in shot order');
     }
     bodies.forEach((s, i) => {
+      const cap = budget.perSegment[i];
+      if (cap == null) return; // no cap on this segment ⇒ nothing to be over (the meter says the same)
       const bytes = utf8(s);
-      const cap = budget.perSegment[i] ?? 0;
       if (bytes > cap) throw badRequest(`shot ${i + 1} is ${bytes} bytes; the room left for your words is ${cap} bytes (over by ${bytes - cap})`, 'trim it — nothing is truncated for you, because you would not see what went');
     });
   } else {
     if (hasSegments) throw badRequest(`job ${jobId} renders as ONE prompt on this model`, 'send "prompt" — the whole job in one document');
     const bytes = utf8(prompt);
-    if (bytes > budget.whole) throw badRequest(`the edit is ${bytes} bytes; the room left for your words is ${budget.whole} bytes (over by ${bytes - budget.whole})`, 'trim it — nothing is truncated for you, because you would not see what went');
+    // A save may only be refused where a limit EXISTS. With none (`whole: null`) the words go
+    // through untouched — refusing here would block an edit the renderer accepts word for word.
+    if (budget.whole != null && bytes > budget.whole) throw badRequest(`the edit is ${bytes} bytes; the room left for your words is ${budget.whole} bytes (over by ${bytes - budget.whole})`, 'trim it — nothing is truncated for you, because you would not see what went');
   }
 
   writeOverrides(runDir, (next) => {
@@ -604,9 +770,9 @@ export async function savePromptOverride({ root, envRoot, childEnv, runDir, spec
  */
 export async function discardPromptOverride({ root, envRoot, childEnv, runDir, spec, backend, voicesDir, jobId }) {
   const planned = (spec?.kling?.jobs ?? []).some((j) => j?.job_id === jobId);
-  // `Object.hasOwn`, never a bracket read: `jobs` is a plain object literal, so `jobs['__proto__']`
-  // and `jobs['toString']` resolve to INHERITED members and would answer "yes, there was an edit" —
-  // a bogus 200, an SSE broadcast to every tab and a junk History row for a job that never existed.
+  // `Object.hasOwn`, never a bracket read — belt and braces over `jobMap`'s null prototype: on a
+  // plain object `jobs['toString']` resolves to an INHERITED member and would answer "yes, there
+  // was an edit" — a bogus 200, an SSE broadcast to every tab and a junk History row.
   const had = Object.hasOwn(readOverrides(runDir).jobs, jobId);
   // An orphaned override (its job is gone from the plan) is still discardable — that is the only way
   // the "1 edited prompt has no segment any more" row can be cleared.

@@ -4,16 +4,21 @@
 // lineage, cost ledger, approval, the last persisted error, and the active child process.
 import fs from 'node:fs';
 import path from 'node:path';
+import { writeFileAtomic } from './atomic-file.js';
 
 export const MANIFEST_V = 1;
 export const MANIFEST_FILE = 'web.json';
 
 /** A fresh manifest for a just-created run. */
-export function newManifest({ idea, backend, aspect, durationS = null, cast = [], environment = null }, createdAt = new Date().toISOString()) {
+export function newManifest({ idea, backend, aspect, resolution = null, durationS = null, cast = [], environment = null }, createdAt = new Date().toISOString()) {
   return {
     v: MANIFEST_V,
     idea: String(idea ?? ''),
     backend, aspect,
+    // per-run render resolution pick, or null = the model's configured default. Reapplied on EVERY
+    // child spawn as the model's own env knob (run-service resolutionOverride), so it survives
+    // revise and re-renders; the estimator prices it over the .env value for the same reason.
+    resolution,
     durationS, // number of seconds, or null = "auto" (the engine decides)
     cast,     // starred character slugs (their profiles/refs/voices steer the plan)
     environment, // selected world/mood/style bible slug, or null — the engine injects it, revisions re-inject it
@@ -51,12 +56,11 @@ export function readManifest(dir) {
   }
 }
 
-/** Atomic write (tmp + rename) so a crash can never leave a half-written manifest. */
+/** Atomic write (tmp + rename) so a crash can never leave a half-written manifest — the shared
+ *  primitive, because the prompt-overrides sidecar needs exactly the same guarantee. */
 export function writeManifest(dir, manifest) {
   fs.mkdirSync(dir, { recursive: true });
-  const tmp = path.join(dir, `.${MANIFEST_FILE}.${process.pid}.tmp`);
-  fs.writeFileSync(tmp, JSON.stringify(manifest, null, 2) + '\n');
-  fs.renameSync(tmp, path.join(dir, MANIFEST_FILE));
+  writeFileAtomic(path.join(dir, MANIFEST_FILE), JSON.stringify(manifest, null, 2) + '\n');
   return manifest;
 }
 

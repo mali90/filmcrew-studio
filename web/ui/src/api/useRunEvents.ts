@@ -8,10 +8,15 @@ import type { RunEvent } from '../../../shared/api-types';
 import { api } from './client';
 import { initialRunLive, reduceRunEvents, type ClientRunEvent, type RunLive } from './run-events';
 
-export function useRunEvents(runId: string | undefined): RunLive & { connected: boolean } {
+export function useRunEvents(runId: string | undefined): RunLive & { connected: boolean; hasConnected: boolean } {
   const qc = useQueryClient();
   const [state, dispatch] = useReducer((s: RunLive, e: ClientRunEvent) => reduceRunEvents(s, e), undefined, initialRunLive);
   const [connected, setConnected] = useState(false);
+  // Whether THIS run's stream has ever been open. A first connect is not a drop, and a page can be
+  // fully up on its REST fetch with the stream still opening (or blocked by a proxy / the browser's
+  // per-origin connection cap) — so only this can tell an ordinary load from a real disconnect.
+  // Reset with the stream below: the run we LEFT having been connected says nothing about this one.
+  const [hasConnected, setHasConnected] = useState(false);
   const sourceRef = useRef<EventSource | null>(null);
 
   // REST refetches (invalidated below on lifecycle edges) flow back into the live state — the
@@ -25,6 +30,7 @@ export function useRunEvents(runId: string | undefined): RunLive & { connected: 
   useEffect(() => {
     if (!runId) return;
     dispatch({ type: 'run-reset' }); // runId changed in-place — never show run A's state under run B's URL
+    setHasConnected(false);
     // the ring buffer's history: without it a page opened mid-work shows an empty log until the
     // next line lands (minutes, on slow LLM steps) and the run reads as stuck
     let cancelled = false;
@@ -33,7 +39,7 @@ export function useRunEvents(runId: string | undefined): RunLive & { connected: 
       .catch(() => { /* backlog is best-effort */ });
     const es = new EventSource(`/api/runs/${runId}/events`);
     sourceRef.current = es;
-    es.onopen = () => setConnected(true);
+    es.onopen = () => { setConnected(true); setHasConnected(true); };
     es.onerror = () => setConnected(false);
     es.onmessage = (msg) => {
       let event: RunEvent;
@@ -44,13 +50,22 @@ export function useRunEvents(runId: string | undefined): RunLive & { connected: 
         qc.invalidateQueries({ queryKey: ['runs'] });
       }
       if (event.type === 'spec-block') qc.invalidateQueries({ queryKey: ['spec', runId] });
-      // A prompt edit changes the stored text, not the live render — the reducer rightly ignores it
-      // (see run-events.ts). The prompt sheet reads through React Query, so refetching is what makes
-      // a save land in every open tab instead of leaving one showing words we would no longer send.
-      if (event.type === 'prompt-override') qc.invalidateQueries({ queryKey: ['prompts', runId] });
+      // The prompt sheet reads through React Query and stays mounted across the review, so every
+      // edge that moves what it shows has to say so:
+      //   · a prompt edit changes the stored text, not the live render — the reducer rightly ignores
+      //     it (see run-events.ts), and refetching is what makes a save land in every open tab
+      //     instead of leaving one showing words we would no longer send;
+      //   · a finished render or re-render wrote a new take's sidecars, which ARE the version
+      //     picker's options — without this the newest take is missing until a reload;
+      //   · a revise (and a replan) rewrites the spec every 'plan' view is composed from, so the
+      //     sheet would go on quoting pre-revision words and a stale banner computed against them.
+      if (event.type === 'prompt-override' || event.type === 'spec-block'
+        || event.type === 'done' || event.type === 'error') {
+        qc.invalidateQueries({ queryKey: ['prompts', runId] });
+      }
     };
     return () => { cancelled = true; es.close(); sourceRef.current = null; setConnected(false); };
   }, [runId, qc]);
 
-  return { ...state, connected };
+  return { ...state, connected, hasConnected };
 }

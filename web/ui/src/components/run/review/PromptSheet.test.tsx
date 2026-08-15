@@ -74,6 +74,8 @@ describe('PromptSheet', () => {
     await openFromStrip('K2');
 
     const panel = await screen.findByTestId('prompt-sheet');
+    // U15: the heading says who is doing the sending, in active voice.
+    expect(within(panel).getByRole('heading', { name: 'What we send for K2' })).toBeInTheDocument();
     expect(within(panel).getByTestId('prompt-body-K2-0')).toHaveTextContent('At first light the lamp goes dark');
     // D20: what is sent with every prompt for this job, and cannot be edited away.
     expect(panel).toHaveTextContent('Sent with every K2 prompt — not editable');
@@ -81,6 +83,31 @@ describe('PromptSheet', () => {
     // Opening the sheet still only READS: editing is offered, never entered on your behalf.
     expect(within(panel).queryByRole('textbox')).not.toBeInTheDocument();
     expect(within(panel).getByRole('button', { name: /edit prompt/i })).toBeInTheDocument();
+  });
+
+  it('collapses a character\'s reference set into one counted line (U11)', async () => {
+    servePrompts({
+      K2: promptView('K2', {
+        refs: [
+          { ref: '@Image1', character: 'marie' },
+          { ref: '@Image2', character: 'marie' },
+          { ref: '@Image3', character: 'marie' },
+          { ref: '@Image4', character: 'jack', role: 'antagonist' },
+          { ref: '@Audio1', role: 'narrator voice' },
+        ],
+      }),
+    });
+    renderRunPage(makeRun('review'));
+    await screen.findByRole('region', { name: 'Review stage' });
+    await openFromStrip('K2');
+
+    const panel = await screen.findByTestId('prompt-sheet');
+    // The set reads as one fact — a range with a count — not three lines of the same name.
+    expect(panel).toHaveTextContent('@Image1–@Image3 — marie (3 refs)');
+    expect(panel).not.toHaveTextContent('@Image2 = marie');
+    // Lone refs keep their own line, with or without a character to name.
+    expect(panel).toHaveTextContent('@Image4 = jack (antagonist)');
+    expect(panel).toHaveTextContent('@Audio1 = narrator voice');
   });
 
   it('the version picker lists Current plan plus one entry per take that kept a prompts.json', async () => {
@@ -102,6 +129,41 @@ describe('PromptSheet', () => {
     // A past take is immutable — no editing affordance of any kind (spec D22 as-sent).
     expect(within(panel).queryByRole('textbox')).not.toBeInTheDocument();
     expect(within(panel).queryByRole('button', { name: /edit|save|use this as my draft/i })).not.toBeInTheDocument();
+  });
+
+  it('switching versions closes the editor — a cached take cannot inherit an open draft', async () => {
+    servePrompts({
+      K2: promptView('K2', { availableTakes: ['t1'] }),
+      'K2@t1': sentPromptView('K2', 't1'),
+    });
+    renderRunPage(makeRun('review'));
+    await screen.findByRole('region', { name: 'Review stage' });
+    await openFromStrip('K2');
+
+    const panel = await screen.findByTestId('prompt-sheet');
+    const picker = await screen.findByRole('radiogroup', { name: 'Prompt version' });
+    const pick = (name: string) => userEvent.click(within(picker).getByRole('radio', { name }));
+
+    // Warm the cache first: this bug only bites once the take resolves SYNCHRONOUSLY, which is the
+    // second visit, not the first — a pending fetch renders the "Composing…" line and unmounts the
+    // editor by itself, so a test that only ever switches once passes over the hole.
+    await pick('take t1');
+    await waitFor(() => expect(panel).toHaveTextContent('the words take t1 really sent for K2'));
+    await pick('Current plan');
+    await userEvent.click(await within(panel).findByRole('button', { name: /edit prompt/i }));
+    expect(within(panel).getByRole('textbox')).toBeInTheDocument();
+
+    await pick('take t1');
+    await waitFor(() => expect(panel).toHaveTextContent('the words take t1 really sent for K2'));
+    // The footer of this very view says past takes cannot be edited, so nothing may offer to.
+    expect(panel).toHaveTextContent("Past takes can't be edited.");
+    expect(within(panel).queryByRole('textbox')).not.toBeInTheDocument();
+    expect(within(panel).queryByRole('button', { name: /save|use this as my draft|cancel/i })).not.toBeInTheDocument();
+
+    // …and coming back to the plan is a fresh read of it, not the abandoned draft.
+    await pick('Current plan');
+    await waitFor(() => expect(within(panel).queryByRole('textbox')).not.toBeInTheDocument());
+    expect(await within(panel).findByRole('button', { name: /edit prompt/i })).toBeInTheDocument();
   });
 
   it('a run that has sent nothing yet gets a static label, not a one-segment control', async () => {
@@ -135,6 +197,34 @@ describe('PromptSheet', () => {
     // 4,600 is not the length of the body on screen — the count is the server's, not the browser's.
     expect(readout).toHaveTextContent('4,600 / 5,000 B');
     expect(readout.className).toContain('text-status-warn');
+  });
+
+  // Seedance's whole-prompt clamp ships OFF (no provider documents a prompt-length limit), so the
+  // server sends no denominator. Reading correctly here is currently true only by accident — the
+  // null branch was written for a past take's unrecorded budget — so it is pinned as a promise.
+  it('with no cap the readout is the count alone: no denominator, no invented one', async () => {
+    const uncapped = promptView('K2', {
+      backend: 'seedance-2.0@fal',
+      endpointLabel: 'fal.ai Seedance 2.0',
+      segments: null,
+      segmentMaxBytes: null,
+      prompt: 'Shot 1: the lamp goes dark.',
+      bytes: 21400, // a rich multi-shot prompt that a 5000-byte default would have shortened
+      maxBytes: null,
+      pinBytes: 1120,
+    });
+    servePrompts({ K2: uncapped });
+    renderRunPage(makeRun('review'));
+    await screen.findByRole('region', { name: 'Review stage' });
+    await openFromStrip('K2');
+
+    const readout = await screen.findByTestId('prompt-bytes-K2');
+    const text = (readout.textContent ?? '').replace(/\s+/g, ' ').trim();
+    expect(text).toBe('21,400 B');
+    expect(text).not.toContain('/');
+    expect(text).not.toMatch(/NaN|Infinity/);
+    expect(readout.className).not.toContain('text-status-warn');
+    expect(readout.className).not.toContain('text-status-failed');
   });
 
   it('a Kling run meters every segment separately, against the 500 B the model really enforces', async () => {
@@ -199,6 +289,8 @@ describe('PromptSheet', () => {
 
     const panel = await screen.findByTestId('prompt-sheet');
     expect(panel).toHaveAttribute('aria-label', 'Prompts for this plan');
+    // U15: plan-wide heading, same active voice as the single-job one.
+    expect(within(panel).getByRole('heading', { name: 'What we send, segment by segment' })).toBeInTheDocument();
     expect(await within(panel).findByRole('article', { name: 'Prompt for K1' })).toBeInTheDocument();
     expect(within(panel).getByRole('article', { name: 'Prompt for K2' })).toBeInTheDocument();
   });

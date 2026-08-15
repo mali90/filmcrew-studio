@@ -24,6 +24,7 @@ import { spawn } from 'node:child_process';
 import config from '../../config.js';
 import log from './logger.js';
 import { ensureDir } from './util.js';
+import { upscalePlan as planUpscale, TOPAZ_MAX_FACTOR } from './upscale-plan.js';
 
 const V = config.video;
 const FAL = config.fal;
@@ -74,14 +75,13 @@ async function hasAudio(file) {
 
 /**
  * Pure: decide whether a source needs upscaling and the Topaz factor to lift its SHORT side to ~1080.
+ * The rule itself lives in upscale-plan.js — a config-free leaf, so the web estimator can price the
+ * factor this planner will really use without importing config.js. Here it is only bound to the
+ * CONFIGURED max factor.
  * @returns {{ needsUpscale: boolean, upscaleFactor: number }}
  */
-export function upscalePlan(width, height, { maxFactor = FAL.topazMaxFactor ?? 4, targetShort = 1080 } = {}) {
-  const shortSide = Math.min(Number(width) || 0, Number(height) || 0);
-  if (!shortSide || shortSide >= targetShort) return { needsUpscale: false, upscaleFactor: 1 };
-  // smallest 0.25-step factor that reaches the target short side, capped at the Topaz max.
-  const factor = Math.min(maxFactor, Math.ceil((targetShort / shortSide) / 0.25) * 0.25);
-  return { needsUpscale: true, upscaleFactor: factor };
+export function upscalePlan(width, height, opts = {}) {
+  return planUpscale(width, height, { maxFactor: FAL.topazMaxFactor ?? TOPAZ_MAX_FACTOR, ...opts });
 }
 
 // ── provider dispatch ───────────────────────────────────────────────────────
@@ -161,7 +161,7 @@ async function withSourceAudio(inPath, up, outDir, srcHasAudio, label) {
 
 /** The fal Topaz path — factor-based, unchanged. */
 async function upscaleVideoFal({ inPath, outDir, factor, model }) {
-  const maxFactor = FAL.topazMaxFactor ?? 4;
+  const maxFactor = FAL.topazMaxFactor ?? TOPAZ_MAX_FACTOR;
 
   let upscaleFactor;
   if (factor !== undefined && factor !== null && factor !== '') {

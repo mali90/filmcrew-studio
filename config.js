@@ -8,6 +8,7 @@ import 'dotenv/config';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { modelDefault } from './src/lib/models.js';
+import { envBool } from './src/lib/env-file.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 /** Repository root (this file lives at the root). */
@@ -26,15 +27,19 @@ export const resolvePath = (p) => (path.isAbsolute(p) ? p : path.resolve(ROOT, p
  */
 export function buildConfig(env = process.env) {
   // numEnv/boolEnv read from THIS call's env, so buildConfig(someEnv) is fully self-contained.
+  // A value that does not parse stays NaN rather than falling back to the default: config.js is
+  // imported at module scope by every entry point (the doctor included), so throwing here would
+  // crash the one command whose job is to REPORT a broken setup. The use site refuses instead —
+  // see promptCapOf for the Seedance clamp, whose "unset" and "unreadable" would otherwise agree.
   const numEnv = (key, dflt) => {
     const v = env[key];
     return v === undefined || v === '' ? dflt : Number(v);
   };
-  const boolEnv = (key, dflt) => {
-    const v = env[key];
-    if (v === undefined || v === '') return dflt;
-    return /^(1|true|yes|on)$/i.test(v.trim());
-  };
+  // The coercion itself lives in src/lib/env-file.js, next to the dotenv grammar: the web server
+  // mirrors these knobs for its previews and budgets and may not import this file, so the rule they
+  // must agree on (the TRIM included — dotenv keeps padding inside a quoted value) has exactly one
+  // implementation rather than a trimmed copy per reader.
+  const boolEnv = (key, dflt) => envBool(env[key], dflt);
 
   const config = {
     root: ROOT,
@@ -74,6 +79,14 @@ export function buildConfig(env = process.env) {
     render: {
       // '<model>@<provider>' (see src/lib/render-models.js); legacy 'kling'/'seedance' stay accepted.
       backend: env.RENDER_BACKEND || 'kling', // → canonicalized to 'kling-o3@fal'
+      // The resolution chosen FOR THIS RUN, as opposed to the standing per-model defaults in the
+      // knob blocks below. The web server pins it — together with that model's own knob — onto every
+      // child it spawns for a run whose creator picked a tier (run-service's resolutionOverride).
+      // It is a SEPARATE variable on purpose: read off SEEDANCE_RESOLUTION alone a per-run pick is
+      // indistinguishable from a .env default, and a stale spec.seedance.resolution pin used to
+      // outrank it — the user's chosen tier is the one that must render and bill
+      // (src/lib/prompt-settings.js seedanceResolution). Empty = no pick, the defaults govern.
+      resolutionPick: env.RENDER_RESOLUTION_PICK || '',
     },
 
     // ── fal.ai render transport (direct HTTP; persistent voice_ids for consistent character voices) ──
@@ -181,7 +194,13 @@ export function buildConfig(env = process.env) {
       //     words, no timbre consistency). The fallback if 'reference' still garbles. Kling's voice_id
       //     is the only guaranteed-consistent voice path (see docs/PROVIDERS.md).
       voiceMode: env.SEEDANCE_VOICE_MODE || 'reference',
-      promptMaxBytes: numEnv('SEEDANCE_PROMPT_MAX_BYTES', 5000),    // whole-prompt byte clamp (no documented model cap; 5000 carries a rich 6-shot prompt)
+      // Whole-prompt byte clamp, OFF by default (0). Nothing we can check documents a prompt-length
+      // limit for Seedance — Segmind's 2.0/2.5 API pages state none, fal's published Seedance
+      // schemas put no maxLength on `prompt`, and ByteDance only recommends staying under ~1000
+      // words (quality guidance, not an API limit) — so a default here would shorten a rich
+      // multi-shot prompt where nobody could see it. Set it to a number if a provider ever answers
+      // 422 on prompt length; unset/empty/0 all mean uncapped.
+      promptMaxBytes: numEnv('SEEDANCE_PROMPT_MAX_BYTES', 0),
       // Optional global style directive prepended to every Seedance prompt (e.g. "Rendered in
       // a glossy 3D-animation style — soft rounded surfaces…"). Empty = the look lives in each
       // shot's content_prompt, exactly as it does for Kling.
@@ -270,7 +289,19 @@ export function buildConfig(env = process.env) {
     //    endpoint (endpoint/model/factor live under `fal` above) or Segmind's `topaz-video-upscale`
     //    slug (under `segmind`), which takes a target resolution + fps instead of a factor. ──
     upscale: {
-      enabled: boolEnv('UPSCALE_ENABLED', false), // auto-lift the master toward 1080p when it's smaller
+      // Auto-lift the master toward 1080p when it's smaller — a CLI convenience meaning "act as if
+      // --upscale had been typed". It is read wherever a run is FINISHED from a terminal, which is
+      // both halves of that: a `npm run render`, and a bare `npm run assemble` of clips you already
+      // paid for, because assemble reaches the same finishRender and the same test below. Terminal
+      // only, though: the web app pins this OFF in env(runId) (web/server/lib/run-service.js), the
+      // one environment every job it enqueues is built from, which is every child of it that can
+      // reach a render — and upscales at approve instead, where the charge is quoted, the vendor is
+      // chosen and the run's cost ledger records it. A clip already at or above the target is skipped
+      // without an upload or a charge (see src/lib/upscale.js), so this costs nothing on a take that
+      // already CLEARS THE TARGET — 1080p unless UPSCALE_TARGET_RESOLUTION says otherwise, which only
+      // Segmind's Topaz reads. Set that to 4k and a 1080p clip is no longer skipped and IS billed;
+      // fal's path has no resolution input and measures against a fixed 1080 instead.
+      enabled: boolEnv('UPSCALE_ENABLED', false),
       // 'auto' (default) upscales wherever the run RENDERED — so a master never round-trips through a
       // second vendor — and falls back to whichever provider actually has a key (that fallback is what
       // lets a Segmind-only install, with no FAL_KEY anywhere, still finish a 1080p film).

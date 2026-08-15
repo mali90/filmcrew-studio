@@ -103,6 +103,9 @@ test('every spending action 409s on a finalized run — the UI is no longer the 
     [`/api/runs/${runId}/revise`, { feedback: 'warmer ending', scope: 'all' }],
     [`/api/runs/${runId}/rerender-job`, { jobId: 'K1' }],
     [`/api/runs/${runId}/assemble`, {}],
+    // Approving again is a spending action too — it is the one that bills Topaz a second time for
+    // a master already delivered.
+    [`/api/runs/${runId}/approve`, { upscale: true }],
     // Replanning is the same class of action as revising, and strictly worse on a delivered run: a
     // full engine pass (LLM spend) that REWRITES spec.json under a file the user already has, which
     // would desynchronise the prompt views, the lineage and the finals history from that file.
@@ -169,6 +172,69 @@ test('a reopened run is NOT complete until it is approved again', PENDING, async
   assert.notEqual(m.finals[0].final, m.finals[1].final, 'the second approval writes a NEW file, never over the first');
   for (const f of m.finals) assert.ok(fs.existsSync(f.final), `${f.final} still on disk`);
   assert.equal(m.finals[0].replacedBy, m.finals[1].id, 'the superseded delivery says what replaced it');
+});
+
+// The approve route was the hole in the guard: free or not, a second approval of a master already
+// delivered appends a duplicate `finals` entry and stamps the genuine prior delivery `replacedBy`
+// something that replaced nothing. A stale tab reloading, or a retried POST, is all it takes.
+test('approving twice needs a reopen in between — the delivery history never duplicates itself', PENDING, async () => {
+  const runId = await approvedRun('a fifth keeper, asked twice for the same light');
+  const before = manifestOf(runId);
+
+  const again = await post(`/api/runs/${runId}/approve`, { upscale: false });
+  assert.equal(again.statusCode, 409, `a delivered run re-approved must refuse (got ${again.statusCode}: ${again.body})`);
+  assert.match(again.json().hint, /reopen/i, 'and name the way forward');
+
+  const after = manifestOf(runId);
+  assert.equal(after.finals.length, before.finals.length, 'the refused approval wrote no delivery');
+  assert.equal(after.finals.at(-1).replacedBy ?? null, null, 'and never marked the real one superseded');
+  assert.deepEqual(after.approved, before.approved, '`approved` is byte-for-byte where it was');
+
+  // …and the deliberate path still works: reopening is what makes a second delivery legitimate,
+  // and it lands as exactly ONE more entry.
+  assert.equal((await post(`/api/runs/${runId}/reopen`, {})).statusCode, 200);
+  assert.equal((await post(`/api/runs/${runId}/approve`, { upscale: false })).statusCode, 200);
+  const redelivered = manifestOf(runId);
+  assert.equal(redelivered.finals.length, before.finals.length + 1, 'one reopen, one more delivery');
+  assert.equal(redelivered.finals.at(-2).replacedBy, redelivered.finals.at(-1).id, 'and the old one says what replaced it');
+  assert.equal((await get(`/api/runs/${runId}`)).json().run.status, 'complete');
+
+  // …and to a file of its OWN. Nothing was re-rendered and nothing was upscaled, so the master is
+  // still the file already on the user's disk — recording that path again would list ONE mp4 as two
+  // finals, with both "Earlier finals" links downloading the same bytes, under a card that promises
+  // the earlier final stays put and "approving again writes a new final beside it".
+  const [old, fresh] = redelivered.finals.slice(-2);
+  assert.notEqual(fresh.final, old.final, 'a second delivery is a second FILE, not the same path twice');
+  for (const f of redelivered.finals) assert.ok(fs.existsSync(f.final), `${f.final} is missing from disk`);
+  assert.equal(Buffer.compare(fs.readFileSync(fresh.final), fs.readFileSync(old.final)), 0,
+    'nothing was re-rendered, so the new file is the same cut byte for byte');
+  assert.equal((await get(`/api/runs/${runId}`)).json().run.finalFsPath, fresh.final);
+});
+
+// A delivery record describes the FILE that went out, not the button that sent it. An upscale
+// rewrites the take's render.json with the HD master it delivered, so after a reopen the run's
+// latest master IS that upscaled file — and a plain "Replace final" copies it byte for byte. Filing
+// that copy as `upscaled: false` makes the Final card's "Upscaled" row and the delivery history
+// call a 1080p Topaz master a plain cut, about a file the user can play.
+test('a plain redelivery of an upscaled master still records the file as upscaled', PENDING, async () => {
+  const { runId } = (await post('/api/runs', { idea: 'a keeper worth upscaling twice', backend: 'kling', aspect: '9:16', durationS: null })).json();
+  await waitForStatus(runId, 'plan-ready');
+  await post(`/api/runs/${runId}/render`, { mode: 'full' });
+  await waitForStatus(runId, 'review');
+  assert.equal((await post(`/api/runs/${runId}/approve`, { upscale: true })).statusCode, 202);
+  assert.equal((await waitForStatus(runId, ['complete', 'error'])).status, 'complete');
+  const upscaledFinal = manifestOf(runId).approved;
+  assert.equal(upscaledFinal.upscaled, true, 'the paid delivery is on record as upscaled');
+
+  assert.equal((await post(`/api/runs/${runId}/reopen`, {})).statusCode, 200);
+  assert.equal((await post(`/api/runs/${runId}/approve`, { upscale: false })).statusCode, 200);
+
+  const m = manifestOf(runId);
+  const fresh = m.finals.at(-1);
+  assert.equal(Buffer.compare(fs.readFileSync(fresh.final), fs.readFileSync(upscaledFinal.final)), 0,
+    'nothing was re-rendered and nothing was upscaled again — this IS the upscaled master, copied');
+  assert.equal(fresh.upscaled, true, 'so the record says upscaled: the approval ran no Topaz, but the file went through one');
+  assert.equal(m.approved.upscaled, true, 'and the card reads the same answer');
 });
 
 test('reopening twice is idempotent-ish: it never loses a final and never double-counts', PENDING, async () => {

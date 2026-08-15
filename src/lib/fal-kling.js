@@ -20,7 +20,7 @@ import { buildKlingStoryboard, klingConfigFor } from './kling.js';
 import { chooseSeamMode } from './prompt-compose.js';
 import { readJobOverride } from './prompt-overrides.js';
 import { capsFor } from './render-models.js';
-import { generateKling, toFalInput, falRef, isValidationError, isTransientFalError } from './fal.js';
+import { generateKling, toFalInput, falRef, paidClipOf, isValidationError, isTransientFalError } from './fal.js';
 import { characterGroups, jobSpeakers } from './cast-groups.js';
 import { resolveImage } from './elements.js';
 import { getVoiceId } from './voices.js';
@@ -32,8 +32,6 @@ export { characterGroups, jobSpeakers };
 
 const MAX_REFS_PER_ELEMENT = 3; // schema: 1-3 additional reference images per element
 const MAX_VOICES_PER_JOB = 2;   // Kling hard cap: at most two bound voices per task (runbook §5)
-
-const oneMp4 = (outs) => outs.find((p) => /\.(mp4|mov|webm)$/i.test(p)) ?? outs[0];
 
 /** A local image as a fal input (cached across runs in storage mode) — shared falRef, config mode. */
 const falRefFor = (absPath) => falRef(absPath, config.fal.uploadMode);
@@ -135,14 +133,21 @@ export async function renderKlingJobFal({ job, spec, runDir, seed, lowRes = fals
 
   log.step(`[${job.job_id}] fal Kling ${textToVideo ? 'text-to-video' : 'reference-to-video'} — ${segments.length} shot(s), ${totalDuration}s, ${elements.length} element(s)${voiced ? `, ${voiced} voice(s)` : ''}${lowRes ? ' (probe)' : ''}`);
 
-  // Effective prompts/elements → sidecar for review. Normalized to the SEEDANCE SUPERSET (schema:2)
+  // Effective prompts/elements → sidecar for review. Normalized to the SEEDANCE SUPERSET (schema:3)
   // so one reader serves both renderers, while every key Kling wrote before is still here.
   const elementLegend = textToVideo ? [] : groups.map((g, i) => ({ ref: `@Element${i + 1}`, character: g.name, images: g.els.map((e) => e.id), voice_id: getVoiceId(g.name) ?? null }));
   const sidecar = {
     job_id: job.job_id,
-    schema: 2,
+    schema: 3,
+    // Stamped only when fal ACCEPTS the job, and never rewritten (see the submit below). The sidecar
+    // itself is written before anything leaves, so its existence proves only that we composed a
+    // prompt; this is what proves the prompt was sent.
+    submitted_at: null,
     backend, transport: 'fal', endpoint,
-    aspect_ratio: klingCfg.aspectRatio, resolution: klingCfg.resolution,
+    // No resolution recorded: the endpoint takes none (fixed native output), so a sidecar claiming
+    // a tier would be the manifest lying about what was bought — the master's measured shortSide is
+    // the delivered truth.
+    aspect_ratio: klingCfg.aspectRatio,
     duration_s: totalDuration, total_duration_s: totalDuration,
     generate_audio: !!klingCfg.generateAudio,
     // fal's Kling endpoint takes no seed input, so the number is only ever a record of what a take
@@ -178,7 +183,15 @@ export async function renderKlingJobFal({ job, spec, runDir, seed, lowRes = fals
   // rejection, a CDN race on the closing frame would permanently write `seam_out.mode:'unsupported'`
   // (a lie the lineage and the stitcher then act on) AND buy a second render. generateKling's own
   // retry loop pairs the two predicates the same way.
-  const submit = (body) => generateKling(body, { endpoint, destDir: dir, timeoutMs: 1200000 });
+  // The end-frame fallback below submits a SECOND time; `submitted_at` keeps the first acceptance,
+  // because that is when this take reached fal — a retry is the same take trying again, and the
+  // request id follows the attempt that is actually running.
+  const onSubmit = (meta) => {
+    sidecar.request_id = meta?.requestId ?? null;
+    if (!sidecar.submitted_at) sidecar.submitted_at = new Date().toISOString();
+    writeSidecar();
+  };
+  const submit = (body) => generateKling(body, { endpoint, destDir: dir, timeoutMs: 1200000, onSubmit });
   let outs;
   try {
     outs = await submit(payload);
@@ -192,7 +205,8 @@ export async function renderKlingJobFal({ job, spec, runDir, seed, lowRes = fals
     writeSidecar();
     outs = await submit(withoutEndFrame);
   }
-  const clip = oneMp4(outs);
+  // By ROLE (see queue-transport.paidClipOf), not by suffix: an extensionless CDN url is a video too.
+  const clip = paidClipOf(outs);
   log.info(`[${job.job_id}] fal Kling clip -> ${clip}`);
   return { jobId: job.job_id, clip, totalDuration, segments: segments.length, seamIn: sidecar.seam_in, seamOut: sidecar.seam_out, providerLastFrame: null };
 }
